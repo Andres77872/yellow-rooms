@@ -1,0 +1,151 @@
+import {
+  CELL,
+  CHUNK,
+  MAP_REVEAL_R,
+  cIdx,
+  chunkKey,
+  worldToCell,
+} from './constants.js'
+import { hasLineOfSight } from '../player/collision.js'
+import { generateChunk } from './generate.js'
+
+// Player-explored fog-of-war state for the HUD minimap. Pure data/logic (no
+// THREE), so it stays unit-testable like ChunkData / collision.
+//
+// The live world streams chunks in and DISPOSES them beyond UNLOAD_RADIUS, so
+// it can't be the source of truth for places behind the player. ChunkData is
+// immutable + deterministic after generation, so we retain a REFERENCE to each
+// explored chunk's data (zero-copy, survives unload) plus a per-chunk reveal
+// mask — the only mutable state we own. A cell becomes "seen" once it is within
+// MAP_REVEAL_R of the player AND has line-of-sight to the player (true fog of
+// war: you don't see through walls). The reveal pass only recomputes when the
+// player crosses into a new cell, so standing still costs nothing.
+export class ExploredMap {
+  constructor(cm) {
+    this.cm = cm
+    this.chunks = new Map() // chunkKey -> { data: ChunkData, revealed: Uint8Array }
+    this.lastCX = null
+    this.lastCZ = null
+  }
+
+  // Drop all fog (called per level/seed change so nothing leaks between runs).
+  reset() {
+    this.chunks.clear()
+    this.lastCX = null
+    this.lastCZ = null
+  }
+
+  // Reveal pass: mark cells in a disc around the player that have line of sight.
+  // No-op until the player crosses a cell boundary.
+  update(px, pz) {
+    const gx = worldToCell(px)
+    const gz = worldToCell(pz)
+    if (gx === this.lastCX && gz === this.lastCZ) return
+    this.lastCX = gx
+    this.lastCZ = gz
+
+    this._mark(gx, gz) // own cell (LOS would pass anyway; cheap guard)
+    const R = MAP_REVEAL_R
+    const R2 = R * R
+    for (let cz = gz - R; cz <= gz + R; cz++) {
+      for (let cx = gx - R; cx <= gx + R; cx++) {
+        const ddx = cx - gx
+        const ddz = cz - gz
+        if (ddx * ddx + ddz * ddz > R2) continue // circular reveal
+        if (cx === gx && cz === gz) continue
+        const wxc = (cx + 0.5) * CELL
+        const wzc = (cz + 0.5) * CELL
+        if (hasLineOfSight(this.cm, px, pz, wxc, wzc)) this._mark(cx, cz)
+      }
+    }
+  }
+
+  // --- Renderer queries (mirror ChunkManager's global thin-wall lookups over
+  //     the stored data, so the minimap never special-cases chunk seams) ---
+
+  isRevealed(gx, gz) {
+    const cx = Math.floor(gx / CHUNK)
+    const cz = Math.floor(gz / CHUNK)
+    const e = this.chunks.get(chunkKey(cx, cz))
+    if (!e) return false
+    return e.revealed[cIdx(gx - cx * CHUNK, gz - cz * CHUNK)] === 1
+  }
+
+  // Stored ChunkData for a chunk (lazily filled for unloaded-but-explored
+  // neighbours queried by the wall lookups). Returns null only if generation
+  // somehow yields nothing.
+  dataAt(cx, cz) {
+    return this._entry(cx, cz).data || null
+  }
+
+  wallVAt(gx, gz) {
+    const cx = Math.floor(gx / CHUNK)
+    const cz = Math.floor(gz / CHUNK)
+    const d = this.dataAt(cx, cz)
+    if (!d) return false
+    return d.vAt(gx - cx * CHUNK, gz - cz * CHUNK) === 1
+  }
+
+  wallHAt(gx, gz) {
+    const cx = Math.floor(gx / CHUNK)
+    const cz = Math.floor(gz / CHUNK)
+    const d = this.dataAt(cx, cz)
+    if (!d) return false
+    return d.hAt(gx - cx * CHUNK, gz - cz * CHUNK) === 1
+  }
+
+  columnAt(gx, gz) {
+    const cx = Math.floor(gx / CHUNK)
+    const cz = Math.floor(gz / CHUNK)
+    const d = this.dataAt(cx, cz)
+    if (!d) return false
+    return d.colAt(gx - cx * CHUNK, gz - cz * CHUNK) === 1
+  }
+
+  // --- internals ---
+
+  _mark(gx, gz) {
+    const cx = Math.floor(gx / CHUNK)
+    const cz = Math.floor(gz / CHUNK)
+    this._entry(cx, cz).revealed[cIdx(gx - cx * CHUNK, gz - cz * CHUNK)] = 1
+  }
+
+  _entry(cx, cz) {
+    const key = chunkKey(cx, cz)
+    let e = this.chunks.get(key)
+    if (!e) {
+      e = { data: this._dataFor(cx, cz), revealed: new Uint8Array(CHUNK * CHUNK) }
+      this.chunks.set(key, e)
+    }
+    return e
+  }
+
+  // The exact ChunkData the player walked through: prefer the live (loaded)
+  // ref — cells are marked while their chunk is loaded near the player — and
+  // fall back to regeneration for the rare unloaded-neighbour query. The
+  // fallback MUST pass the same exit/clearing args ChunkManager built with, or
+  // the spawn/exit chunks would diverge from the geometry that actually exists.
+  _dataFor(cx, cz) {
+    const cm = this.cm
+    const live = cm.chunks.get(chunkKey(cx, cz))?.data
+    if (live) return live
+    return generateChunk(
+      cm.seed,
+      cx,
+      cz,
+      cm.config,
+      this._exitCellFor(cx, cz),
+      this._clearingsFor(cx, cz)
+    )
+  }
+
+  _exitCellFor(cx, cz) {
+    const ex = this.cm.exit
+    return ex && ex.cx === cx && ex.cz === cz ? { lx: ex.lx, lz: ex.lz } : null
+  }
+
+  _clearingsFor(cx, cz) {
+    const list = (this.cm.clearings || []).filter((c) => c.cx === cx && c.cz === cz)
+    return list.length ? list : null
+  }
+}
