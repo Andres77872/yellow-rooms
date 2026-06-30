@@ -6,7 +6,6 @@ import {
   ZONE_PILLARS,
   ZONE_WAREHOUSE,
   COL_HALF,
-  LIGHT_RANGE,
   FOV,
   chunkKey,
   worldToCell,
@@ -22,7 +21,6 @@ const LOGH = 322
 const HUBC = (CHUNK / 2) | 0
 const SPAWN = (HUBC + 0.5) * CELL
 
-const ZONE_NAME = { [ZONE_OFFICE]: 'office', [ZONE_PILLARS]: 'pillars', [ZONE_WAREHOUSE]: 'warehouse' }
 const ZONE_TINT = {
   [ZONE_OFFICE]: 'rgba(150,90,40,.10)',
   [ZONE_PILLARS]: 'rgba(70,120,140,.09)',
@@ -193,7 +191,8 @@ export class WorldMapTool {
       const after = this._screenToWorld(e.clientX - r.left, e.clientY - r.top)
       this.view.cx += before.wx - after.wx
       this.view.cz += before.wz - after.wz
-      this._zoom && this._zoom.querySelector('input') && (this._zoom.querySelector('input').value = this.view.scale)
+      const zin = this._zoom && this._zoom.querySelector('input')
+      if (zin) zin.value = this.view.scale
     })
     c.addEventListener('dblclick', () => this._recenter())
     c.addEventListener('click', (e) => {
@@ -347,7 +346,7 @@ export class WorldMapTool {
         for (const l of d.lamps) {
           const wx = ox + (l.lx + 0.5) * CELL
           const wz = oz + (l.lz + 0.5) * CELL
-          l.lit ? litN++ : deadN++
+          if (l.lit) litN++; else deadN++
           this._lamp(wx, wz, l.lit)
         }
 

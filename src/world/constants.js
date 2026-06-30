@@ -35,7 +35,10 @@ export const FOV = 72
 export const NEAR = 0.05
 export const FAR = 240
 export const FOG_DENSITY = 0.024
-export const FOG_COLOR = 0xc9b873 // warm yellow haze
+// Warm amber haze (also the void/sky in the lighting shader). Re-anchored darker
+// & more saturated after the sRGB double-decode fix so the distance keeps its
+// moody liminal amber instead of washing out to bright pale yellow.
+export const FOG_COLOR = 0x9c7d33
 
 // --- Lighting / panels ---
 export const PANEL_COLOR = 0xffe6a0
@@ -52,14 +55,28 @@ export const PANEL_COLOR = 0xffe6a0
 // frame; the lighting shader loops them with cel-banded attenuation.
 export const LIGHT_MAX = 48 // max lamps shaded per frame (uniform-array cap)
 export const LIGHT_RANGE = 13 // lamp reach (world units) before windowed to 0
-export const LIGHT_INTENSITY = 1.7 // per-lamp warm contribution (linear, pre-grade)
+export const LIGHT_INTENSITY = 1.5 // per-lamp warm contribution (linear, pre-grade); re-anchored from 1.7 after the sRGB decode fix brightened lamp color
 export const LAMP_QUERY_R = 30 // only consider lamps within this radius as candidates
+
+// Cel ramp for the per-lamp N·L banding (see render/gradientRamp.js). CEL_BANDS
+// hard steps on the lit side; CEL_FLOOR keeps a tiny warm step on grazing walls.
+export const CEL_BANDS = 6
+export const CEL_FLOOR = 0.06
+// How much SSAO modulates DIRECT lamp light (0 = none/physical, 1 = full). The
+// ambient term always gets full AO; this is a deliberate non-physical contact-
+// darkening lever for the direct term.
+export const LAMP_AO_MIX = 0.5
 
 // Ambient floor + rim (linear). Keeps lamp-less zones dark-but-warm, never black.
 // SKY lights up-facing surfaces (floors); GROUND lights down-facing (ceilings).
-export const AMBIENT_SKY = 0x4f4628 // hemi up tint (dim warm)
-export const AMBIENT_GROUND = 0x3c3622 // hemi down tint (lifted so ceilings read with the floor)
+// Dark-warm hemispheric fill. Re-anchored much darker after the sRGB double-decode
+// fix (which had been crushing these ~12x): keeps lamp-less zones dark-but-warm,
+// never pure black, without washing the scene to flat bright fill.
+export const AMBIENT_SKY = 0x1c1709 // hemi up tint (lights up-facing floors)
+export const AMBIENT_GROUND = 0x141009 // hemi down tint (lights down-facing ceilings)
 export const RIM_STRENGTH = 0.18 // anime fresnel edge light
+export const RIM_POW = 3.0 // fresnel falloff exponent for the rim term
+export const RIM_MIX = 0.5 // rim contribution scale (uLampColor * rim * RIM_MIX)
 // Wrapped diffuse (half-Lambert) factor for the per-lamp N·L. >0 wraps a lamp's
 // light around onto grazing / under-facing surfaces (ceilings, wall undersides)
 // so floor/roof/walls read consistently lit. The range window still keeps
@@ -71,6 +88,7 @@ export const FLASH_RANGE = 26
 export const FLASH_INTENSITY = 2.2
 export const FLASH_COS_INNER = 0.94
 export const FLASH_COS_OUTER = 0.86
+export const FLASH_COLOR = 0xfff0c4 // warm white flashlight tint
 
 // --- Stalker AI / difficulty ------------------------------------------
 // The entity reads the local light level (ChunkManager.lightAt) every frame:
@@ -120,6 +138,9 @@ export const SHADOW_STEPS = 20 // raymarch steps per shadowed lamp (more = less 
 export const SHADOW_MAX = 6 // shade at most the N nearest lamps (sorted nearest-first)
 export const SHADOW_THICKNESS = 0.7 // view-space occluder thickness window
 export const SHADOW_STRENGTH = 0.92
+export const SHADOW_BIAS = 0.04 // view-space near acceptance bias for the depth march (leak vs acne)
+export const SHADOW_MAX_DARK = 0.85 // darkest the contact-hardening march returns on a hit
+export const SHADOW_SCALE = 0.5 // screen-space shadow mask computed at half res, then bilateral-blurred + upsampled
 
 // Effect resolution scales / step counts (perf knobs)
 export const AO_SCALE = 0.5 // SSAO at half res
@@ -134,6 +155,8 @@ export const VOL_MAXDIST = 46 // clamp march distance (world units)
 export const VOL_DENSITY = 0.05 // in-scatter coefficient
 export const VOL_PHASE_G = 0.45 // Henyey-Greenstein anisotropy (0 = isotropic; higher = tighter forward beams)
 export const VOL_INTENSITY = 0.7 // composite strength of the shafts
+export const VOL_OCC_NEAR = 0.05 // volumetric visToLight near acceptance (shaft cutoff vs leak)
+export const VOL_OCC_FAR = 4.0 // volumetric visToLight far thickness window
 
 // Emissive bloom (selective by matID; fluorescents + exit glow)
 export const BLOOM_SCALE = 0.5 // bloom buffers at half res
@@ -142,6 +165,15 @@ export const BLOOM_INTENSITY = 0.8
 
 // Posterize cel bands in the grade (higher = smoother gradients)
 export const GRADE_LEVELS = 8.0
+export const GRADE_TINT = [1.06, 0.98, 0.66] // warm look-tint applied in the grade (linear)
+
+// Ink outline (Sobel off the G-buffer). Static tunables (LightTool edits live).
+export const OUTLINE_INK = 0x140e03
+export const OUTLINE_THICKNESS = 1.6
+export const OUTLINE_DEPTH_THRESH = 0.009
+export const OUTLINE_NORMAL_THRESH = 0.3
+export const OUTLINE_FADE_NEAR = 0.08
+export const OUTLINE_FADE_FAR = 0.34
 
 // --- Thin-wall model (refactor) ---------------------------------------
 // World-gen version: bump whenever the algorithm changes the bytes a seed

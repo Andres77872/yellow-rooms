@@ -1,13 +1,15 @@
 import * as THREE from 'three'
 
-// Quantised lighting ramp for MeshToonMaterial. NearestFilter is MANDATORY —
-// linear filtering interpolates the steps and silently degrades the toon
-// material back to plain Phong shading (the #1 cel-shading mistake).
+// Quantised N·L ramp (1D LUT) for the deferred per-lamp cel term — sampled by
+// band() in the lighting shader. NearestFilter is MANDATORY — linear filtering
+// interpolates the steps and silently degrades cel shading back to smooth
+// gradients (the #1 cel-shading mistake).
 export function makeToonGradient(steps = 4, floor = 0.0) {
-  // Quantised N·L ramp. For the deferred per-lamp term we use floor=0 so a
-  // surface facing away from a lamp gets no contribution (the warm hemispheric
-  // ambient fills shadows instead); a lifted floor would leak light onto back
-  // faces. `steps` controls how many hard cel bands the lit side shows.
+  // `steps` controls how many hard cel bands the lit side shows. `floor` is the
+  // value at N·L=0: the deferred caller uses a small CEL_FLOOR (~0.06) so grazing
+  // / under-facing walls keep a dim warm step (the half-Lambert wrap already
+  // lifts them) instead of snapping to black; the warm hemispheric ambient fills
+  // the truly unlit zones. Pass floor=0 for a hard terminator with no back-face fill.
   const data = new Uint8Array(steps)
   for (let i = 0; i < steps; i++) {
     data[i] = Math.round((floor + (1 - floor) * (i / (steps - 1))) * 255)

@@ -74,8 +74,10 @@ const FRAG = /* glsl */ `
   }
 `
 
-// linear THREE.Color from an sRGB hex
-const lin = (hex) => new THREE.Color(hex).convertSRGBToLinear()
+// Linear THREE.Color from an sRGB hex. THREE.ColorManagement.enabled (set in
+// Engine) makes the Color constructor decode sRGB -> linear once, so we must NOT
+// call convertSRGBToLinear() on top (double-decode darkened every flat color).
+const lin = (hex) => new THREE.Color(hex)
 
 function surfaceMaterial(map, instanced) {
   return new THREE.RawShaderMaterial({
@@ -84,7 +86,7 @@ function surfaceMaterial(map, instanced) {
     uniforms: {
       map: { value: map },
       uColor: { value: new THREE.Color(1, 1, 1) },
-      uIntensity: { value: 1 },
+      uIntensity: { value: 1 }, // unused in the USE_MAP branch; kept so all three factories share one uniform block
       uMatID: { value: 0 },
     },
     vertexShader: instanced ? VERT_INSTANCED : VERT_STATIC,

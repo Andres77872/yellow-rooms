@@ -1,5 +1,13 @@
 import * as THREE from 'three'
 import { section, slider, colorPicker, toggle, button, segmented, buttonRow } from './widgets.js'
+import {
+  PANEL_COLOR,
+  AMBIENT_SKY,
+  AMBIENT_GROUND,
+  FOG_COLOR,
+  FLASH_COLOR,
+  OUTLINE_INK,
+} from '../world/constants.js'
 
 const CHANNELS = ['final', 'albedo', 'matID', 'normal', 'depth', 'AO', 'lit', 'vol', 'bloom', 'comp']
 
@@ -84,24 +92,28 @@ export class LightTool {
     // --- Lighting -------------------------------------------------------
     const L = d.lightUniforms
     const V = d.volUniforms
+    const S = d.shadowUniforms
     const lit = section('lighting')
     root.appendChild(lit.el)
     this._f(lit, 'lamp intensity', L.uLampIntensity, 0, 6, 0.05)
-    this._f(lit, 'lamp wrap', L.uLampWrap, 0, 1, 0.01)
-    this._fMulti(lit, 'lamp range', [L.uLampRange, V.uLampRange], 1, 40, 0.5, 1)
-    this._c(lit, 'lamp color', [L.uLampColor, V.uLampColor], 0xffe6a0)
-    this._c(lit, 'ambient sky', [L.uAmbSky], 0x4f4628)
-    this._c(lit, 'ambient ground', [L.uAmbGround], 0x3c3622)
+    // wrap + range feed lighting, volumetrics AND the shadow weight, so edit all
+    // so the shadow mask stays contribution-matched to the lit pass while tuning.
+    this._fMulti(lit, 'lamp wrap', [L.uLampWrap, S.uLampWrap], 0, 1, 0.01)
+    this._fMulti(lit, 'lamp range', [L.uLampRange, V.uLampRange, S.uLampRange], 1, 40, 0.5, 1)
+    this._c(lit, 'lamp color', [L.uLampColor, V.uLampColor], PANEL_COLOR)
+    this._c(lit, 'ambient sky', [L.uAmbSky], AMBIENT_SKY)
+    this._c(lit, 'ambient ground', [L.uAmbGround], AMBIENT_GROUND)
     this._f(lit, 'rim', L.uRim, 0, 1, 0.01)
-    this._f(lit, 'shadow thickness', L.uShadowThickness, 0, 3, 0.05)
+    this._f(lit, 'shadow thickness', S.uShadowThickness, 0, 3, 0.05)
     this._f(lit, 'shadow strength', L.uShadowStrength, 0, 1, 0.01)
-    this._c(lit, 'fog color', [L.uFogColor], 0xc9b873)
+    this._f(lit, 'shadow soften', d.shadowBlurUniforms.uDepthSigma, 0.05, 2, 0.01)
+    this._c(lit, 'fog color', [L.uFogColor], FOG_COLOR)
     this._f(lit, 'fog density', L.uFogDensity, 0, 0.1, 0.001, 3)
 
     // --- Flashlight -----------------------------------------------------
     const fl = section('flashlight')
     root.appendChild(fl.el)
-    this._c(fl, 'flash color', [L.uFlashColor], 0xfff0c4)
+    this._c(fl, 'flash color', [L.uFlashColor], FLASH_COLOR)
     this._f(fl, 'flash range', L.uFlashRange, 1, 80, 1, 0)
     this._f(fl, 'flash intensity', L.uFlashIntensity, 0, 8, 0.1, 1)
     this._f(fl, 'cos inner', L.uFlashCosInner, 0.5, 1, 0.005, 3)
@@ -135,12 +147,13 @@ export class LightTool {
     this._f(ol, 'normal thresh', O.uNormalThresh, 0, 2, 0.01)
     this._f(ol, 'fade near', O.uFadeNear, 0, 1, 0.005, 3)
     this._f(ol, 'fade far', O.uFadeFar, 0, 1, 0.005, 3)
-    this._c(ol, 'ink color', [O.uInk], 0x140e03)
+    this._c(ol, 'ink color', [O.uInk], OUTLINE_INK)
 
     // --- Grade (needs freeze) ------------------------------------------
     const gr = section('grade (freeze sim)')
     root.appendChild(gr.el)
     const G = d.grade
+    this._f(gr, 'exposure', G.exposure, 0.2, 2, 0.01)
     this._f(gr, 'levels', G.levels, 2, 32, 1, 0)
     this._fVec(gr, 'tint R', G.tint.value, 'x', 0, 2, 0.01)
     this._fVec(gr, 'tint G', G.tint.value, 'y', 0, 2, 0.01)
@@ -180,7 +193,9 @@ export class LightTool {
   }
 
   _setColors(us, hex) {
-    for (const u of us) u.value.copy(new THREE.Color(hex).convertSRGBToLinear())
+    // Single sRGB -> linear decode (ColorManagement does it in the constructor);
+    // matches linVec/lin so picker edits land in the same space as the defaults.
+    for (const u of us) u.value.copy(new THREE.Color(hex))
   }
 
   _resetAll() {
