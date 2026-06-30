@@ -152,7 +152,8 @@ export class DebugMode {
   }
 
   toggle() {
-    this.active ? this.deactivate() : this.activate()
+    if (this.active) this.deactivate()
+    else this.activate()
   }
 
   activate() {

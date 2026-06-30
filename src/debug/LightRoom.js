@@ -115,7 +115,8 @@ export class LightRoom {
     for (let i = 0; i < n; i++) L.uLampPos.value[i].copy(this.lampPos[i])
     L.uLampCount.value = n
     deferred.lightUniforms.uLampIntensity.value = this.config.intensity
-    deferred.volUniforms && (deferred.volUniforms.uLampRange.value = deferred.lightUniforms.uLampRange.value)
+    deferred.lightUniforms.uLampFlicker.value = 1 // isolated room: no flicker dip on the cast light
+    if (deferred.volUniforms) deferred.volUniforms.uLampRange.value = deferred.lightUniforms.uLampRange.value
     this.engine.materials.panel.uniforms.uIntensity.value = 1 // stop flicker-driven dimming
   }
 

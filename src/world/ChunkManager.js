@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import {
   CHUNK,
+  CHUNK_WORLD,
   CELL,
   COL_HALF,
   LOAD_RADIUS,
@@ -161,7 +162,15 @@ export class ChunkManager {
     const r2 = LAMP_QUERY_R * LAMP_QUERY_R
     for (const c of this.chunks.values()) {
       const lamps = c.lamps
-      if (!lamps) continue
+      if (!lamps || !lamps.length) continue
+      // Chunk-AABB prune: LAMP_QUERY_R (30) < CHUNK_WORLD (42), so only chunks
+      // whose nearest edge is within range can contribute. Skips most of the ~81
+      // loaded chunks' lamp arrays each call (called per-frame by lightAt + AI).
+      const minX = c.cx * CHUNK_WORLD
+      const minZ = c.cz * CHUNK_WORLD
+      const ndx = px < minX ? minX - px : px > minX + CHUNK_WORLD ? px - (minX + CHUNK_WORLD) : 0
+      const ndz = pz < minZ ? minZ - pz : pz > minZ + CHUNK_WORLD ? pz - (minZ + CHUNK_WORLD) : 0
+      if (ndx * ndx + ndz * ndz > r2) continue
       for (let i = 0; i < lamps.length; i++) {
         const v = lamps[i]
         const dx = v.x - px

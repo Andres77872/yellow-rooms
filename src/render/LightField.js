@@ -36,7 +36,15 @@ export class LightField {
 }
 
 export function makeLampUniforms() {
+  // uLampPos = world-space (written by LightField); uLampViewPos = view-space,
+  // filled on the CPU once per frame by DeferredRenderer so the lighting / shadow
+  // / volumetric shaders read view-space lamps directly instead of doing a
+  // mat4*vec4 per lamp per pixel in each pass.
   const pos = new Array(LIGHT_MAX)
-  for (let i = 0; i < LIGHT_MAX; i++) pos[i] = new THREE.Vector3()
-  return { uLampPos: { value: pos }, uLampCount: { value: 0 } }
+  const viewPos = new Array(LIGHT_MAX)
+  for (let i = 0; i < LIGHT_MAX; i++) {
+    pos[i] = new THREE.Vector3()
+    viewPos[i] = new THREE.Vector3()
+  }
+  return { uLampPos: { value: pos }, uLampViewPos: { value: viewPos }, uLampCount: { value: 0 } }
 }

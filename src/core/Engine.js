@@ -35,6 +35,12 @@ import { ExploredMap } from '../world/ExploredMap.js'
 import { hashStr } from '../world/core/hash.js'
 import { RNG } from '../world/core/rng.js'
 
+// Make color management explicit (it defaults to true in three r0.185). With it
+// on, `new THREE.Color(hex)` already converts the sRGB hex into the linear
+// working space, so the renderer's color helpers must decode exactly ONCE — see
+// linVec (DeferredRenderer) / lin (gbufferMaterials) / _setColors (LightTool).
+THREE.ColorManagement.enabled = true
+
 const HUBC = (CHUNK / 2) | 0
 const SPAWN = (HUBC + 0.5) * CELL
 const norm = (a) => Math.atan2(Math.sin(a), Math.cos(a))
@@ -335,7 +341,9 @@ export class Engine {
   }
 
   _updateFlicker(dt) {
-    let f = 0.9 + Math.sin(this._time * 22) * 0.05
+    // Fluorescent hum: a gentle slow ripple + a faint faster buzz; `f` is the tube's
+    // own emissive brightness (feeds the panel albedo + selective bloom).
+    let f = 0.92 + Math.sin(this._time * 18) * 0.05 + Math.sin(this._time * 43) * 0.02
     this._dipT -= dt
     if (this._dipT <= 0) {
       this._dipActive = 0.12
@@ -347,6 +355,11 @@ export class Engine {
       f *= 0.4
     }
     this.materials.panel.uniforms.uIntensity.value = f
+    // Couple the CAST light to the hum so floors/walls actually dip with the tubes
+    // (the signature backrooms flicker) — previously only the tube emissive moved.
+    // Keep a floor so a dip darkens the room without snapping to black; the
+    // volumetric shafts share this uniform and dip in lockstep.
+    this.deferred.lightUniforms.uLampFlicker.value = 0.6 + 0.4 * f
   }
 
   _updateExit() {
@@ -375,8 +388,12 @@ export class Engine {
   _onResize() {
     this.camera.aspect = innerWidth / innerHeight
     this.camera.updateProjectionMatrix()
+    // Re-apply the clamped pixel ratio: browser zoom / moving the window between a
+    // HiDPI and a standard monitor changes devicePixelRatio, and a resize event
+    // fires for zoom. Without this the buffers stay at the construction-time ratio.
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
     this.renderer.setSize(innerWidth, innerHeight)
-    this.deferred.setSize(innerWidth, innerHeight)
+    this.deferred.setSize()
     this.debugMode.resize(innerWidth, innerHeight)
     this.minimap.resize()
   }
