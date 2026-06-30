@@ -84,3 +84,109 @@ describe('collision: line of sight', () => {
     expect(hasLineOfSight(cm, 3, 3, 30, 12)).toBe(true)
   })
 })
+
+// Drive moveAndCollide in substep-sized steps (the Engine moves the player in 5
+// sub-steps of <= ~0.086u each), accumulating the worst slab penetration seen so
+// a regression can assert the box is never embedded in a wall.
+const SUB = 0.08
+function drive(cm, pos, dx, dz, n) {
+  let worst = 0
+  for (let i = 0; i < n; i++) {
+    moveAndCollide(cm, pos, dx, dz)
+    worst = Math.max(worst, penetration(cm, pos.x, pos.z))
+  }
+  return worst
+}
+// How deep the player AABB (half PLAYER_R) sits inside any wall slab (half
+// WALL_COL_HALF). 0 = clean; > 0 = embedded (the through-walls precondition).
+function penetration(cm, x, z) {
+  const r = PLAYER_R
+  const cell = (w) => Math.floor(w / CELL)
+  let worst = 0
+  for (let gx = cell(x - 1); gx <= cell(x + 1); gx++) {
+    const xpen = r + WALL_COL_HALF - Math.abs(x - gx * CELL)
+    if (xpen <= 0.001) continue
+    for (let gz = cell(z - r); gz <= cell(z + r); gz++) {
+      if (!cm.wallVAt(gx, gz)) continue
+      const ov = Math.min(z + r, (gz + 1) * CELL) - Math.max(z - r, gz * CELL)
+      if (ov > 0.001) worst = Math.max(worst, Math.min(xpen, ov))
+    }
+  }
+  for (let gz = cell(z - 1); gz <= cell(z + 1); gz++) {
+    const zpen = r + WALL_COL_HALF - Math.abs(z - gz * CELL)
+    if (zpen <= 0.001) continue
+    for (let gx = cell(x - r); gx <= cell(x + r); gx++) {
+      if (!cm.wallHAt(gx, gz)) continue
+      const ov = Math.min(x + r, (gx + 1) * CELL) - Math.max(x - r, gx * CELL)
+      if (ov > 0.001) worst = Math.max(worst, Math.min(zpen, ov))
+    }
+  }
+  return worst
+}
+
+describe('collision: no embedding / tunnelling (depenetration)', () => {
+  it('does not embed or pass through when sliding +Z into a vertical wall that begins beside it', () => {
+    // Vertical wall on line x=5, present only for rows z>=7 (a wall end at z=7).
+    const data = new ChunkData(0, 0, 0)
+    for (let z = 7; z < CHUNK; z++) data.setV(5, z, 1)
+    const cm = mockCM(data)
+    // Centre 0.05 WEST of the line (legal: row 6 is open), then strafe south into
+    // the walled rows and try to push east through the wall.
+    const pos = { x: 5 * CELL - 0.05, z: 6.5 * CELL }
+    let worst = drive(cm, pos, 0, SUB, 40) // strafe +Z into rows 7,8
+    worst = Math.max(worst, drive(cm, pos, SUB, 0, 40)) // then push +X at the wall
+    expect(worst).toBeLessThan(0.02) // never embedded in the slab
+    expect(pos.x).toBeLessThan(5 * CELL) // never tunnelled to the east side
+    expect(pos.x).toBeLessThanOrEqual(STOP(5) + 1e-6) // resting at the wall surface
+  })
+
+  it('does not embed or pass through when sliding +X into a horizontal wall that begins beside it', () => {
+    // Horizontal wall on line z=5, present only for columns x>=7.
+    const data = new ChunkData(0, 0, 0)
+    for (let x = 7; x < CHUNK; x++) data.setH(x, 5, 1)
+    const cm = mockCM(data)
+    const pos = { x: 6.5 * CELL, z: 5 * CELL - 0.05 }
+    let worst = drive(cm, pos, SUB, 0, 40) // strafe +X into cols 7,8
+    worst = Math.max(worst, drive(cm, pos, 0, SUB, 40)) // then push +Z at the wall
+    expect(worst).toBeLessThan(0.02)
+    expect(pos.z).toBeLessThan(5 * CELL)
+    expect(pos.z).toBeLessThanOrEqual(STOP(5) + 1e-6)
+  })
+
+  it('does not slip through a wall end when approached diagonally', () => {
+    // Wall on line x=5 for rows 7..13; the player rounds its north end (row 6).
+    const data = new ChunkData(0, 0, 0)
+    for (let z = 7; z < CHUNK; z++) data.setV(5, z, 1)
+    const cm = mockCM(data)
+    let worst = 0
+    for (let off = -0.3; off <= 0.3 + 1e-9; off += 0.1) {
+      const pos = { x: 5 * CELL - 1.0, z: 6.5 * CELL + off }
+      worst = Math.max(worst, drive(cm, pos, SUB, SUB, 60)) // dive SE toward the corner
+    }
+    expect(worst).toBeLessThan(0.12) // at most the transient margin, never embedded
+  })
+
+  it('rests at a consistent distance from a wall regardless of approach phase', () => {
+    const data = new ChunkData(0, 0, 0)
+    for (let z = 0; z < CHUNK; z++) data.setV(5, z, 1)
+    const cm = mockCM(data)
+    const rests = [1.0, 1.03, 0.97, 1.11].map((gap) => {
+      const pos = { x: 5 * CELL - gap, z: 7.5 }
+      drive(cm, pos, SUB, 0, 30)
+      return pos.x
+    })
+    for (const x of rests) expect(x).toBeCloseTo(STOP(5), 2) // all settle at the slab surface
+  })
+
+  it('does not falsely block walking straight past a wall end in an open row', () => {
+    // Wall on line x=5 only at row 7; row 6 is fully open and must stay passable.
+    const data = new ChunkData(0, 0, 0)
+    data.setV(5, 7, 1)
+    const cm = mockCM(data)
+    const pos = { x: 3 * CELL, z: 6.5 * CELL } // open row 6, west of the wall
+    let blocked = false
+    for (let i = 0; i < 120; i++) blocked = moveAndCollide(cm, pos, SUB, 0).x || blocked
+    expect(blocked).toBe(false)
+    expect(pos.x).toBeGreaterThan(5 * CELL + 1) // walked freely past the line
+  })
+})

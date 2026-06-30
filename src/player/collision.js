@@ -7,9 +7,17 @@ const SKIN = 0.001
 // width), so resolution tests the wall LINES the player's leading face crosses
 // between its old and new position — knowing which side you came from is what
 // makes zero-width walls correct. A small WALL_COL_HALF margin turns each line
-// into a thin slab (kills diagonal corner-slip). Freestanding columns are
-// resolved as AABBs in a second pass. The Engine sub-steps movement 5x, so |d|
-// per call is well under CELL.
+// into a thin slab. Freestanding columns are resolved as AABBs in a second pass.
+// The Engine sub-steps movement 5x, so |d| per call is well under CELL.
+//
+// The swept passes only test walls the LEADING face crosses along the axis being
+// moved, so they can't catch a wall that ends up overlapping the box from the
+// SIDE (perpendicular to the move) — strafing along a wall, or rounding a wall
+// end / doorway jamb, where a wall segment begins beside you. A final
+// minimum-translation push-out (`depenetrate`) ejects the box from any slab or
+// column it still overlaps, so the player can never finish a step embedded in —
+// or tunnelled through — geometry. CELL >> 2*(PLAYER_R+WALL_COL_HALF), so at most
+// one wall per axis can overlap and the push-out converges in a couple of passes.
 //
 // Mutates `pos` in place; returns which axes were blocked.
 export function moveAndCollide(cm, pos, dx, dz) {
@@ -77,6 +85,7 @@ export function moveAndCollide(cm, pos, dx, dz) {
     resolveColumns(cm, pos, r, false, dz, hit)
   }
 
+  depenetrate(cm, pos, hit)
   return hit
 }
 
@@ -110,6 +119,80 @@ function resolveColumns(cm, pos, r, axisX, d, hit) {
         hit.z = true
       }
     }
+  }
+}
+
+// Final-position depenetration. Each iteration finds the single deepest overlap
+// of the player AABB with a wall slab (half WALL_COL_HALF) or column (half
+// COL_HALF) and pushes the box out to that surface along the minimal axis, to the
+// side the centre is already on. Flags `hit` so Controller.step kills the velocity
+// component (else the player re-accelerates straight back into the wall). Breaks
+// as soon as nothing overlaps beyond SKIN — which is the common case, so this is
+// usually a single cheap scan. Walls are spaced CELL apart and CELL >> 2*reach, so
+// constraints never conflict and it settles in 1-2 iterations.
+function depenetrate(cm, pos, hit) {
+  const r = PLAYER_R
+  const m = r + WALL_COL_HALF
+  const reach = r + COL_HALF
+  for (let iter = 0; iter < 4; iter++) {
+    let best = SKIN
+    let axis = 0 // 1 = push X, 2 = push Z
+    let push = 0
+
+    // Vertical walls (block X) overlapping the box's z-rows.
+    const gz0 = worldToCell(pos.z - r + SKIN)
+    const gz1 = worldToCell(pos.z + r - SKIN)
+    for (let gx = worldToCell(pos.x - m); gx <= worldToCell(pos.x + m); gx++) {
+      const wx = gx * CELL
+      const xpen = m - Math.abs(pos.x - wx)
+      if (xpen <= best) continue
+      if (rowHasWallV(cm, gx, gz0, gz1)) {
+        best = xpen
+        axis = 1
+        push = pos.x >= wx ? wx + m + SKIN : wx - m - SKIN
+      }
+    }
+
+    // Horizontal walls (block Z) overlapping the box's x-columns.
+    const gx0 = worldToCell(pos.x - r + SKIN)
+    const gx1 = worldToCell(pos.x + r - SKIN)
+    for (let gz = worldToCell(pos.z - m); gz <= worldToCell(pos.z + m); gz++) {
+      const wz = gz * CELL
+      const zpen = m - Math.abs(pos.z - wz)
+      if (zpen <= best) continue
+      if (colHasWallH(cm, gz, gx0, gx1)) {
+        best = zpen
+        axis = 2
+        push = pos.z >= wz ? wz + m + SKIN : wz - m - SKIN
+      }
+    }
+
+    // Freestanding columns (AABB) — eject along the shallower-overlap axis (MTV).
+    for (let cz = worldToCell(pos.z - reach); cz <= worldToCell(pos.z + reach); cz++) {
+      for (let cx = worldToCell(pos.x - reach); cx <= worldToCell(pos.x + reach); cx++) {
+        if (!cm.columnAt(cx, cz)) continue
+        const ccx = (cx + 0.5) * CELL
+        const ccz = (cz + 0.5) * CELL
+        const ox = reach - Math.abs(pos.x - ccx)
+        const oz = reach - Math.abs(pos.z - ccz)
+        if (ox <= SKIN || oz <= SKIN) continue // not overlapping
+        if (ox <= oz) {
+          if (ox > best) { best = ox; axis = 1; push = pos.x >= ccx ? ccx + reach + SKIN : ccx - reach - SKIN }
+        } else if (oz > best) {
+          best = oz
+          axis = 2
+          push = pos.z >= ccz ? ccz + reach + SKIN : ccz - reach - SKIN
+        }
+      }
+    }
+
+    if (axis === 1) {
+      pos.x = push
+      hit.x = true
+    } else if (axis === 2) {
+      pos.z = push
+      hit.z = true
+    } else break
   }
 }
 
