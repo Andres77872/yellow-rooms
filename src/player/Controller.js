@@ -9,6 +9,9 @@ import { moveAndCollide } from './collision.js'
 import { HeadBob } from './headbob.js'
 
 const MAX_PITCH = Math.PI / 2 - 0.05
+// Thumb travel on a phone is far shorter than mouse travel, so touch look runs
+// hotter than the shared sensitivity setting (which still scales it).
+const TOUCH_LOOK_MULT = 2.2
 const STAMINA_DRAIN = 1 / 6 // empty after ~6s of sprint
 const STAMINA_REGEN = 1 / 9
 const BATTERY_DRAIN = 1 / 90 // ~90s of light
@@ -45,6 +48,8 @@ export class Controller {
     this.isLocked = false
     this.inputEnabled = true // debug mode parks the player by disabling this
     this.keys = new Set()
+    this.move = { x: 0, z: 0 } // analog stick input, unit-clamped by the caller
+    this.sprintTouch = false
     this.headbob = new HeadBob()
     this.flashlight = null // SpotLight, set by Engine
     this._prevPhase = 0
@@ -62,7 +67,12 @@ export class Controller {
       if (e.code === 'KeyF') this._toggleFlashlight()
     })
     addEventListener('keyup', (e) => this.keys.delete(e.code))
-    addEventListener('blur', () => this.keys.clear())
+    addEventListener('blur', () => {
+      this.keys.clear()
+      this.move.x = 0
+      this.move.z = 0
+      this.sprintTouch = false
+    })
     document.addEventListener('mousemove', (e) => {
       if (!this.isLocked) return
       this.yaw -= e.movementX * this.sensitivity
@@ -84,6 +94,27 @@ export class Controller {
   }
   unlock() {
     document.exitPointerLock?.()
+  }
+
+  // Touch look: same math as the mousemove handler, minus the pointer-lock
+  // gate (touch mode never locks). dx/dy are drag deltas in px.
+  lookDelta(dx, dy) {
+    if (!this.inputEnabled) return
+    const s = this.sensitivity * TOUCH_LOOK_MULT
+    this.yaw -= dx * s
+    this.pitch = clamp(this.pitch - dy * s, -MAX_PITCH, MAX_PITCH)
+  }
+
+  // Touch move: analog vector (x strafe, z forward), caller-clamped to the
+  // unit circle; consumed alongside the keyboard in step().
+  setMove(x, z, sprint) {
+    this.move.x = x
+    this.move.z = z
+    this.sprintTouch = sprint
+  }
+
+  toggleFlashlight() {
+    this._toggleFlashlight()
   }
 
   _toggleFlashlight() {
@@ -113,10 +144,14 @@ export class Controller {
     const k = this.keys
     // Debug mode disables player input so WASD drives the debug UI / nothing.
     const fz = this.inputEnabled
-      ? (k.has('KeyW') || k.has('ArrowUp') ? 1 : 0) - (k.has('KeyS') || k.has('ArrowDown') ? 1 : 0)
+      ? (k.has('KeyW') || k.has('ArrowUp') ? 1 : 0) -
+        (k.has('KeyS') || k.has('ArrowDown') ? 1 : 0) +
+        this.move.z
       : 0
     const fx = this.inputEnabled
-      ? (k.has('KeyD') || k.has('ArrowRight') ? 1 : 0) - (k.has('KeyA') || k.has('ArrowLeft') ? 1 : 0)
+      ? (k.has('KeyD') || k.has('ArrowRight') ? 1 : 0) -
+        (k.has('KeyA') || k.has('ArrowLeft') ? 1 : 0) +
+        this.move.x
       : 0
 
     _euler.set(0, this.yaw, 0)
@@ -124,9 +159,15 @@ export class Controller {
     _right.set(1, 0, 0).applyEuler(_euler)
     _wish.set(0, 0, 0).addScaledVector(_fwd, fz).addScaledVector(_right, fx)
     const moving = _wish.lengthSq() > 0
-    if (moving) _wish.normalize()
+    // Clamp to the unit circle instead of normalizing so analog (touch stick)
+    // deflection < 1 scales the speed; identical to normalize for keyboard.
+    const wl = _wish.length()
+    if (wl > 1) _wish.multiplyScalar(1 / wl)
 
-    const wantSprint = (k.has('ShiftLeft') || k.has('ShiftRight')) && this.state.stamina > 0.02 && moving
+    const wantSprint =
+      (k.has('ShiftLeft') || k.has('ShiftRight') || this.sprintTouch) &&
+      this.state.stamina > 0.02 &&
+      moving
     // speedMul (<=1) is the enemy-proximity drag set by the Engine each frame.
     const speed = (wantSprint ? SPRINT_SPEED : WALK_SPEED) * this.speedMul
 

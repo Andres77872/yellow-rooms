@@ -27,9 +27,11 @@ import { DeferredRenderer } from '../render/DeferredRenderer.js'
 import { LightField } from '../render/LightField.js'
 import { GameState, Phase } from './GameState.js'
 import { Settings } from './Settings.js'
+import { IS_TOUCH, MAX_DPR, enterImmersive } from './device.js'
 import { DebugOverlay } from './DebugOverlay.js'
 import { DebugMode } from '../debug/DebugMode.js'
 import { UI } from '../ui/overlays.js'
+import { TouchControls } from '../ui/TouchControls.js'
 import { Minimap } from '../ui/Minimap.js'
 import { ExploredMap } from '../world/ExploredMap.js'
 import { hashStr } from '../world/core/hash.js'
@@ -49,13 +51,14 @@ export class Engine {
   constructor(app) {
     this.settings = new Settings()
     this.state = new GameState()
+    this.touch = IS_TOUCH
 
     const renderer = new THREE.WebGLRenderer({
       antialias: false,
       powerPreference: 'high-performance',
       stencil: false,
     })
-    renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
+    renderer.setPixelRatio(Math.min(devicePixelRatio, MAX_DPR))
     renderer.setSize(innerWidth, innerHeight)
     renderer.toneMapping = THREE.NoToneMapping
     renderer.setClearColor(FOG_COLOR, 1)
@@ -101,6 +104,28 @@ export class Engine {
     this.debug = new DebugOverlay(renderer)
     this.ui = new UI(this.settings)
     this._wireUI()
+
+    this.touchControls = null
+    if (this.touch) {
+      this.touchControls = new TouchControls(this.ui.el.hud, {
+        onMove: (x, z, sprint) => this.controller.setMove(x, z, sprint),
+        onLook: (dx, dy) => this.controller.lookDelta(dx, dy),
+        onFlashlight: () => this.controller.toggleFlashlight(),
+        onPause: () => this.pause(),
+      })
+      // Keep the flashlight button lit in sync (manual toggle + battery death).
+      this.controller.onToggleFlashlight = (on) => this.touchControls.setFlashlight(on)
+      // Mobile app-switch / tab-hide: pointer lock never fires here, so pause
+      // off visibility instead.
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) this.pause()
+      })
+      // Landscape enforcement: where orientation.lock isn't granted (iOS), a
+      // blocking "rotate device" overlay + pause is the fallback.
+      this._portraitMq = matchMedia('(orientation: portrait)')
+      this._portraitMq.addEventListener('change', () => this._checkOrientation())
+      this._checkOrientation()
+    }
 
     this.minimap = new Minimap(this.ui.el.minimap)
     this.minimap.setVisible(this.settings.get('minimap'))
@@ -162,21 +187,29 @@ export class Engine {
     this.state.resetLevel()
     this.ui.setSeedInput(seedText)
     try {
-      history.replaceState(null, '', `?seed=${encodeURIComponent(seedText)}`)
+      // Preserve other params (e.g. the ?touch override) — only update the seed.
+      const q = new URLSearchParams(location.search)
+      q.set('seed', seedText)
+      history.replaceState(null, '', `?${q}`)
     } catch {
       /* ignore */
     }
     this._setupLevel()
+    // Fullscreen + audio unlock must both start synchronously inside this tap.
+    if (this.touch) enterImmersive()
     this.audio.start()
     this.state.phase = Phase.PLAYING
     this.ui.showHud()
-    this.controller.lock()
+    if (!this.touch) this.controller.lock()
+    this._checkOrientation()
   }
 
   resume() {
+    if (this.touch) enterImmersive()
     this.state.phase = Phase.PLAYING
     this.ui.showHud()
-    this.controller.lock()
+    if (!this.touch) this.controller.lock()
+    this._checkOrientation()
   }
 
   _setupLevel() {
@@ -208,9 +241,12 @@ export class Engine {
     this.pursuer.reset(lvl, this.controller.pos)
     cm.update(SPAWN, SPAWN)
     this.lightField.reset()
+    // resetLevel() clears flashlightOn without the toggle callback firing.
+    this.touchControls?.setFlashlight(state.flashlightOn)
   }
 
   _onLock(locked) {
+    if (this.touch) return // touch mode never locks; pause is the on-screen button
     if (this.debugMode?.active) return // debug owns the cursor; don't auto-pause
     // Pause on pointer-lock loss during PLAYING *or* TRANSITION. Without the
     // TRANSITION case, losing the lock mid-transition (Esc / alt-tab) leaves the
@@ -222,12 +258,29 @@ export class Engine {
     }
   }
 
+  pause() {
+    if (this.state.phase !== Phase.PLAYING && this.state.phase !== Phase.TRANSITION) return
+    this.state.phase = Phase.PAUSED
+    this.ui.showPause()
+    this.touchControls?.reset()
+  }
+
+  // Touch-only: pause + blocker while portrait. Also re-checked after
+  // start/resume so ENTER pressed while portrait can't leave the game running
+  // unattended behind the blocker.
+  _checkOrientation() {
+    if (!this._portraitMq) return
+    this.ui.setRotateVisible(this._portraitMq.matches)
+    if (this._portraitMq.matches) this.pause()
+  }
+
   die(reason) {
     if (this.state.phase !== Phase.PLAYING) return
     this.state.phase = Phase.DEAD
     this.state.deathReason = reason
     this.audio.setTension(0)
     this.controller.unlock()
+    this.touchControls?.reset()
     this.ui.showDeath(reason)
   }
 
@@ -235,6 +288,7 @@ export class Engine {
     if (this.state.phase !== Phase.PLAYING) return
     this.state.phase = Phase.TRANSITION
     this.audio.setTension(0)
+    this.touchControls?.reset()
     this.ui.showTransition(this.state.level + 1)
     this._transT = 2.6
   }
@@ -391,7 +445,7 @@ export class Engine {
     // Re-apply the clamped pixel ratio: browser zoom / moving the window between a
     // HiDPI and a standard monitor changes devicePixelRatio, and a resize event
     // fires for zoom. Without this the buffers stay at the construction-time ratio.
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, MAX_DPR))
     this.renderer.setSize(innerWidth, innerHeight)
     this.deferred.setSize()
     this.debugMode.resize(innerWidth, innerHeight)

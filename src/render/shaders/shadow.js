@@ -1,5 +1,6 @@
 import { IGN, VIEW_RECON, glslFloat } from './common.js'
-import { LIGHT_MAX, SHADOW_STEPS, SHADOW_MAX, SHADOW_BIAS, SHADOW_MAX_DARK } from '../../world/constants.js'
+import { LIGHT_MAX, SHADOW_MAX, SHADOW_BIAS, SHADOW_MAX_DARK } from '../../world/constants.js'
+import { QUALITY } from '../../core/device.js'
 
 // --- Screen-space lamp shadows (half-res) ----------------------------------
 // Produces a single contribution-weighted VISIBILITY mask per fragment, then a
@@ -16,7 +17,7 @@ export const SHADOW_FRAG = /* glsl */ `
   precision highp float;
   precision highp int;
   #define LIGHT_MAX ${LIGHT_MAX}
-  #define SHADOW_STEPS ${SHADOW_STEPS}
+  #define SHADOW_STEPS ${QUALITY.shadowSteps}
   #define SHADOW_MAX ${SHADOW_MAX}
   in vec2 vUv;
   out vec4 outColor;

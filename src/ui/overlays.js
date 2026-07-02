@@ -1,4 +1,5 @@
 import { Phase } from '../core/GameState.js'
+import { IS_TOUCH } from '../core/device.js'
 
 const CSS = `
 #ui, #ui * { box-sizing:border-box; }
@@ -54,6 +55,46 @@ const CSS = `
 #hud #minimap{ display:block; width:150px; height:150px; }
 #ui .touchnote{ position:absolute; bottom:18px; font-size:11px; opacity:.6; letter-spacing:.16em; }
 .hidden{ display:none !important; }
+
+/* Safe-area (notch) offsets — separate override rules so browsers without
+   env()/max() drop these and keep the plain offsets above. */
+#hud .topbar{ top:max(14px, env(safe-area-inset-top));
+  padding:0 max(18px, env(safe-area-inset-right)) 0 max(18px, env(safe-area-inset-left)); }
+#hud .bars{ left:max(18px, env(safe-area-inset-left)); bottom:max(16px, env(safe-area-inset-bottom)); }
+#hud .fl{ right:max(18px, env(safe-area-inset-right)); bottom:max(18px, env(safe-area-inset-bottom)); }
+#hud .mapwrap{ right:max(18px, env(safe-area-inset-right)); }
+
+/* Touch controls (only mounted in touch mode) */
+#hud .tc-zone{ position:absolute; top:0; bottom:0; pointer-events:auto; touch-action:none; }
+#hud .tc-zone-left{ left:0; width:45%; }
+#hud .tc-zone-right{ left:45%; right:0; }
+#hud .tc-stick-base{ position:absolute; width:120px; height:120px; border-radius:50%;
+  transform:translate(-50%,-50%); pointer-events:none;
+  border:1px solid rgba(205,191,110,.45); background:rgba(20,18,8,.35); }
+#hud .tc-stick-base.sprint{ border-color:#f0e08a; box-shadow:0 0 14px rgba(240,224,138,.35); }
+#hud .tc-stick-nub{ position:absolute; left:50%; top:50%; width:56px; height:56px;
+  border-radius:50%; transform:translate(-50%,-50%);
+  background:rgba(205,191,110,.55); border:1px solid #5e501a; }
+#ui .tc-btn{ position:absolute; pointer-events:auto; touch-action:none;
+  width:64px; height:64px; padding:0; border-radius:50%;
+  background:rgba(20,18,8,.5); color:#cdbf6e; border:1px solid #5e501a;
+  font-size:24px; line-height:1; letter-spacing:0; }
+#ui .tc-btn.on{ background:rgba(205,191,110,.85); color:#15130a; }
+#ui .tc-btn-light{ right:max(24px, env(safe-area-inset-right));
+  bottom:calc(max(18px, env(safe-area-inset-bottom)) + 64px); }
+#ui .tc-btn-pause{ left:max(14px, env(safe-area-inset-left));
+  top:max(14px, env(safe-area-inset-top)); width:48px; height:48px; font-size:16px; }
+
+/* Touch-mode HUD tweaks */
+#ui.touch .fl{ display:none; }                 /* [F] LIGHT → replaced by the button */
+#ui.touch #hud .topbar{ padding-left:max(76px, env(safe-area-inset-left)); } /* clear the pause btn */
+#ui.touch .panel button{ min-height:48px; }
+#ui.touch input[type=range]{ width:200px; height:32px; }
+
+/* Portrait blocker — opaque so the phase panel underneath can't bleed through */
+#ui #p-rotate{ z-index:30; gap:14px; background:#0b0a06; }
+#p-rotate .glyph{ font-size:44px; animation:tc-rot 2.4s ease-in-out infinite; }
+@keyframes tc-rot{ 0%,20%{ transform:rotate(0) } 60%,100%{ transform:rotate(90deg) } }
 `
 
 const bar = (id, label, color) => `
@@ -75,7 +116,7 @@ export class UI {
 
     const root = document.createElement('div')
     root.id = 'ui'
-    const touch = matchMedia('(pointer:coarse)').matches
+    root.classList.toggle('touch', IS_TOUCH)
     root.innerHTML = `
       <div id="hud" class="hidden">
         <div class="cross"></div>
@@ -99,8 +140,12 @@ export class UI {
         <div class="row">
           <button id="btn-start">ENTER ▸</button>
         </div>
-        <div class="keys">WASD move · MOUSE look · SHIFT sprint · F flashlight · ESC pause</div>
-        ${touch ? '<div class="touchnote">⚠ best played on desktop with mouse + keyboard</div>' : ''}
+        <div class="keys">${
+          IS_TOUCH
+            ? 'LEFT STICK move · DRAG RIGHT look · STICK EDGE sprint · ⚡ flashlight'
+            : 'WASD move · MOUSE look · SHIFT sprint · F flashlight · ESC pause'
+        }</div>
+        ${IS_TOUCH ? '<div class="touchnote">best with headphones · landscape only</div>' : ''}
       </div>
 
       <div class="panel hidden" id="p-pause">
@@ -128,6 +173,12 @@ export class UI {
         <div class="sub">NO-CLIP DETECTED</div>
         <h1 id="trans-level">LEVEL 1</h1>
         <div class="keys">descending deeper…</div>
+      </div>
+
+      <div class="panel hidden" id="p-rotate">
+        <div class="glyph">📱</div>
+        <h1 style="font-size:clamp(20px,4vw,36px)">ROTATE YOUR DEVICE</h1>
+        <div class="keys">the yellow rooms need landscape.</div>
       </div>
     `
     document.body.appendChild(root)
@@ -159,6 +210,7 @@ export class UI {
       deadSub: $('#dead-sub'),
       trans: $('#p-trans'),
       transLevel: $('#trans-level'),
+      rotate: $('#p-rotate'),
       seedInput: $('#seed-input'),
       sens: $('#set-sens'),
       vol: $('#set-vol'),
@@ -208,6 +260,12 @@ export class UI {
     this.el.dead.classList.toggle('hidden', phase !== Phase.DEAD)
     this.el.trans.classList.toggle('hidden', phase !== Phase.TRANSITION)
     this.el.hud.classList.toggle('hidden', phase !== Phase.PLAYING)
+  }
+
+  // Portrait blocker sits above the phase panels and is driven by orientation,
+  // not phase, so it's toggled independently of _showOnly.
+  setRotateVisible(v) {
+    this.el.rotate.classList.toggle('hidden', !v)
   }
 
   showTitle() {

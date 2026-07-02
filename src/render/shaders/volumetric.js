@@ -1,5 +1,6 @@
 import { HASH, VIEW_RECON, glslFloat } from './common.js'
-import { VOL_STEPS, LIGHT_MAX, VOL_LIGHT_MAX, VOL_OCC_NEAR, VOL_OCC_FAR } from '../../world/constants.js'
+import { LIGHT_MAX, VOL_LIGHT_MAX, VOL_OCC_NEAR, VOL_OCC_FAR } from '../../world/constants.js'
+import { QUALITY } from '../../core/device.js'
 
 // --- Volumetric light shafts (half-res in-scatter raymarch) ----------------
 // Marches the camera ray and, at each step, gathers in-scatter from the nearest
@@ -12,7 +13,7 @@ import { VOL_STEPS, LIGHT_MAX, VOL_LIGHT_MAX, VOL_OCC_NEAR, VOL_OCC_FAR } from '
 export const VOL_FRAG = /* glsl */ `
   precision highp float;
   precision highp int;
-  #define VOL_STEPS ${VOL_STEPS}
+  #define VOL_STEPS ${QUALITY.volSteps}
   #define LIGHT_MAX ${LIGHT_MAX}
   #define VOL_LIGHT_MAX ${VOL_LIGHT_MAX}
   in vec2 vUv;

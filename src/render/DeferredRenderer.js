@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js'
+import { QUALITY } from '../core/device.js'
 import { makeToonGradient } from './gradientRamp.js'
 import { makeLampUniforms } from './LightField.js'
 import { FS_VERT } from './shaders/common.js'
@@ -33,7 +34,6 @@ import {
   SHADOW_STRENGTH,
   SHADOW_SCALE,
   AO_SCALE,
-  AO_SAMPLES,
   AO_RADIUS,
   AO_BIAS,
   AO_INTENSITY,
@@ -165,7 +165,8 @@ export class DeferredRenderer {
       uProj: { value: new THREE.Matrix4() },
       uProjInverse: { value: new THREE.Matrix4() },
       uResolution: { value: new THREE.Vector2(dw, dh) },
-      uKernel: { value: aoKernel(AO_SAMPLES) },
+      // Kernel size must match the AO_SAMPLES #define in ssao.js (uniform array).
+      uKernel: { value: aoKernel(QUALITY.aoSamples) },
       uRadius: { value: AO_RADIUS },
       uBias: { value: AO_BIAS },
       uIntensity: { value: AO_INTENSITY },

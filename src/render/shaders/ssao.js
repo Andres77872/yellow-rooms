@@ -1,11 +1,11 @@
 import { HASH, VIEW_RECON } from './common.js'
-import { AO_SAMPLES } from '../../world/constants.js'
+import { QUALITY } from '../../core/device.js'
 
 // --- SSAO (half-res): normal-oriented hemisphere kernel + range check -------
 export const AO_FRAG = /* glsl */ `
   precision highp float;
   precision highp int;
-  #define AO_SAMPLES ${AO_SAMPLES}
+  #define AO_SAMPLES ${QUALITY.aoSamples}
   in vec2 vUv;
   out vec4 outColor;
   uniform sampler2D tNormal;
