@@ -52,18 +52,31 @@ export const AO_FRAG = /* glsl */ `
   }
 `
 
+// Depth-aware (bilateral) 5x5 blur — same kernel as the shadow-mask blur — so
+// contact darkening can't halo across depth edges (a flat box blur bled AO from
+// pillars onto the wall far behind them).
 export const AO_BLUR_FRAG = /* glsl */ `
   precision highp float;
   precision highp int;
   in vec2 vUv;
   out vec4 outColor;
   uniform sampler2D tAO;
+  uniform sampler2D tDepth;
+  uniform mat4 uProjInverse;
   uniform vec2 uTexel;
+  uniform float uDepthSigma;     // view-Z falloff for the bilateral weight
+  ${VIEW_RECON}
   void main(){
-    float s = 0.0;
+    float zc = viewZAt(vUv);
+    float sum = 0.0, wsum = 0.0;
     for (int y = -2; y <= 2; y++)
-      for (int x = -2; x <= 2; x++)
-        s += texture(tAO, vUv + vec2(float(x), float(y)) * uTexel).r;
-    outColor = vec4(s / 25.0, 0.0, 0.0, 1.0);
+      for (int x = -2; x <= 2; x++) {
+        vec2 uv = vUv + vec2(float(x), float(y)) * uTexel;
+        float dz = (viewZAt(uv) - zc) / uDepthSigma;
+        float w = exp(-dz * dz);
+        sum += texture(tAO, uv).r * w;
+        wsum += w;
+      }
+    outColor = vec4(sum / max(wsum, 1e-4), 0.0, 0.0, 1.0);
   }
 `

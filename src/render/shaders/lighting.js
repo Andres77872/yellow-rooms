@@ -1,5 +1,15 @@
 import { IGN, glslFloat } from './common.js'
-import { LIGHT_MAX, CEL_BANDS, RIM_POW, RIM_MIX, LAMP_AO_MIX } from '../../world/constants.js'
+import {
+  LIGHT_MAX,
+  CEL_BANDS,
+  RIM_POW,
+  RIM_MIX,
+  LAMP_AO_MIX,
+  SKY_ZENITH_MULT,
+  SKY_NADIR_MULT,
+  LAMP_QUERY_R,
+  LAMP_FADE_BAND,
+} from '../../world/constants.js'
 
 // --- Deferred lighting: hemispheric ambient + MANY cel-banded lamps +
 //     analytic flashlight cone + rim, all in view space. ---
@@ -31,6 +41,8 @@ export const LIGHTING_FRAG = /* glsl */ `
   uniform vec3 uAmbGround;
   uniform float uLampWrap;       // half-Lambert wrap for lamp + flash N·L
   uniform float uRim;
+  uniform vec3 uRimColor;        // cool anime edge light (decoupled from lamp warmth)
+  uniform vec3 uEntityRim;       // stepped slate rim on matID-2 entities
   uniform float uFlashOn;
   uniform vec3 uFlashColor;
   uniform float uFlashRange;
@@ -41,6 +53,18 @@ export const LIGHTING_FRAG = /* glsl */ `
   uniform float uFogDensity;
 
   float band(float x){ return texture(tRamp, vec2(clamp(x, 0.0, 1.0), 0.5)).r; }
+  // Vertical sky/fog gradient: uFogColor is the HORIZON amber; rays tilting up
+  // sink into a dark warm void, rays tilting down into a dim floor haze. Used
+  // both for the raw void (depth == 1) and as the per-pixel fog target, so
+  // distant surfaces converge exactly into the sky behind them instead of a
+  // flat amber curtain (which used to glare through unloaded holes in dark
+  // zones and flatten all depth).
+  vec3 skyColor(vec3 dirView){
+    float up = dot(dirView, uUpView);
+    float b = mix(1.0, ${glslFloat(SKY_ZENITH_MULT)}, smoothstep(0.02, 0.5, up))
+            * mix(1.0, ${glslFloat(SKY_NADIR_MULT)}, smoothstep(0.02, 0.55, -up));
+    return uFogColor * b;
+  }
   // Half-Lambert wrap: lifts grazing / under-facing surfaces toward the lit band
   // so ceilings & wall undersides read consistently with lit floors. Pure Lambert
   // when uLampWrap == 0.
@@ -49,18 +73,22 @@ export const LIGHTING_FRAG = /* glsl */ `
 
   void main(){
     float depth = texture(tDepth, vUv).x;
-    if (depth >= 1.0) { outColor = vec4(uFogColor, 1.0); return; }
-
-    vec4 c = texture(tColor, vUv);
     vec4 ndc = vec4(vUv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
     vec4 vp = uProjInverse * ndc; vp /= vp.w;
-    vec3 P = vp.xyz;               // view-space position
+    vec3 P = vp.xyz;               // view-space position (far plane when void)
     float dist = length(P);
+    vec3 viewDir = P / max(dist, 1e-4);
+    vec3 fogCol = skyColor(viewDir);
+
+    // Void (no geometry): the graded sky, not a flat curtain.
+    if (depth >= 1.0) { outColor = vec4(fogCol, 1.0); return; }
+
+    vec4 c = texture(tColor, vUv);
     float fog = 1.0 - exp(-uFogDensity * uFogDensity * dist * dist);
 
     // Emissive surfaces (lamps, exit) bypass lighting.
     if (c.a > 0.5 && c.a < 1.5) {
-      outColor = vec4(mix(c.rgb, uFogColor, fog), 1.0);
+      outColor = vec4(mix(c.rgb, fogCol, fog), 1.0);
       return;
     }
 
@@ -80,7 +108,11 @@ export const LIGHTING_FRAG = /* glsl */ `
     float hemi = 0.5 + 0.5 * dot(N, uUpView);
     vec3 ambient = mix(uAmbGround, uAmbSky, hemi) * ao;
 
-    // Many lamps, cel-banded by N·L, attenuated to 0 at range.
+    // Many lamps, cel-banded by N·L, attenuated to 0 at range. Each lamp also
+    // fades over the last LAMP_FADE_BAND units of the query radius (lamp
+    // distance from the CAMERA, i.e. length of its view-space position), so
+    // lamps entering/leaving the LightField candidate set ramp in smoothly
+    // instead of snapping their whole floor pool on/off mid-walk.
     vec3 lamps = vec3(0.0);
     for (int i = 0; i < LIGHT_MAX; i++) {
       if (i >= uLampCount) break;
@@ -90,7 +122,9 @@ export const LIGHTING_FRAG = /* glsl */ `
       if (d > uLampRange) continue;
       float ndl = wrapNL(dot(N, toL / max(d, 1e-4)));
       float x = clamp(1.0 - d / uLampRange, 0.0, 1.0);
-      lamps += band(ndl + celDither) * (x * x);
+      float setFade = 1.0 - smoothstep(
+        ${glslFloat(LAMP_QUERY_R - LAMP_FADE_BAND)}, ${glslFloat(LAMP_QUERY_R)}, length(Lv));
+      lamps += band(ndl + celDither) * (x * x) * setFade;
     }
     // Screen-space lamp shadows (half-res, blurred) modulate the whole lamp term.
     // tShadow is the contribution-weighted visibility, so this equals per-lamp
@@ -113,10 +147,17 @@ export const LIGHTING_FRAG = /* glsl */ `
 
     // pow() of a negative base is undefined in GLSL; dot() of renormalized
     // vectors can exceed 1 by an fp epsilon, so clamp the base to >= 0.
-    float rim = pow(max(1.0 - max(dot(N, -P / max(dist, 1e-4)), 0.0), 0.0), ${glslFloat(RIM_POW)}) * uRim;
+    float rimBase = pow(max(1.0 - max(dot(N, -viewDir), 0.0), 0.0), ${glslFloat(RIM_POW)});
 
-    vec3 col = albedo * (ambient + lamps + flash) + uLampColor * rim * ${glslFloat(RIM_MIX)};
-    col = mix(col, uFogColor, fog);
+    vec3 col;
+    if (c.a > 1.5 && c.a < 2.5) {
+      // Entity (matID 2): dark mass + a STEPPED cool rim through the cel ramp,
+      // so a silhouette down a corridor reads as a deliberate presence.
+      col = albedo * (ambient + lamps + flash) + uEntityRim * band(rimBase + celDither) * 0.85;
+    } else {
+      col = albedo * (ambient + lamps + flash) + uRimColor * rimBase * uRim * ${glslFloat(RIM_MIX)};
+    }
+    col = mix(col, fogCol, fog);
     outColor = vec4(col, 1.0);
   }
 `

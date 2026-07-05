@@ -20,8 +20,14 @@ export class TouchControls {
     this.base.appendChild(this.nub)
     this.zoneL.appendChild(this.base)
 
+    // Icon-only buttons need accessible names; type=button keeps any future
+    // form ancestor from treating them as submits.
     this.btnLight = el('button', 'tc-btn tc-btn-light', '⚡')
+    this.btnLight.type = 'button'
+    this.btnLight.setAttribute('aria-label', 'Toggle flashlight')
     this.btnPause = el('button', 'tc-btn tc-btn-pause', 'Ⅱ')
+    this.btnPause.type = 'button'
+    this.btnPause.setAttribute('aria-label', 'Pause')
 
     for (const node of [this.zoneL, this.zoneR, this.btnLight, this.btnPause]) {
       node.addEventListener('contextmenu', (e) => e.preventDefault())

@@ -153,7 +153,7 @@ export class Engine {
     this.exitInfo = null
 
     addEventListener('resize', () => this._onResize())
-    this.cm.update(SPAWN, SPAWN) // seed the title backdrop
+    this.cm.prewarm(SPAWN, SPAWN) // full title backdrop on first paint
     this._animate = this._animate.bind(this)
   }
 
@@ -239,7 +239,10 @@ export class Engine {
     this.controller.teleport(SPAWN, SPAWN, yaw)
     this.stalker.reset(lvl, this.controller.pos)
     this.pursuer.reset(lvl, this.controller.pos)
-    cm.update(SPAWN, SPAWN)
+    // Synchronous prewarm behind the title/transition overlay: the whole load
+    // ring exists before the player can look, instead of visibly assembling
+    // in the first ~0.7s of play.
+    cm.prewarm(SPAWN, SPAWN)
     this.lightField.reset()
     // resetLevel() clears flashlightOn without the toggle callback firing.
     this.touchControls?.setFlashlight(state.flashlightOn)
@@ -470,6 +473,7 @@ export class Engine {
     } else if (p === Phase.DEAD) {
       this.state.deadAmount = Math.min(1, this.state.deadAmount + dt * 1.4)
       this.deferred.grade.dead.value = this.state.deadAmount
+      this._updateFlicker(dt) // the world behind the death static keeps humming
       this._updateCameraMatrices()
     } else if (p === Phase.TRANSITION) {
       this.deferred.grade.dead.value = THREE.MathUtils.lerp(
@@ -478,6 +482,7 @@ export class Engine {
         dt * 2.5
       )
       this._transT -= dt
+      this._updateFlicker(dt)
       this._updateCameraMatrices()
       if (this._transT <= 0) this._advance()
     } else {

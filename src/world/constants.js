@@ -32,13 +32,29 @@ export const ACCEL = 60
 
 // --- Camera / fog ---
 export const FOV = 72
-export const NEAR = 0.05
-export const FAR = 240
-export const FOG_DENSITY = 0.024
-// Warm amber haze (also the void/sky in the lighting shader). Re-anchored darker
-// & more saturated after the sRGB double-decode fix so the distance keeps its
-// moody liminal amber instead of washing out to bright pale yellow.
+// 0.1 (not 0.05) doubles usable depth precision; the closest a wall face can
+// get to the eye is ~0.34u (PLAYER_R 0.5 - WALL_COL_HALF 0.08 - head-bob), so
+// nothing ever near-clips.
+export const NEAR = 0.1
+// Far plane sized to the fog horizon, not past it: with FOG_DENSITY 0.014 the
+// exp^2 haze is ~98.6% opaque at 180u, and chunks are guaranteed loaded to
+// ~147u (LOAD_RADIUS 4 x 42u minus in-chunk position), so nothing pops inside
+// the visible range. The old 240/0.024 pair went opaque by ~90u — two thirds
+// of the drawn world was invisible mud and the long liminal sight-lines never
+// read.
+export const FAR = 180
+export const FOG_DENSITY = 0.014
+// Warm amber haze at the HORIZON. The lighting shader turns this into a
+// vertical sky gradient for the void and for the per-pixel fog target (see
+// SKY_ZENITH_MULT / SKY_NADIR_MULT), so distant rooms melt into a dreamy amber
+// band instead of a flat curtain.
 export const FOG_COLOR = 0x9c7d33
+// Void/sky vertical gradient, as brightness multipliers on FOG_COLOR:
+// looking up fades toward a dark warm void, looking down toward a dim floor
+// haze. Keeps unloaded holes from glaring flat amber into dark zones and gives
+// the horizon an anime-background glow.
+export const SKY_ZENITH_MULT = 0.3
+export const SKY_NADIR_MULT = 0.62
 
 // --- Lighting / panels ---
 export const PANEL_COLOR = 0xffe6a0
@@ -53,15 +69,25 @@ export const PANEL_COLOR = 0xffe6a0
 // Lighting is computed in a fullscreen pass, so we can shade MANY lamps at once
 // (not the old 8-light forward cap). LightField uploads the nearest lamps each
 // frame; the lighting shader loops them with cel-banded attenuation.
-export const LIGHT_MAX = 48 // max lamps shaded per frame (uniform-array cap)
+export const LIGHT_MAX = 72 // max lamps shaded per frame (uniform-array cap; loop breaks at the live count)
 export const LIGHT_RANGE = 13 // lamp reach (world units) before windowed to 0
 export const LIGHT_INTENSITY = 1.5 // per-lamp warm contribution (linear, pre-grade); re-anchored from 1.7 after the sRGB decode fix brightened lamp color
-export const LAMP_QUERY_R = 30 // only consider lamps within this radius as candidates
+// Lamp candidate radius. Must reach far enough that a lamp's floor pool
+// (LIGHT_RANGE) can only appear/disappear where the fog already dominates:
+// QUERY_R + LIGHT_RANGE = 73u sits past the 50%-fog distance (~59u at density
+// 0.014). The old 30u horizon made pools snap on/off 17-43u away in nearly
+// clear air — the single most visible "draw distance" artifact. The last
+// LAMP_FADE_BAND units of the radius fade each lamp's contribution to zero in
+// the shader, so set-membership changes are invisible rather than a pop.
+export const LAMP_QUERY_R = 60
+export const LAMP_FADE_BAND = 12
 
 // Cel ramp for the per-lamp N·L banding (see render/gradientRamp.js). CEL_BANDS
 // hard steps on the lit side; CEL_FLOOR keeps a tiny warm step on grazing walls.
-export const CEL_BANDS = 6
-export const CEL_FLOOR = 0.06
+// 4 bands (not 6) so the toon terminator reads as deliberate anime shading
+// instead of a near-smooth gradient.
+export const CEL_BANDS = 4
+export const CEL_FLOOR = 0.08
 // How much SSAO modulates DIRECT lamp light (0 = none/physical, 1 = full). The
 // ambient term always gets full AO; this is a deliberate non-physical contact-
 // darkening lever for the direct term.
@@ -72,11 +98,20 @@ export const LAMP_AO_MIX = 0.5
 // Dark-warm hemispheric fill. Re-anchored much darker after the sRGB double-decode
 // fix (which had been crushing these ~12x): keeps lamp-less zones dark-but-warm,
 // never pure black, without washing the scene to flat bright fill.
-export const AMBIENT_SKY = 0x1c1709 // hemi up tint (lights up-facing floors)
-export const AMBIENT_GROUND = 0x141009 // hemi down tint (lights down-facing ceilings)
-export const RIM_STRENGTH = 0.18 // anime fresnel edge light
+export const AMBIENT_SKY = 0x2b2211 // hemi up tint (lights up-facing floors)
+export const AMBIENT_GROUND = 0x221b0e // hemi down tint (lights down-facing ceilings)
+export const RIM_STRENGTH = 0.14 // anime fresnel edge light
 export const RIM_POW = 3.0 // fresnel falloff exponent for the rim term
-export const RIM_MIX = 0.5 // rim contribution scale (uLampColor * rim * RIM_MIX)
+export const RIM_MIX = 0.5 // rim contribution scale (uRimColor * rim * RIM_MIX)
+// Rim light decoupled from the warm lamp color: a pale COOL edge light is the
+// classic anime treatment and is the one cool accent that survives the warm
+// grade. Entities get their own stepped slate-blue rim (see lighting.js) so a
+// silhouette down a long corridor reads as a *presence*, not a smudge.
+// Barely-cool pale rim: at grazing angles the fresnel term hits whole
+// floor/ceiling planes, so a strongly blue rim reads as a grey wash over the
+// amber world — keep the coolness a hint, not a hue.
+export const RIM_COLOR = 0xdcd8e4
+export const ENTITY_RIM = 0x8fa3c8
 // Wrapped diffuse (half-Lambert) factor for the per-lamp N·L. >0 wraps a lamp's
 // light around onto grazing / under-facing surfaces (ceilings, wall undersides)
 // so floor/roof/walls read consistently lit. The range window still keeps
@@ -89,6 +124,13 @@ export const FLASH_INTENSITY = 2.2
 export const FLASH_COS_INNER = 0.94
 export const FLASH_COS_OUTER = 0.86
 export const FLASH_COLOR = 0xfff0c4 // warm white flashlight tint
+
+// Distance beyond which an entity may despawn/teleport even inside the view
+// frustum: the exp^2 fog is >96% opaque here (see render-coupling.test.js), so
+// the removal is invisible. Inside this range entities NEVER vanish while the
+// player has them in frustum with line of sight — with the thinner fog and the
+// persistent entity ink outline, a watched despawn/relocate reads as a pop.
+export const ENTITY_VANISH_DIST = 130
 
 // --- Stalker AI / difficulty ------------------------------------------
 // The entity reads the local light level (ChunkManager.lightAt) every frame:
@@ -165,20 +207,29 @@ export const BLOOM_INTENSITY = 0.8
 
 // Posterize cel bands in the grade (higher = smoother gradients)
 export const GRADE_LEVELS = 8.0
-export const GRADE_TINT = [1.06, 0.98, 0.66] // warm look-tint applied in the grade (linear)
+// Warm look-tint applied in the grade (linear). Blue at 0.78 (was 0.66) keeps
+// the amber mono-yellow mood but lets the cool accents (rim light, mint exit
+// glow, violet sanity tones) survive instead of being crushed to olive.
+export const GRADE_TINT = [1.05, 0.99, 0.78]
 
 // Ink outline (Sobel off the G-buffer). Static tunables (LightTool edits live).
+// The ink now also fades with the SAME exp^2 fog transmittance as the surfaces
+// (outline.js shares the lighting pass's fog-density uniform), so lines die
+// exactly when the surface melts into haze — no more ghost-wireframe X-ray at
+// distance. The near/far smoothstep below is only a wide safety envelope.
+// DEPTH_THRESH is in normalized-depth units (viewZ/FAR): rescaled 0.009->0.012
+// when FAR went 240->180 so the same world-space depth step trips an edge.
 export const OUTLINE_INK = 0x140e03
-export const OUTLINE_THICKNESS = 1.6
-export const OUTLINE_DEPTH_THRESH = 0.009
+export const OUTLINE_THICKNESS = 1.8
+export const OUTLINE_DEPTH_THRESH = 0.012
 export const OUTLINE_NORMAL_THRESH = 0.3
-export const OUTLINE_FADE_NEAR = 0.08
-export const OUTLINE_FADE_FAR = 0.34
+export const OUTLINE_FADE_NEAR = 0.1
+export const OUTLINE_FADE_FAR = 0.95
 
 // --- Thin-wall model (refactor) ---------------------------------------
 // World-gen version: bump whenever the algorithm changes the bytes a seed
 // produces. Guards the golden determinism test.
-export const WORLD_GEN_VERSION = 4
+export const WORLD_GEN_VERSION = 5
 
 // Interior zones, selected by the low-frequency region field. The registry in
 // zones/index.js maps these ids to generator modules.

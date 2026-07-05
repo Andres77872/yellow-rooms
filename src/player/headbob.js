@@ -11,9 +11,12 @@ export class HeadBob {
   }
 
   update(dt, speed, moving) {
-    if (moving && this.enabled) {
+    if (moving) {
+      // Phase always advances with the stride — footstep timing hangs off the
+      // sign-crossing (Controller.applyFrame), so the motion-sickness toggle
+      // must only zero the AMPLITUDE, never silence the footsteps.
       this.t += dt * (4 + speed * 0.9)
-      this.amp = lerp(this.amp, 1, dt * 8)
+      this.amp = lerp(this.amp, this.enabled ? 1 : 0, dt * 8)
     } else {
       this.amp = lerp(this.amp, 0, dt * 8)
     }

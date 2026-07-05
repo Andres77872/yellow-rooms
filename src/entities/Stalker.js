@@ -6,6 +6,7 @@ import {
   FLASH_COS_OUTER,
   STALKER_LIGHT_SPEED,
   STALKER_DARK_SPEED,
+  ENTITY_VANISH_DIST,
   CELL,
   worldToCell,
 } from '../world/constants.js'
@@ -201,6 +202,12 @@ export class Stalker {
 
     // Cheap-first visibility gate (distance -> frustum -> line of sight).
     const seen = sightGate(this.cm, camera, this.pos.x, this.pos.z, player.x, player.z, this.sightDist)
+    // Wider "is the PLAYER watching it" gate for despawn/teleport: `seen` caps
+    // at sightDist (60u) but the thinned fog + persistent entity ink keep the
+    // silhouette readable far beyond that, so removals must never happen while
+    // it's in frustum with LOS inside the fog-opaque range.
+    const observed =
+      seen || sightGate(this.cm, camera, this.pos.x, this.pos.z, player.x, player.z, ENTITY_VANISH_DIST)
 
     // Flashlight beam (a strong, dynamic light) freezes the entity outright —
     // unless the player has stared so long the freeze has failed (canFreeze).
@@ -237,7 +244,9 @@ export class Stalker {
     } else {
       // --- Lost sight ---
       this._lostTimer -= dt
-      if (this._lostTimer <= 0) {
+      // Never vanish while watched: hold (keep hunting) until the player looks
+      // away or the haze has fully swallowed it.
+      if (this._lostTimer <= 0 && !observed) {
         this._despawn()
         this.stateLabel = 'despawn'
         // Now inactive: report Infinity like the dormant branch above, so the
@@ -275,9 +284,14 @@ export class Stalker {
         this.stateLabel = 'hunting'
         this._timer -= dt
         if (this._timer <= 0) {
-          this.stateLabel = 'teleport'
-          this._teleport(camera, player)
-          this._timer = this.interval
+          if (observed) {
+            // Departure would pop mid-screen; retry once the player looks away.
+            this._timer = 0.4
+          } else {
+            this.stateLabel = 'teleport'
+            this._teleport(camera, player)
+            this._timer = this.interval
+          }
         }
       }
     }

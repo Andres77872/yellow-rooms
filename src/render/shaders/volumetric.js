@@ -30,6 +30,7 @@ export const VOL_FRAG = /* glsl */ `
   uniform float uDensity;
   uniform float uMaxDist;
   uniform float uPhaseG;         // Henyey-Greenstein anisotropy (forward beams)
+  uniform float uFogDensity;     // shared with the lit pass: shafts sink into the same haze
   uniform float uFlashOn;
   uniform vec3 uFlashColor;
   uniform float uFlashRange;
@@ -79,10 +80,15 @@ export const VOL_FRAG = /* glsl */ `
 
     // Single outer step loop: compute the ray sample S once per step, then gather
     // in-scatter from each lamp (was re-walking the whole ray per lamp).
+    // Each sample's in-scatter is attenuated by the camera->sample fog
+    // transmittance (same exp^2 curve as the lit pass), so shafts melt into the
+    // haze with everything else instead of gluing full-brightness streaks onto
+    // an already-fogged background (and the uMaxDist clamp edge disappears).
     vec3 acc = vec3(0.0);
     float t = step * jitter;
     for (int i = 0; i < VOL_STEPS; i++){
       vec3 S = dir * t;
+      float trans = exp(-uFogDensity * uFogDensity * t * t);
       for (int j = 0; j < LIGHT_MAX; j++){
         if (j >= uLampCount || j >= VOL_LIGHT_MAX) break;
         vec3 Lv = uLampViewPos[j];
@@ -90,7 +96,7 @@ export const VOL_FRAG = /* glsl */ `
         if (dl < uLampRange){
           float a = 1.0 - dl / uLampRange;
           float phase = phaseHG(dot(dir, (Lv - S) / max(dl, 1e-4)));
-          acc += a * a * phase * visToLight(S, Lv);
+          acc += a * a * phase * visToLight(S, Lv) * trans;
         }
       }
       t += step;

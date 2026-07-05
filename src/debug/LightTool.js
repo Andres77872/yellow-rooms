@@ -7,6 +7,8 @@ import {
   FOG_COLOR,
   FLASH_COLOR,
   OUTLINE_INK,
+  RIM_COLOR,
+  ENTITY_RIM,
 } from '../world/constants.js'
 
 const CHANNELS = ['final', 'albedo', 'matID', 'normal', 'depth', 'AO', 'lit', 'vol', 'bloom', 'comp']
@@ -104,6 +106,8 @@ export class LightTool {
     this._c(lit, 'ambient sky', [L.uAmbSky], AMBIENT_SKY)
     this._c(lit, 'ambient ground', [L.uAmbGround], AMBIENT_GROUND)
     this._f(lit, 'rim', L.uRim, 0, 1, 0.01)
+    this._c(lit, 'rim color', [L.uRimColor], RIM_COLOR)
+    this._c(lit, 'entity rim', [L.uEntityRim], ENTITY_RIM)
     this._f(lit, 'shadow thickness', S.uShadowThickness, 0, 3, 0.05)
     this._f(lit, 'shadow strength', L.uShadowStrength, 0, 1, 0.01)
     this._f(lit, 'shadow soften', d.shadowBlurUniforms.uDepthSigma, 0.05, 2, 0.01)

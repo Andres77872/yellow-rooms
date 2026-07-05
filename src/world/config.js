@@ -17,10 +17,14 @@ export const DEFAULT_WORLD_CONFIG = {
   // player stays in one style longer. Bands are ordered closed->medium->open
   // (office < pillars < warehouse), so the middle PILLARS band naturally buffers
   // office<->warehouse transitions: style changes read as a gradient.
+  // Band maxes are EMPIRICAL QUANTILES of the value-noise field at chunk
+  // resolution (the smoothed bilinear noise concentrates mass around 0.5, so
+  // equal-width bands do NOT give equal area). 0.465 / 0.655 are the measured
+  // 45th / 75th percentiles => ~45% office, ~30% pillars, ~25% warehouse.
   region: { scale: 4.5, salt: 0x5a5a },
   zoneBands: [
-    { id: ZONE_OFFICE, max: 0.55 },
-    { id: ZONE_PILLARS, max: 0.8 },
+    { id: ZONE_OFFICE, max: 0.465 },
+    { id: ZONE_PILLARS, max: 0.655 },
     { id: ZONE_WAREHOUSE, max: 1.01 },
   ],
 
@@ -67,10 +71,19 @@ export const DEFAULT_WORLD_CONFIG = {
   },
 
   // Fluorescent ceiling lamps on a GLOBAL module grid (seam-continuous).
+  // `phase` offsets the accepted grid per zone: pillars columns sit on every
+  // even global coordinate (pillars.spacing 2, phase 0), which covers the whole
+  // phase-0 step-4 lamp grid — phase 1 puts pillars lamps on odd coordinates,
+  // between the columns, so pillar halls actually get light.
   lamps: {
     step: 4,
     salt: 0x6c61,
     deadChance: 0.18,
+    phase: {
+      [ZONE_OFFICE]: 0,
+      [ZONE_PILLARS]: 1,
+      [ZONE_WAREHOUSE]: 0,
+    },
     chance: {
       [ZONE_OFFICE]: 0.7,
       [ZONE_PILLARS]: 0.85,

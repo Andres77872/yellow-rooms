@@ -76,28 +76,7 @@ export class ChunkManager {
     this.queue.sort((a, b) => a.d - b.d)
 
     // Build a few per frame.
-    for (let i = 0; i < MAX_BUILDS_PER_FRAME && this.queue.length; i++) {
-      const { cx, cz, key } = this.queue.shift()
-      this.queued.delete(key)
-      if (this.chunks.has(key)) continue
-      const exitCell =
-        this.exit && this.exit.cx === cx && this.exit.cz === cz
-          ? { lx: this.exit.lx, lz: this.exit.lz }
-          : null
-      const clearings = this.clearings.filter((c) => c.cx === cx && c.cz === cz)
-      const chunk = new Chunk(
-        cx,
-        cz,
-        this.seed,
-        this.materials,
-        this.geom,
-        exitCell,
-        this.config,
-        clearings.length ? clearings : null
-      )
-      this.root.add(chunk.group)
-      this.chunks.set(key, chunk)
-    }
+    for (let i = 0; i < MAX_BUILDS_PER_FRAME && this.queue.length; i++) this._buildNext()
 
     // Unload beyond the hysteresis radius.
     for (const [key, c] of this.chunks) {
@@ -109,6 +88,38 @@ export class ChunkManager {
         this.chunks.delete(key)
       }
     }
+  }
+
+  _buildNext() {
+    const { cx, cz, key } = this.queue.shift()
+    this.queued.delete(key)
+    if (this.chunks.has(key)) return
+    const exitCell =
+      this.exit && this.exit.cx === cx && this.exit.cz === cz
+        ? { lx: this.exit.lx, lz: this.exit.lz }
+        : null
+    const clearings = this.clearings.filter((c) => c.cx === cx && c.cz === cz)
+    const chunk = new Chunk(
+      cx,
+      cz,
+      this.seed,
+      this.materials,
+      this.geom,
+      exitCell,
+      this.config,
+      clearings.length ? clearings : null
+    )
+    this.root.add(chunk.group)
+    this.chunks.set(key, chunk)
+  }
+
+  // Build EVERYTHING the streaming radius wants, synchronously. Called behind
+  // the title / level-transition overlays so the world never visibly assembles
+  // in front of the player (MAX_BUILDS_PER_FRAME only amortises steady-state
+  // walking; a fresh level otherwise streams ~80 chunks over ~0.7s of gameplay).
+  prewarm(px, pz) {
+    this.update(px, pz)
+    while (this.queue.length) this._buildNext()
   }
 
   // --- Queries (thin-wall model) ---
@@ -163,9 +174,9 @@ export class ChunkManager {
     for (const c of this.chunks.values()) {
       const lamps = c.lamps
       if (!lamps || !lamps.length) continue
-      // Chunk-AABB prune: LAMP_QUERY_R (30) < CHUNK_WORLD (42), so only chunks
-      // whose nearest edge is within range can contribute. Skips most of the ~81
-      // loaded chunks' lamp arrays each call (called per-frame by lightAt + AI).
+      // Chunk-AABB prune: skip chunks whose nearest edge is beyond the query
+      // radius. Exact for any radius; still culls most of the ~81 loaded
+      // chunks' lamp arrays each call (called per-frame by lightAt + AI).
       const minX = c.cx * CHUNK_WORLD
       const minZ = c.cz * CHUNK_WORLD
       const ndx = px < minX ? minX - px : px > minX + CHUNK_WORLD ? px - (minX + CHUNK_WORLD) : 0

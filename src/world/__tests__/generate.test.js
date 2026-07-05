@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { buildChunk } from '../pipeline.js'
 import { vBorder, hBorder } from '../border.js'
 import { DEFAULT_WORLD_CONFIG as CFG } from '../config.js'
-import { CHUNK, ZONE_OFFICE, WORLD_GEN_VERSION } from '../constants.js'
+import { CHUNK, ZONE_OFFICE, ZONE_PILLARS, WORLD_GEN_VERSION } from '../constants.js'
 import { ChunkData } from '../ChunkData.js'
 import { RNG } from '../core/rng.js'
 import { fmix32 } from '../core/hash.js'
@@ -27,9 +27,13 @@ function digest(d) {
   return (h >>> 0).toString(16).padStart(8, '0')
 }
 
+// Re-pinned for WORLD_GEN_VERSION 5 (per-zone lamp-grid phase + rebalanced
+// zoneBands). Coords chosen so the pin covers all three zones at seed 12345:
+// (0,0) and (3,-2) are pillars, (2,0) is warehouse, (12,12) is office.
 const GOLDEN = {
-  '0,0': '2716be0c',
-  '3,-2': 'ed2f26d0',
+  '0,0': '68486ff8',
+  '3,-2': '4bf54f1e',
+  '2,0': 'b09716ff',
   '12,12': '6af233e0',
 }
 
@@ -123,19 +127,41 @@ describe('bounds & shape', () => {
 })
 
 describe('lamp regularity', () => {
-  it('lamps sit on the global module grid and never inside a column', () => {
+  it('lamps sit on the zone-phased global module grid and never inside a column', () => {
     const step = CFG.lamps.step
     for (const s of SEEDS) {
       for (const [cx, cz] of COORDS) {
         const d = buildChunk(s, cx, cz, CFG)
+        const phase = CFG.lamps.phase[d.zone] ?? 0
         for (const l of d.lamps) {
           const gx = cx * CHUNK + l.lx
           const gz = cz * CHUNK + l.lz
-          expect(((gx % step) + step) % step).toBe(0)
-          expect(((gz % step) + step) % step).toBe(0)
+          expect((((gx - phase) % step) + step) % step).toBe(0)
+          expect((((gz - phase) % step) + step) % step).toBe(0)
           expect(d.colAt(l.lx, l.lz)).toBe(0)
         }
       }
+    }
+  })
+
+  // Regression: the pillars column lattice (spacing 2, phase 0) used to cover
+  // the whole phase-0 lamp grid, rejecting nearly every candidate — pillar
+  // halls averaged ~0.3 lamps/chunk vs office ~8.5 and were pitch-black. The
+  // per-zone phase offset must keep pillars lamp coverage comparable to office.
+  it('pillars chunks get real lamp coverage (>= 4 lamps/chunk on average)', () => {
+    for (const s of SEEDS) {
+      let lamps = 0
+      let chunks = 0
+      for (let cz = -8; cz <= 8 && chunks < 20; cz++) {
+        for (let cx = -8; cx <= 8 && chunks < 20; cx++) {
+          const d = buildChunk(s, cx, cz, CFG)
+          if (d.zone !== ZONE_PILLARS) continue
+          lamps += d.lamps.length
+          chunks++
+        }
+      }
+      expect(chunks).toBeGreaterThan(0)
+      expect(lamps / chunks).toBeGreaterThanOrEqual(4)
     }
   })
 })

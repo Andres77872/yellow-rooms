@@ -8,8 +8,35 @@ import { CELL, CHUNK, FOV, COL_HALF, chunkKey } from '../world/constants.js'
 // scope vignette instead of debug lines. Visibility is the AND of the `minimap`
 // setting (this.visible / the .mapwrap .hidden class) and the HUD being shown
 // (#hud.hidden handles every non-PLAYING phase).
-const SIZE = 150 // CSS px (matches the .mapwrap bezel)
+
+// Single source of truth for the disc's CSS pixel size — overlays.js reads
+// this for the .mapwrap bezel + canvas markup so they can never drift.
+export const MINIMAP_SIZE = 150
+const SIZE = MINIMAP_SIZE
 const SCALE = 4.0 // px per world unit (~±6 cells visible, near MAP_REVEAL_R)
+
+// Mirrors the #ui design tokens in overlays.js (a canvas can't read CSS custom
+// properties per frame without a getComputedStyle round-trip).
+const C = {
+  fog: 'rgba(13,11,6,.92)', // opaque warm-dark unexplored base
+  seen: 'rgba(244,233,200,.07)', // --paper at low alpha
+  wall: '#8a7a3f', // --gold-dim
+  column: '#5c5128',
+  lamp: '#e8cf7a', // --gold
+  lampGlow: 'rgba(232,207,122,.9)',
+  player: '#e8cf7a', // --gold
+  playerGlow: 'rgba(232,207,122,.85)',
+  cone: 'rgba(232,207,122,.16)',
+  exit: '#9fd0c0', // --mint
+  exitGlow: 'rgba(159,208,192,.9)',
+  rim: 'rgba(8,7,4,.7)',
+  tick: 'rgba(244,233,200,.65)',
+}
+
+// Canvas animation (the exit pulse) honours the same reduced-motion signal the
+// CSS uses; checked once — a live change just needs a reload.
+const REDUCED_MOTION =
+  typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
 
 export class Minimap {
   constructor(canvas) {
@@ -53,7 +80,7 @@ export class Minimap {
 
     // Opaque warm-dark base so unexplored area reads as solid fog (and the lit
     // 3D scene behind the disc doesn't bleed through the translucent wrapper).
-    ctx.fillStyle = 'rgba(11,11,7,.92)'
+    ctx.fillStyle = C.fog
     ctx.fillRect(0, 0, SIZE, SIZE)
 
     // Cell window covering the disc (+1 margin), centred on the player cell.
@@ -65,9 +92,9 @@ export class Minimap {
     const gz0 = pgz - cR
     const gz1 = pgz + cR
 
-    // 1) Revealed floor tiles — explored reads as dim-warm, unknown stays black.
+    // 1) Revealed floor tiles — explored reads as warm cream, unknown stays fog.
     const tile = CELL * SCALE + 1
-    ctx.fillStyle = 'rgba(120,110,60,.06)'
+    ctx.fillStyle = C.seen
     for (let gz = gz0; gz <= gz1; gz++) {
       for (let gx = gx0; gx <= gx1; gx++) {
         if (!store.isRevealed(gx, gz)) continue
@@ -76,8 +103,8 @@ export class Minimap {
     }
 
     // 2) Walls — only the edges of revealed cells, batched into one stroke.
-    ctx.strokeStyle = '#b8a85a'
-    ctx.lineWidth = 1.4
+    ctx.strokeStyle = C.wall
+    ctx.lineWidth = 1.2
     ctx.lineCap = 'round'
     ctx.beginPath()
     for (let gz = gz0; gz <= gz1; gz++) {
@@ -108,7 +135,7 @@ export class Minimap {
     ctx.stroke()
 
     // 3) Columns (revealed cells only).
-    ctx.fillStyle = '#6e6230'
+    ctx.fillStyle = C.column
     const csz = Math.max(2, COL_HALF * 2 * SCALE)
     for (let gz = gz0; gz <= gz1; gz++) {
       for (let gx = gx0; gx <= gx1; gx++) {
@@ -140,8 +167,8 @@ export class Minimap {
     const c0z = Math.floor(gz0 / CHUNK)
     const c1z = Math.floor(gz1 / CHUNK)
     ctx.save()
-    ctx.fillStyle = '#f8f1a8'
-    ctx.shadowColor = 'rgba(248,241,168,.9)'
+    ctx.fillStyle = C.lamp
+    ctx.shadowColor = C.lampGlow
     ctx.shadowBlur = 4
     for (let cz = c0z; cz <= c1z; cz++) {
       for (let cx = c0x; cx <= c1x; cx++) {
@@ -169,15 +196,19 @@ export class Minimap {
     const wz = exit.cz * CHUNK * CELL + (exit.lz + 0.5) * CELL
     const x = this._sx(wx, px)
     const y = this._sy(wz, pz)
+    // Mint diamond with a slow breathing pulse (static under reduced motion).
+    const t = REDUCED_MOTION ? 1 : 0.72 + 0.28 * Math.sin(performance.now() / 320)
+    const r = 4 + t * 1.5
     ctx.save()
-    ctx.fillStyle = '#7fffa0'
-    ctx.shadowColor = 'rgba(127,255,160,.9)'
-    ctx.shadowBlur = 6
+    ctx.globalAlpha = 0.6 + 0.4 * t
+    ctx.fillStyle = C.exit
+    ctx.shadowColor = C.exitGlow
+    ctx.shadowBlur = 4 + 4 * t
     ctx.beginPath()
-    ctx.moveTo(x, y - 5)
-    ctx.lineTo(x + 5, y)
-    ctx.lineTo(x, y + 5)
-    ctx.lineTo(x - 5, y)
+    ctx.moveTo(x, y - r)
+    ctx.lineTo(x + r, y)
+    ctx.lineTo(x, y + r)
+    ctx.lineTo(x - r, y)
     ctx.closePath()
     ctx.fill()
     ctx.restore()
@@ -189,16 +220,16 @@ export class Minimap {
     const ang = Math.atan2(-Math.cos(yaw), -Math.sin(yaw)) // matches _sx/_sy basis
     const half = (FOV * Math.PI) / 180 / 2
     const len = 16
-    ctx.fillStyle = 'rgba(248,241,168,.18)'
+    ctx.fillStyle = C.cone
     ctx.beginPath()
     ctx.moveTo(c, c)
     ctx.arc(c, c, len, ang - half, ang + half)
     ctx.closePath()
     ctx.fill()
     ctx.save()
-    ctx.shadowColor = 'rgba(248,241,168,.85)'
+    ctx.shadowColor = C.playerGlow
     ctx.shadowBlur = 6
-    ctx.fillStyle = '#f8f1a8'
+    ctx.fillStyle = C.player
     ctx.beginPath()
     ctx.arc(c, c, 3, 0, Math.PI * 2)
     ctx.fill()
@@ -211,16 +242,16 @@ export class Minimap {
     // Soft scope falloff toward the rim.
     const g = ctx.createRadialGradient(c, c, SIZE * 0.28, c, c, c)
     g.addColorStop(0, 'rgba(0,0,0,0)')
-    g.addColorStop(1, 'rgba(8,8,5,.7)')
+    g.addColorStop(1, C.rim)
     ctx.fillStyle = g
     ctx.fillRect(0, 0, SIZE, SIZE)
     // North tick.
-    ctx.fillStyle = 'rgba(233,225,163,.7)'
+    ctx.fillStyle = C.tick
     ctx.font = '9px ui-monospace, monospace'
     ctx.textAlign = 'center'
     ctx.textBaseline = 'top'
     ctx.fillText('N', c, 5)
-    ctx.strokeStyle = 'rgba(233,225,163,.5)'
+    ctx.strokeStyle = 'rgba(244,233,200,.45)'
     ctx.lineWidth = 1
     ctx.beginPath()
     ctx.moveTo(c, 14)

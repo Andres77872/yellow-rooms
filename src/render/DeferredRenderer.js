@@ -25,6 +25,8 @@ import {
   AMBIENT_GROUND,
   LAMP_WRAP,
   RIM_STRENGTH,
+  RIM_COLOR,
+  ENTITY_RIM,
   FLASH_COLOR,
   FLASH_RANGE,
   FLASH_INTENSITY,
@@ -174,7 +176,10 @@ export class DeferredRenderer {
     this.aoQuad = new FullScreenQuad(fsMaterial(AO_FRAG, this.aoUniforms))
     this.aoBlurUniforms = {
       tAO: { value: this.aoRT.texture },
+      tDepth: { value: this.depthTex },
+      uProjInverse: { value: new THREE.Matrix4() },
       uTexel: { value: new THREE.Vector2(1 / aw, 1 / ah) },
+      uDepthSigma: { value: 0.5 },
     }
     this.aoBlurQuad = new FullScreenQuad(fsMaterial(AO_BLUR_FRAG, this.aoBlurUniforms))
   }
@@ -232,6 +237,8 @@ export class DeferredRenderer {
       uAmbGround: { value: linVec(AMBIENT_GROUND) },
       uLampWrap: { value: LAMP_WRAP },
       uRim: { value: RIM_STRENGTH },
+      uRimColor: { value: linVec(RIM_COLOR) },
+      uEntityRim: { value: linVec(ENTITY_RIM) },
       uFlashOn: { value: 0 },
       uFlashColor: { value: linVec(FLASH_COLOR) },
       uFlashRange: { value: FLASH_RANGE },
@@ -262,6 +269,9 @@ export class DeferredRenderer {
       uDensity: { value: VOL_DENSITY },
       uMaxDist: { value: VOL_MAXDIST },
       uPhaseG: { value: VOL_PHASE_G },
+      // Shared with the lit pass so the shafts sink into the same haze (and
+      // track live LightTool fog edits).
+      uFogDensity: this.lightUniforms.uFogDensity,
       // Share the flashlight value-objects with the lighting pass so the cone
       // stays in sync (incl. LightTool edits + the per-frame on/off toggle).
       uFlashOn: this.lightUniforms.uFlashOn,
@@ -310,10 +320,14 @@ export class DeferredRenderer {
     this.outlineRT = new THREE.WebGLRenderTarget(dw, dh, { type: THREE.HalfFloatType })
     this.outlineUniforms = {
       tDiffuse: { value: this.sceneRT.texture },
+      tColor: { value: this.gColor },
       tNormal: { value: this.gNormal },
       tDepth: { value: this.depthTex },
       uProjInverse: { value: new THREE.Matrix4() },
       uDepthScale: { value: 1 / FAR },
+      // Shared value-object with the lighting pass so the ink's fog fade tracks
+      // live fog-density edits (LightTool) exactly like the surfaces do.
+      uFogDensity: this.lightUniforms.uFogDensity,
       uTexel: { value: new THREE.Vector2(1 / dw, 1 / dh) },
       uThickness: { value: OUTLINE_THICKNESS },
       uDepthThresh: { value: OUTLINE_DEPTH_THRESH },
@@ -448,6 +462,7 @@ export class DeferredRenderer {
     au.uProjInverse.value.copy(this._projInv)
     r.setRenderTarget(this.aoRT)
     this.aoQuad.render(r)
+    this.aoBlurUniforms.uProjInverse.value.copy(this._projInv)
     r.setRenderTarget(this.aoBlurRT)
     this.aoBlurQuad.render(r)
   }

@@ -13,6 +13,7 @@ import {
   PURSUER_STUCK_REPATH,
   PURSUER_STUCK_RELOCATE,
   PURSUER_PATH_LEASH,
+  ENTITY_VANISH_DIST,
 } from '../world/constants.js'
 import { moveAndCollide, hasLineOfSight } from '../player/collision.js'
 import { sightGate, findHiddenSpot, EYE_Y } from './sense.js'
@@ -170,8 +171,15 @@ export class Pursuer {
     let dz = player.z - this.pos.z
     let dist = Math.hypot(dx, dz)
 
+    // Is the player actually watching it (frustum + LOS) inside the fog-opaque
+    // range? Relocates must be deferred then: with the thinned fog + persistent
+    // entity ink, a watched departure at 100u+ is a visible mid-screen teleport.
+    // Deferring costs nothing — the pursuer never gains on a moving player.
+    const observed = sightGate(
+      this.cm, camera, this.pos.x, this.pos.z, player.x, player.z, ENTITY_VANISH_DIST)
+
     // --- Leash: relocate if it has fallen too far behind. ---
-    if (shouldRelocate(dist, this.leash, this._relocT) && this._relocate(camera, player)) {
+    if (!observed && shouldRelocate(dist, this.leash, this._relocT) && this._relocate(camera, player)) {
       this._relocT = this.relocateCooldown
       this._pathLen = 0
       this._stuckT = 0
@@ -213,9 +221,11 @@ export class Pursuer {
     }
 
     // --- Stuck detector: never teleport-on-stuck — repath, then relocate. ---
+    // (Relocate deferred while observed, same as the leash: standing briefly
+    // beats visibly teleporting.)
     const moved = Math.hypot(this.pos.x - bx, this.pos.z - bz)
     this._stuckT = moved < step * 0.1 ? this._stuckT + dt : 0
-    if (this._stuckT > PURSUER_STUCK_RELOCATE && this._relocT <= 0) {
+    if (this._stuckT > PURSUER_STUCK_RELOCATE && this._relocT <= 0 && !observed) {
       if (this._relocate(camera, player)) {
         this._relocT = this.relocateCooldown
         this._stuckT = 0
