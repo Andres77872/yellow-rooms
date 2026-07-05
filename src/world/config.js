@@ -47,6 +47,7 @@ export const DEFAULT_WORLD_CONFIG = {
     doorPhaseSalt: 0x33a7, // fallback phase salt for older configs
     officeMinDoors: 2, // guarantee at least this many doors on an office seam
     mouthWidth: [3, 5], // office<->open: contiguous transition-mouth width (cells)
+    thresholdDepth: 2, // cells opened behind seam doors/mouths so transitions read as rooms, not slots
     mouthSalt: 0x5e2d,
     stubChance: 0.3, // warehouse<->warehouse: chance of a short wall stub landmark
     stubLen: [1, 2], // stub length (cells)
@@ -61,6 +62,10 @@ export const DEFAULT_WORLD_CONFIG = {
     // Global corridor guide lines. Office doorways and post-BSP corridor
     // carving both read this field, so routes continue across chunk borders.
     corridors: { spacing: 5, phaseSalt: 0x33a7, mouthSnap: 2 },
+    // Small deterministic lobbies at some guide intersections. These are the
+    // "wrong but familiar" empty pockets that make Level-0 style rooms feel
+    // deliberately liminal instead of like raw maze output.
+    junctions: { chance: 0.48, radius: 1, salt: 0x4b1d },
   },
   pillars: { spacing: 2, phase: 0 },
   warehouse: {

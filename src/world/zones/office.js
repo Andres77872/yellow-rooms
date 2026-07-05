@@ -1,5 +1,13 @@
 import { CHUNK, ZONE_OFFICE } from '../constants.js'
-import { fillInterior, bsp, clearInterior, carveBorderThresholds, carveOfficeCorridors } from './ZoneGenerator.js'
+import {
+  fillInterior,
+  bsp,
+  clearInterior,
+  carveBorderThresholds,
+  carveOfficeCorridors,
+  carveOfficeJunctionPockets,
+  pickOfficeDoorCandidate,
+} from './ZoneGenerator.js'
 
 export const id = ZONE_OFFICE
 
@@ -68,22 +76,23 @@ export function generate(data, ctx) {
     const cands = edges.get(key)
     if (find(a) !== find(b)) {
       parent[find(a)] = find(b)
-      carve(rng.pick(cands)) // tree doorway
+      carve(pickOfficeDoorCandidate(rng, cands, ctx)) // tree doorway
     } else {
       nonTree.push(cands)
     }
   }
   // Braid: extra doorways through some non-tree shared walls -> loops.
   for (const cands of nonTree) {
-    if (rng.chance(cfg.braid)) carve(rng.pick(cands))
+    if (rng.chance(cfg.braid)) carve(pickOfficeDoorCandidate(rng, cands, ctx))
   }
 
   // Carve the global corridor skeleton after BSP room doors. This keeps the
   // local room variation while ensuring the main routes continue across chunks.
   carveOfficeCorridors(data, ctx.seed, ctx.cx, ctx.cz, config)
+  carveOfficeJunctionPockets(data, ctx.seed, ctx.cx, ctx.cz, config)
 
   // Clean threshold behind every border opening so doorways/mouths lead into the
   // rooms (and wide transition mouths read as one lobby), not into a wall corner.
   // Monotone (opens edges only) -> the single-component invariant (I1) holds.
-  carveBorderThresholds(data, borders)
+  carveBorderThresholds(data, borders, config)
 }

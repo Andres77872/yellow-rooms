@@ -27,14 +27,15 @@ function digest(d) {
   return (h >>> 0).toString(16).padStart(8, '0')
 }
 
-// Re-pinned for WORLD_GEN_VERSION 5 (per-zone lamp-grid phase + rebalanced
-// zoneBands). Coords chosen so the pin covers all three zones at seed 12345:
+// Re-pinned for WORLD_GEN_VERSION 6 (guide-aware office doors, deeper seam
+// thresholds, and deterministic guide-intersection pockets). Coords chosen so
+// the pin covers all three zones at seed 12345:
 // (0,0) and (3,-2) are pillars, (2,0) is warehouse, (12,12) is office.
 const GOLDEN = {
-  '0,0': '68486ff8',
-  '3,-2': '4bf54f1e',
+  '0,0': 'bc3cc15d',
+  '3,-2': 'db78479c',
   '2,0': 'b09716ff',
-  '12,12': '6af233e0',
+  '12,12': 'f7bf939c',
 }
 
 const SEEDS = [1, 42, 0xbeef, 1234567, 0x5a5a5a]

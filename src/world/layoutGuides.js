@@ -36,6 +36,12 @@ export function officeGuidePositions(gBase, seed, config, axis, interiorOnly = f
   return out
 }
 
+export function officeGuideDistanceLocal(gBase, local, seed, config, axis) {
+  const cfg = officeCfg(config)
+  const d = fmod(gBase + local - officeGuidePhase(seed, config, axis), cfg.spacing)
+  return Math.min(d, cfg.spacing - d)
+}
+
 export function nearestOfficeGuideLocal(gBase, local, seed, config, axis) {
   const cfg = officeCfg(config)
   let best = local

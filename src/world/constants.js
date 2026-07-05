@@ -229,7 +229,7 @@ export const OUTLINE_FADE_FAR = 0.95
 // --- Thin-wall model (refactor) ---------------------------------------
 // World-gen version: bump whenever the algorithm changes the bytes a seed
 // produces. Guards the golden determinism test.
-export const WORLD_GEN_VERSION = 5
+export const WORLD_GEN_VERSION = 6
 
 // Interior zones, selected by the low-frequency region field. The registry in
 // zones/index.js maps these ids to generator modules.

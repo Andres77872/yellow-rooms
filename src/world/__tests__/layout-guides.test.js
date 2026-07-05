@@ -5,10 +5,17 @@ import { CHUNK, ZONE_OFFICE, ZONE_PILLARS, ZONE_WAREHOUSE, chunkKey } from '../c
 import { ChunkData } from '../ChunkData.js'
 import { RNG } from '../core/rng.js'
 import {
+  officeGuideDistanceLocal,
   isOfficeGuideCoord,
   officeGuidePositions,
   warehouseWallH,
 } from '../layoutGuides.js'
+import {
+  fillInterior,
+  carveOfficeCorridors,
+  carveOfficeJunctionPockets,
+  pickOfficeDoorCandidate,
+} from '../zones/ZoneGenerator.js'
 import * as pillars from '../zones/pillars.js'
 
 function forcedZone(zone) {
@@ -84,6 +91,50 @@ describe('global office guides', () => {
       }
     }
   })
+
+  it('scores local guide distance as a periodic global field', () => {
+    for (let local = 1; local < CHUNK - 1; local++) {
+      const isGuide = isOfficeGuideCoord(local, seed, cfg, 'x')
+      expect(officeGuideDistanceLocal(0, local, seed, cfg, 'x') === 0).toBe(isGuide)
+    }
+  })
+
+  it('biases room door candidates toward global guide lines', () => {
+    const guides = officeGuidePositions(0, seed, cfg, 'z', true)
+    const guide = guides.find((p) => p >= 2 && p <= CHUNK - 3)
+    let offGuide = 1
+    for (let p = 1; p < CHUNK - 1; p++) {
+      if (
+        officeGuideDistanceLocal(0, p, seed, cfg, 'z') >
+        officeGuideDistanceLocal(0, offGuide, seed, cfg, 'z')
+      ) {
+        offGuide = p
+      }
+    }
+    const picked = pickOfficeDoorCandidate(
+      { next: () => 0.99 },
+      [{ v: 6, z: offGuide }, { v: 6, z: guide }],
+      { seed, cx: 0, cz: 0, config: cfg }
+    )
+    expect(picked.z).toBe(guide)
+  })
+
+  it('opens deterministic liminal pockets at guide intersections', () => {
+    const localCfg = structuredClone(cfg)
+    localCfg.office.junctions.chance = 1
+    const data = new ChunkData(0, 0, ZONE_OFFICE)
+    fillInterior(data)
+    carveOfficeCorridors(data, seed, 0, 0, localCfg)
+    const x = officeGuidePositions(0, seed, localCfg, 'x', true)
+      .find((p) => p >= 2 && p <= CHUNK - 3)
+    const z = officeGuidePositions(0, seed, localCfg, 'z', true)
+      .find((p) => p >= 2 && p <= CHUNK - 3)
+    expect(data.vAt(x - 1, z - 1)).toBe(1)
+    expect(data.hAt(x - 1, z - 1)).toBe(1)
+    carveOfficeJunctionPockets(data, seed, 0, 0, localCfg)
+    expect(data.vAt(x - 1, z - 1)).toBe(0)
+    expect(data.hAt(x - 1, z - 1)).toBe(0)
+  })
 })
 
 describe('transition approach clearing', () => {
@@ -107,8 +158,9 @@ describe('transition approach clearing', () => {
     for (const z of [2, 3, 4]) {
       expect(data.colAt(0, z)).toBe(0)
       expect(data.colAt(1, z)).toBe(0)
+      expect(data.colAt(2, z)).toBe(0)
     }
-    expect(data.colAt(2, 2)).toBe(1)
+    expect(data.colAt(4, 2)).toBe(1)
   })
 })
 
