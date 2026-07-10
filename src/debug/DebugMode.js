@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { LIGHT_INTENSITY } from '../world/constants.js'
 import { Phase } from '../core/GameState.js'
 import { hasLineOfSight } from '../player/collision.js'
 import { WorldMapTool } from './WorldMapTool.js'
@@ -71,7 +72,7 @@ export class DebugMode {
     // Light room.
     this.lightRoom = null
     this.lightRoomActive = false
-    this.lightRoomCfg = { count: 4, spacing: 5, intensity: 1.7, animate: false }
+    this.lightRoomCfg = { count: 4, spacing: 5, intensity: LIGHT_INTENSITY, animate: false }
 
     this._savedScene = null
     this._savedCam = null

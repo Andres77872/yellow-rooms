@@ -1,4 +1,4 @@
-import { IGN, VIEW_RECON, glslFloat } from './common.js'
+import { IGN, LAMP_ATT, VIEW_RECON, glslFloat } from './common.js'
 import { LIGHT_MAX, SHADOW_MAX, SHADOW_BIAS, SHADOW_MAX_DARK } from '../../world/constants.js'
 import { QUALITY } from '../../core/device.js'
 
@@ -33,6 +33,7 @@ export const SHADOW_FRAG = /* glsl */ `
   uniform float uLampWrap;
 
   ${IGN}
+  ${LAMP_ATT}
   ${VIEW_RECON}
   float band(float x){ return texture(tRamp, vec2(clamp(x, 0.0, 1.0), 0.5)).r; }
   float wrapNL(float ndl){ return clamp((ndl + uLampWrap) / (1.0 + uLampWrap), 0.0, 1.0); }
@@ -80,8 +81,7 @@ export const SHADOW_FRAG = /* glsl */ `
       float d = length(toL);
       if (d > uLampRange) continue;
       float ndl = wrapNL(dot(N, toL / max(d, 1e-4)));
-      float x = clamp(1.0 - d / uLampRange, 0.0, 1.0);
-      float contrib = band(ndl) * (x * x);
+      float contrib = band(ndl) * lampAtt(d, uLampRange);
       float vis = 1.0;
       if (contrib > 0.08 && shadowed < SHADOW_MAX) { vis = march(P, Lv, jitter); shadowed++; }
       wsum += contrib;

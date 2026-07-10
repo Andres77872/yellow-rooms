@@ -48,6 +48,20 @@ export const HASH = /* glsl */ `
   float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
 `
 
+// Windowed lamp attenuation shared by the lighting, shadow and volumetric
+// passes (and mirrored on the CPU by ChunkManager.lightAt for the AI). CUBIC,
+// not quadratic: on the 12u lamp grid the quadratic window overlapped so many
+// lamps that the summed field went flat — the cube makes each fixture cast a
+// distinct pool that decays before the next one, which is what lets the light
+// read as light instead of fog. Change all consumers together or the shadow
+// mask / AI light sense drift off the visible pools.
+export const LAMP_ATT = /* glsl */ `
+  float lampAtt(float d, float range){
+    float x = clamp(1.0 - d / range, 0.0, 1.0);
+    return x * x * x;
+  }
+`
+
 // View-space position / Z from the depth buffer (perspective unproject). Used by
 // SSAO, the lighting shadow march and the volumetric occlusion taps.
 export const VIEW_RECON = /* glsl */ `

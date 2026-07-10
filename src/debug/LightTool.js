@@ -158,6 +158,7 @@ export class LightTool {
     root.appendChild(gr.el)
     const G = d.grade
     this._f(gr, 'exposure', G.exposure, 0.2, 2, 0.01)
+    this._f(gr, 'saturation', G.sat, 0, 2, 0.01)
     this._f(gr, 'levels', G.levels, 2, 32, 1, 0)
     this._fVec(gr, 'tint R', G.tint.value, 'x', 0, 2, 0.01)
     this._fVec(gr, 'tint G', G.tint.value, 'y', 0, 2, 0.01)

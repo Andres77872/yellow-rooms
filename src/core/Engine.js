@@ -14,6 +14,7 @@ import {
   STARE_SANITY_DRAIN,
   STARE_RECOVER,
   STALKER_AMBIENT,
+  PANEL_GLOW,
 } from '../world/constants.js'
 import { createGBufferMaterials, disposeGBufferMaterials } from '../render/gbufferMaterials.js'
 import { createGeometries, disposeGeometries } from '../render/geometries.js'
@@ -411,7 +412,10 @@ export class Engine {
       this._dipActive -= dt
       f *= 0.4
     }
-    this.materials.panel.uniforms.uIntensity.value = f
+    // PANEL_GLOW pushes the tube emissive into HDR (>1) so the tone map rolls
+    // the core toward white and the selective bloom halos it — the fixture
+    // reads as a light SOURCE instead of blending into the lit ceiling.
+    this.materials.panel.uniforms.uIntensity.value = f * PANEL_GLOW
     // Couple the CAST light to the hum so floors/walls actually dip with the tubes
     // (the signature backrooms flicker) — previously only the tube emissive moved.
     // Keep a floor so a dip darkens the room without snapping to black; the

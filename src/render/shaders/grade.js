@@ -8,7 +8,7 @@ export const GRADE_FRAG = /* glsl */ `
   in vec2 vUv;
   out vec4 outColor;
   uniform sampler2D tDiffuse;
-  uniform float time, levels, vignette, grain, aberration, dead, exposure;
+  uniform float time, levels, vignette, grain, aberration, dead, exposure, sat;
   uniform vec3 tint;
   ${COLOR_FNS}
   ${IGN}
@@ -43,6 +43,11 @@ export const GRADE_FRAG = /* glsl */ `
     // Tone map the linear HDR scene before the look-tint / posterize.
     col = toneMap(col * exposure);
     col *= tint;
+    // Post-tonemap saturation push (anime palette pop). After the tone map so
+    // it can't fight the hue-preserving rolloff; clamped at 0 so deep shadows
+    // can't go negative and NaN the posterize below.
+    float luma = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    col = max(mix(vec3(luma), col, sat), 0.0);
     float v = max(max(col.r, col.g), col.b);
     if (v > 1e-4) {
       float vg = pow(v, 0.4545);

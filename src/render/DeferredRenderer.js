@@ -49,6 +49,7 @@ import {
   BLOOM_INTENSITY,
   GRADE_LEVELS,
   GRADE_TINT,
+  GRADE_SAT,
   CEL_BANDS,
   CEL_FLOOR,
   OUTLINE_INK,
@@ -346,6 +347,7 @@ export class DeferredRenderer {
       time: { value: 0 },
       levels: { value: GRADE_LEVELS },
       exposure: { value: 1 }, // pre-tonemap exposure
+      sat: { value: GRADE_SAT }, // post-tonemap saturation (anime pop)
       tint: { value: new THREE.Vector3(GRADE_TINT[0], GRADE_TINT[1], GRADE_TINT[2]) },
       vignette: { value: 0.18 },
       grain: { value: 0.025 },

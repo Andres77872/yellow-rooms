@@ -1,4 +1,4 @@
-import { IGN, glslFloat } from './common.js'
+import { IGN, LAMP_ATT, glslFloat } from './common.js'
 import {
   LIGHT_MAX,
   CEL_BANDS,
@@ -70,6 +70,7 @@ export const LIGHTING_FRAG = /* glsl */ `
   // when uLampWrap == 0.
   float wrapNL(float ndl){ return clamp((ndl + uLampWrap) / (1.0 + uLampWrap), 0.0, 1.0); }
   ${IGN}
+  ${LAMP_ATT}
 
   void main(){
     float depth = texture(tDepth, vUv).x;
@@ -121,10 +122,9 @@ export const LIGHTING_FRAG = /* glsl */ `
       float d = length(toL);
       if (d > uLampRange) continue;
       float ndl = wrapNL(dot(N, toL / max(d, 1e-4)));
-      float x = clamp(1.0 - d / uLampRange, 0.0, 1.0);
       float setFade = 1.0 - smoothstep(
         ${glslFloat(LAMP_QUERY_R - LAMP_FADE_BAND)}, ${glslFloat(LAMP_QUERY_R)}, length(Lv));
-      lamps += band(ndl + celDither) * (x * x) * setFade;
+      lamps += band(ndl + celDither) * lampAtt(d, uLampRange) * setFade;
     }
     // Screen-space lamp shadows (half-res, blurred) modulate the whole lamp term.
     // tShadow is the contribution-weighted visibility, so this equals per-lamp

@@ -48,13 +48,18 @@ export const FOG_DENSITY = 0.014
 // vertical sky gradient for the void and for the per-pixel fog target (see
 // SKY_ZENITH_MULT / SKY_NADIR_MULT), so distant rooms melt into a dreamy amber
 // band instead of a flat curtain.
-export const FOG_COLOR = 0x9c7d33
+// DELIBERATELY DARK (a deep amber, not a midtone): fog mixing toward a midtone
+// pulled shadows up AND lamp pools down into the same mustard — the whole
+// frame read as one foggy wash. A dark fog target makes distance RECEDE, so
+// lamp pools and silhouettes keep their contrast and the haze reads as depth,
+// not as glare. (FOG_DENSITY itself is locked by render-coupling.test.js.)
+export const FOG_COLOR = 0x6e5522
 // Void/sky vertical gradient, as brightness multipliers on FOG_COLOR:
 // looking up fades toward a dark warm void, looking down toward a dim floor
 // haze. Keeps unloaded holes from glaring flat amber into dark zones and gives
 // the horizon an anime-background glow.
-export const SKY_ZENITH_MULT = 0.3
-export const SKY_NADIR_MULT = 0.62
+export const SKY_ZENITH_MULT = 0.24
+export const SKY_NADIR_MULT = 0.52
 
 // --- Lighting / panels ---
 export const PANEL_COLOR = 0xffe6a0
@@ -70,8 +75,16 @@ export const PANEL_COLOR = 0xffe6a0
 // (not the old 8-light forward cap). LightField uploads the nearest lamps each
 // frame; the lighting shader loops them with cel-banded attenuation.
 export const LIGHT_MAX = 72 // max lamps shaded per frame (uniform-array cap; loop breaks at the live count)
-export const LIGHT_RANGE = 13 // lamp reach (world units) before windowed to 0
-export const LIGHT_INTENSITY = 1.5 // per-lamp warm contribution (linear, pre-grade); re-anchored from 1.7 after the sRGB decode fix brightened lamp color
+// Lamp reach + falloff shape the POOLS. The lamp grid is 12u; with the old
+// 13u range and quadratic falloff every surface sat inside 3-6 lamp ranges and
+// the summed light saturated into one shapeless wash (the "light so dense it
+// looks like fog" failure). Range 11 + the shared CUBIC window (lampAtt in
+// shaders/common.js, mirrored by ChunkManager.lightAt) makes each fixture cast
+// a distinct pool that dies before the next lamp: light has shape again.
+// Intensity is re-anchored up so the pool CENTERS stay bright — contrast comes
+// from the falloff, not from dimming the world.
+export const LIGHT_RANGE = 11 // lamp reach (world units) before windowed to 0
+export const LIGHT_INTENSITY = 3.0 // per-lamp warm contribution (linear, pre-grade)
 // Lamp candidate radius. Must reach far enough that a lamp's floor pool
 // (LIGHT_RANGE) can only appear/disappear where the fog already dominates:
 // QUERY_R + LIGHT_RANGE = 73u sits past the 50%-fog distance (~59u at density
@@ -93,14 +106,17 @@ export const CEL_FLOOR = 0.08
 // darkening lever for the direct term.
 export const LAMP_AO_MIX = 0.5
 
-// Ambient floor + rim (linear). Keeps lamp-less zones dark-but-warm, never black.
+// Ambient floor + rim (linear). Keeps lamp-less zones readable, never black.
 // SKY lights up-facing surfaces (floors); GROUND lights down-facing (ceilings).
-// Dark-warm hemispheric fill. Re-anchored much darker after the sRGB double-decode
-// fix (which had been crushing these ~12x): keeps lamp-less zones dark-but-warm,
-// never pure black, without washing the scene to flat bright fill.
-export const AMBIENT_SKY = 0x2b2211 // hemi up tint (lights up-facing floors)
-export const AMBIENT_GROUND = 0x221b0e // hemi down tint (lights down-facing ceilings)
-export const RIM_STRENGTH = 0.14 // anime fresnel edge light
+// COOL slate-violet, not warm: the classic anime/cel palette puts warm gold in
+// the light and cool blue-violet in the shadow. With every other term warm
+// (albedo, lamps, fog, grade) a warm ambient collapsed the frame into
+// monochrome olive; the cool fill gives unlit zones their own hue so lamp
+// pools read as *light* against them. GRADE_TINT keeps blue >= 0.9 so this
+// survives the grade.
+export const AMBIENT_SKY = 0x2e3348 // hemi up tint (lights up-facing floors)
+export const AMBIENT_GROUND = 0x262236 // hemi down tint (lights down-facing ceilings)
+export const RIM_STRENGTH = 0.22 // anime fresnel edge light
 export const RIM_POW = 3.0 // fresnel falloff exponent for the rim term
 export const RIM_MIX = 0.5 // rim contribution scale (uRimColor * rim * RIM_MIX)
 // Rim light decoupled from the warm lamp color: a pale COOL edge light is the
@@ -189,28 +205,44 @@ export const AO_SCALE = 0.5 // SSAO at half res
 export const AO_SAMPLES = 16 // hemisphere kernel size
 export const AO_RADIUS = 0.8 // view-space sample radius
 export const AO_BIAS = 0.025
-export const AO_INTENSITY = 1.15 // contrast of the occlusion
+export const AO_INTENSITY = 1.3 // contrast of the occlusion (crisp corner shading reads as drawn shadow shapes)
 export const VOL_SCALE = 0.5 // volumetrics at half res
 export const VOL_STEPS = 32 // raymarch steps (more = smoother shafts)
 export const VOL_LIGHT_MAX = 8 // nearest lamps that in-scatter (caps occlusion cost)
 export const VOL_MAXDIST = 46 // clamp march distance (world units)
-export const VOL_DENSITY = 0.05 // in-scatter coefficient
-export const VOL_PHASE_G = 0.45 // Henyey-Greenstein anisotropy (0 = isotropic; higher = tighter forward beams)
-export const VOL_INTENSITY = 0.7 // composite strength of the shafts
+// Volumetrics are ACCENT god-rays, not an atmosphere pass. The old
+// density/intensity (0.05 / 0.7) with a near-isotropic phase filled the whole
+// frame with a soft amber veil — the single biggest "light looks like fog"
+// contributor. Low density + a strongly forward phase means the shafts only
+// read when looking roughly toward a lamp (a deliberate anime beam), and the
+// air stays clear everywhere else.
+export const VOL_DENSITY = 0.022 // in-scatter coefficient
+export const VOL_PHASE_G = 0.62 // Henyey-Greenstein anisotropy (0 = isotropic; higher = tighter forward beams)
+export const VOL_INTENSITY = 0.4 // composite strength of the shafts
 export const VOL_OCC_NEAR = 0.05 // volumetric visToLight near acceptance (shaft cutoff vs leak)
 export const VOL_OCC_FAR = 4.0 // volumetric visToLight far thickness window
 
 // Emissive bloom (selective by matID; fluorescents + exit glow)
 export const BLOOM_SCALE = 0.5 // bloom buffers at half res
-export const BLOOM_SPREAD = 2.5 // blur step in texels (wider = softer glow)
-export const BLOOM_INTENSITY = 0.8
+export const BLOOM_SPREAD = 3.0 // blur step in texels (wider = softer glow)
+export const BLOOM_INTENSITY = 1.0
+// HDR boost on the lit tubes' emissive (× the flicker level). Pushes the panel
+// core past 1.0 so the tone map rolls it toward white and the selective bloom
+// halos it — fixtures read as SOURCES (the anime fluorescent glow), where at
+// ~0.9 they used to vanish into an equally-bright ceiling.
+export const PANEL_GLOW = 1.7
 
 // Posterize cel bands in the grade (higher = smoother gradients)
 export const GRADE_LEVELS = 8.0
-// Warm look-tint applied in the grade (linear). Blue at 0.78 (was 0.66) keeps
-// the amber mono-yellow mood but lets the cool accents (rim light, mint exit
-// glow, violet sanity tones) survive instead of being crushed to olive.
-export const GRADE_TINT = [1.05, 0.99, 0.78]
+// Warm look-tint applied in the grade (linear). Blue at 0.9 keeps the amber
+// mood but stops crushing the cool half of the palette — the slate-violet
+// ambient, rim light, mint exit glow and violet sanity tones are exactly the
+// anime color contrast the old 0.78 was flattening to olive.
+export const GRADE_TINT = [1.04, 1.0, 0.9]
+// Post-tonemap saturation (1 = neutral). A gentle push toward the clean,
+// saturated anime palette; done AFTER tone mapping so it never fights the
+// hue-preserving rolloff.
+export const GRADE_SAT = 1.18
 
 // Ink outline (Sobel off the G-buffer). Static tunables (LightTool edits live).
 // The ink now also fades with the SAME exp^2 fog transmittance as the surfaces

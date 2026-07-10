@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { CELL, WALL_H, NEAR, FAR, FOV, LIGHT_MAX } from '../world/constants.js'
+import { CELL, WALL_H, NEAR, FAR, FOV, LIGHT_MAX, LIGHT_INTENSITY } from '../world/constants.js'
 
 const ROOM = 7 // cells across (odd -> centered)
 const HALF = (ROOM / 2) | 0
@@ -11,7 +11,7 @@ const HALF = (ROOM / 2) | 0
 export class LightRoom {
   constructor(engine) {
     this.engine = engine
-    this.config = { count: 4, spacing: 5, intensity: 1.7, animate: false }
+    this.config = { count: 4, spacing: 5, intensity: LIGHT_INTENSITY, animate: false }
     this.lampPos = [] // Vector3[] written into deferred.lamps
     this._fixtures = null
     this._sphereGeo = null

@@ -1,4 +1,4 @@
-import { HASH, VIEW_RECON, glslFloat } from './common.js'
+import { HASH, LAMP_ATT, VIEW_RECON, glslFloat } from './common.js'
 import { LIGHT_MAX, VOL_LIGHT_MAX, VOL_OCC_NEAR, VOL_OCC_FAR } from '../../world/constants.js'
 import { QUALITY } from '../../core/device.js'
 
@@ -39,6 +39,7 @@ export const VOL_FRAG = /* glsl */ `
   uniform float uFlashCosOuter;
 
   ${HASH}
+  ${LAMP_ATT}
   ${VIEW_RECON}
 
   // Henyey-Greenstein phase, normalised so the spherical average is ~1 (keeps the
@@ -94,9 +95,8 @@ export const VOL_FRAG = /* glsl */ `
         vec3 Lv = uLampViewPos[j];
         float dl = distance(S, Lv);
         if (dl < uLampRange){
-          float a = 1.0 - dl / uLampRange;
           float phase = phaseHG(dot(dir, (Lv - S) / max(dl, 1e-4)));
-          acc += a * a * phase * visToLight(S, Lv) * trans;
+          acc += lampAtt(dl, uLampRange) * phase * visToLight(S, Lv) * trans;
         }
       }
       t += step;

@@ -193,10 +193,11 @@ export class ChunkManager {
   }
 
   // Scalar light level (0..1) at a world XZ point, summed from nearby LIT
-  // lamps with the same windowed falloff the lighting shader uses
-  // ((1-d/range)^2). Used by the entity AI to move faster in the dark and
-  // crawl under lamps. Uses a private scratch so it never clobbers the
-  // LightField's candidate buffer.
+  // lamps with the same windowed falloff the lighting shader uses (the cubic
+  // lampAtt window in render/shaders/common.js). Used by the entity AI to
+  // move faster in the dark and crawl under lamps — kept curve-identical so
+  // the AI's light sense tracks the pools the player actually sees. Uses a
+  // private scratch so it never clobbers the LightField's candidate buffer.
   lightAt(wx, wz) {
     const lamps = this.collectLampsNear(wx, wz, (this._litScratch ||= []))
     let acc = STALKER_AMBIENT
@@ -205,7 +206,7 @@ export class ChunkManager {
       const d = Math.hypot(v.x - wx, v.z - wz)
       if (d >= LIGHT_RANGE) continue
       const f = 1 - d / LIGHT_RANGE
-      acc += f * f
+      acc += f * f * f
     }
     return acc < 1 ? acc : 1
   }
