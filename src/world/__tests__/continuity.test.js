@@ -4,12 +4,13 @@ import { DEFAULT_WORLD_CONFIG as CFG } from '../config.js'
 import { chunkKey } from '../constants.js'
 import { auditPatch } from '../audit.js'
 
-// Proves the world reads as a CONTINUATION, not a grid of isolated boxes:
-//   - no shared border is ever fully sealed (no isolated chunk);
+// Proves canonical transition contracts remain safe while internal office
+// chunk lines behave like ordinary cuts through a district plan:
+//   - no open-zone, transition, or district-boundary contract is sealed;
 //   - adjacent OPEN zones merge (near-fully-open seams);
 //   - office<->open seams always have a wide transition MOUTH (smooth handoff);
-//   - office<->office partitions keep corners walled, have >= officeMinDoors, and
-//     their doorways LINE UP across consecutive seams (the lattice continuation).
+//   - office district boundaries have sparse portals;
+//   - internal district seam patterns vary and may be solid room walls.
 // auditPatch is the same validator the debug world map uses.
 
 const X0 = -7
@@ -28,7 +29,7 @@ function patch(seed) {
 describe('chunk continuity (not isolated boxes)', () => {
   const audits = SEEDS.map(patch)
 
-  it('no shared border is ever fully sealed', () => {
+  it('no canonical transition or district-boundary contract is sealed', () => {
     for (const a of audits) {
       expect(a.sealed).toBe(0)
       expect(a.minOpen).toBeGreaterThanOrEqual(1)
@@ -49,18 +50,19 @@ describe('chunk continuity (not isolated boxes)', () => {
     }
   })
 
-  it('office<->office partitions keep corners walled and >= officeMinDoors', () => {
+  it('office district boundaries keep corners walled and have sparse portals', () => {
     for (const a of audits) {
       if (a.office.n === 0) continue
       expect(a.office.cornerWalls).toBe(a.office.n)
-      expect(a.office.minDoors).toBeGreaterThanOrEqual(CFG.border.officeMinDoors)
+      expect(a.office.minDoors).toBeGreaterThanOrEqual(1)
     }
   })
 
-  it('office doorways line up across consecutive seams (continuation)', () => {
+  it('internal office seam slices have varied patterns instead of a periodic lattice', () => {
     for (const a of audits) {
-      if (a.aligned.pairs === 0) continue
-      expect(a.alignment).toBeGreaterThanOrEqual(0.9)
+      if (a.planned.n === 0) continue
+      expect(a.planned.patterns).toBeGreaterThan(1)
+      expect(a.planVariety).toBeGreaterThan(0.08)
     }
   })
 
@@ -69,6 +71,6 @@ describe('chunk continuity (not isolated boxes)', () => {
     expect(sum('open', 'n')).toBeGreaterThan(0)
     expect(sum('mouth', 'n')).toBeGreaterThan(0)
     expect(sum('office', 'n')).toBeGreaterThan(0)
-    expect(sum('aligned', 'pairs')).toBeGreaterThan(0)
+    expect(sum('planned', 'n')).toBeGreaterThan(0)
   })
 })

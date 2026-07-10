@@ -1,14 +1,19 @@
-import { CHUNK } from './constants.js'
+import { CHUNK, ZONE_OFFICE } from './constants.js'
 import { ChunkData } from './ChunkData.js'
 import { RNG } from './core/rng.js'
-import { selectZone, ZONES } from './zones/index.js'
-import { vBorder, hBorder } from './border.js'
+import { ZONES } from './zones/index.js'
+import { selectZone } from './regions.js'
+import { vBorderContract, hBorderContract } from './border.js'
 import { placeLights } from './lamps.js'
 import { DEFAULT_WORLD_CONFIG } from './config.js'
+import { PASSAGE_OPEN } from './mapTypes.js'
+import { repairChunkTopology } from './topology.js'
+import { normalizeDoorPassages } from './doors.js'
+
+const TOPOLOGY_SALT = 0x74a1
 
 // The layered generation pipeline. Pure function of (seed, cx, cz, config) ->
-// ChunkData. No THREE: runs headless. This is what generate.js will wrap at the
-// stage-C flip; tests target it directly.
+// ChunkData. No THREE: runs headless and is tested directly.
 //
 //   seed     : uint32 root seed (from hashStr of the seed text)
 //   cx, cz   : chunk coordinates
@@ -17,21 +22,21 @@ import { DEFAULT_WORLD_CONFIG } from './config.js'
 export function buildChunk(seed, cx, cz, config = DEFAULT_WORLD_CONFIG, exitCell = null, clearings = null) {
   // L1 — zone select
   const zone = selectZone(cx, cz, seed, config)
-  const data = new ChunkData(cx, cz, zone)
+  const data = new ChunkData(cx, cz, zone, config.version)
 
-  // L2 — border doorways. This chunk OWNS its West line (lx=0) and North line
+  // L2 — border contracts. This chunk OWNS its West line (lx=0) and North line
   // (lz=0); East/South borders are owned by the neighbours (their line 0).
-  const wW = vBorder(cx - 1, cz, seed, config) // between (cx-1,cz)|(cx,cz)
-  const wN = hBorder(cx, cz - 1, seed, config) // between (cx,cz-1)|(cx,cz)
-  for (let z = 0; z < CHUNK; z++) data.setV(0, z, wW[z])
-  for (let x = 0; x < CHUNK; x++) data.setH(x, 0, wN[x])
+  const cW = vBorderContract(cx - 1, cz, seed, config)
+  const cN = hBorderContract(cx, cz - 1, seed, config)
+  for (let z = 0; z < CHUNK; z++) data.setPassageV(0, z, cW.passages[z])
+  for (let x = 0; x < CHUNK; x++) data.setPassageH(x, 0, cN.passages[x])
 
-  // L3 — interior layout (conditioned on the four border doorways).
+  // L3 — interior layout (conditioned on the four border wall contracts).
   const borders = {
-    wW,
-    wN,
-    wE: vBorder(cx, cz, seed, config),
-    wS: hBorder(cx, cz, seed, config),
+    wW: cW.walls,
+    wN: cN.walls,
+    wE: vBorderContract(cx, cz, seed, config).walls,
+    wS: hBorderContract(cx, cz, seed, config).walls,
   }
   const borderZones = {
     w: selectZone(cx - 1, cz, seed, config),
@@ -41,6 +46,17 @@ export function buildChunk(seed, cx, cz, config = DEFAULT_WORLD_CONFIG, exitCell
   }
   const rng = RNG.fromHash(seed, cx, cz)
   ZONES[zone].generate(data, { seed, cx, cz, zone, rng, config, borders, borderZones })
+
+  // L4 — open-zone safety repair. Office topology is validated and scored on
+  // the authoritative district plan; mutating an office after slicing would
+  // reintroduce chunk-local layout decisions.
+  if (zone !== ZONE_OFFICE) {
+    data.repairs = repairChunkTopology(
+      data,
+      RNG.fromHash(seed, cx, cz, TOPOLOGY_SALT),
+      PASSAGE_OPEN
+    )
+  }
 
   // L5 — lights (independent stream, global module grid).
   placeLights(data, { seed, cx, cz, zone, config })
@@ -53,6 +69,10 @@ export function buildChunk(seed, cx, cz, config = DEFAULT_WORLD_CONFIG, exitCell
   if (clearings) {
     for (const c of clearings) data.carveClearing(c.lx, c.lz, c.r ?? config.exit.clearRadius)
   }
+
+  // Anomalies and transition thresholds are monotone topology edits, but they
+  // can turn a framed doorway into an unsupported opening.
+  normalizeDoorPassages(data)
 
   return data
 }

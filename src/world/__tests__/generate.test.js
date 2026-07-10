@@ -1,13 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { buildChunk } from '../pipeline.js'
-import { vBorder, hBorder } from '../border.js'
+import { vBorder, hBorder, vBorderContract, hBorderContract } from '../border.js'
 import { DEFAULT_WORLD_CONFIG as CFG } from '../config.js'
 import { CHUNK, ZONE_OFFICE, ZONE_PILLARS, WORLD_GEN_VERSION } from '../constants.js'
-import { ChunkData } from '../ChunkData.js'
-import { RNG } from '../core/rng.js'
-import { fmix32 } from '../core/hash.js'
-import * as office from '../zones/office.js'
-import { floodReachable } from '../connectivity.js'
+import { fmix32, hash2i } from '../core/hash.js'
+import { CELL_CORRIDOR, CELL_LOBBY, PASSAGE_OPEN, PASSAGE_WIDE } from '../mapTypes.js'
+import { countChunkComponents } from '../topology.js'
 
 // Stable fold over a chunk's full state — pins the generator output so any
 // accidental algorithm drift fails CI (intentional changes bump WORLD_GEN_VERSION
@@ -17,25 +15,44 @@ function digest(d) {
   const fold = (v) => {
     h = fmix32((h ^ v) | 0) | 0
   }
-  for (const arr of [d.wallV, d.wallH, d.cols]) for (const v of arr) fold(v)
+  fold(d.version)
+  fold(d.cx)
+  fold(d.cz)
+  for (const arr of [
+    d.wallV,
+    d.wallH,
+    d.passageV,
+    d.passageH,
+    d.cols,
+    d.cellKind,
+    d.spaceId,
+  ]) {
+    for (const v of arr) fold(v)
+  }
   for (const l of d.lamps) {
     fold(l.lx)
     fold(l.lz)
     fold(l.lit ? 1 : 0)
   }
   fold(d.zone)
+  fold(d.repairs.connectivity)
+  fold(d.repairs.navigation)
+  fold(d.repairs.columns)
+  if (d.exit) {
+    fold(1)
+    fold(d.exit.lx)
+    fold(d.exit.lz)
+  } else fold(0)
   return (h >>> 0).toString(16).padStart(8, '0')
 }
 
-// Re-pinned for WORLD_GEN_VERSION 6 (guide-aware office doors, deeper seam
-// thresholds, and deterministic guide-intersection pockets). Coords chosen so
-// the pin covers all three zones at seed 12345:
-// (0,0) and (3,-2) are pillars, (2,0) is warehouse, (12,12) is office.
+// Re-pinned whenever WORLD_GEN_VERSION changes. Coordinates cover all three
+// zones and the digest includes semantic passages, spaces and repair metadata.
 const GOLDEN = {
-  '0,0': 'bc3cc15d',
-  '3,-2': 'db78479c',
-  '2,0': 'b09716ff',
-  '12,12': 'f7bf939c',
+  '0,0': '8ab00815',
+  '3,-2': '43797941',
+  '12,12': '0be8158c',
+  '-10,10': '0f9ff447',
 }
 
 const SEEDS = [1, 42, 0xbeef, 1234567, 0x5a5a5a]
@@ -58,8 +75,13 @@ describe('determinism', () => {
         expect(a.zone).toBe(b.zone)
         expect(Array.from(a.wallV)).toEqual(Array.from(b.wallV))
         expect(Array.from(a.wallH)).toEqual(Array.from(b.wallH))
+        expect(Array.from(a.passageV)).toEqual(Array.from(b.passageV))
+        expect(Array.from(a.passageH)).toEqual(Array.from(b.passageH))
         expect(Array.from(a.cols)).toEqual(Array.from(b.cols))
+        expect(Array.from(a.cellKind)).toEqual(Array.from(b.cellKind))
+        expect(Array.from(a.spaceId)).toEqual(Array.from(b.spaceId))
         expect(a.lamps).toEqual(b.lamps)
+        expect(a.repairs).toEqual(b.repairs)
       }
     }
   })
@@ -90,16 +112,17 @@ describe('seam consistency', () => {
   })
 })
 
-describe('border doorways', () => {
-  // Core invariant under the zone-aware seam model: no shared border is ever
-  // fully sealed, so the infinite graph stays traversable. (The zone-specific
-  // shape rules — office corners walled, transition mouths, open halls merging,
-  // cross-seam doorway alignment — are validated in continuity.test.js.)
-  it('every shared border keeps at least one opening', () => {
+describe('border contracts', () => {
+  // Planned internal office cuts may be solid room walls; canonical transitions
+  // and district boundaries must always retain a portal.
+  it('every canonical border contract keeps at least one opening', () => {
     for (const s of SEEDS) {
       for (const [cx, cz] of COORDS) {
-        for (const b of [vBorder(cx, cz, s, CFG), hBorder(cx, cz, s, CFG)]) {
-          expect(b.some((v) => v === 0)).toBe(true)
+        for (const c of [
+          vBorderContract(cx, cz, s, CFG),
+          hBorderContract(cx, cz, s, CFG),
+        ]) {
+          if (c.kind !== 'planned') expect(c.walls.some((v) => v === 0)).toBe(true)
         }
       }
     }
@@ -113,7 +136,11 @@ describe('bounds & shape', () => {
         const d = buildChunk(s, cx, cz, CFG)
         expect(d.wallV.length).toBe(CHUNK * CHUNK)
         expect(d.wallH.length).toBe(CHUNK * CHUNK)
+        expect(d.passageV.length).toBe(CHUNK * CHUNK)
+        expect(d.passageH.length).toBe(CHUNK * CHUNK)
         expect(d.cols.length).toBe(CHUNK * CHUNK)
+        expect(d.cellKind.length).toBe(CHUNK * CHUNK)
+        expect(d.spaceId.length).toBe(CHUNK * CHUNK)
         expect(d.exit).toBe(null)
         for (const l of d.lamps) {
           expect(l.lx).toBeGreaterThanOrEqual(0)
@@ -128,7 +155,7 @@ describe('bounds & shape', () => {
 })
 
 describe('lamp regularity', () => {
-  it('lamps sit on the zone-phased global module grid and never inside a column', () => {
+  it('lamps follow room grids or circulation intervals and never occupy columns', () => {
     const step = CFG.lamps.step
     for (const s of SEEDS) {
       for (const [cx, cz] of COORDS) {
@@ -137,8 +164,19 @@ describe('lamp regularity', () => {
         for (const l of d.lamps) {
           const gx = cx * CHUNK + l.lx
           const gz = cz * CHUNK + l.lz
-          expect((((gx - phase) % step) + step) % step).toBe(0)
-          expect((((gz - phase) % step) + step) % step).toBe(0)
+          const kind = d.cellKind[l.lz * CHUNK + l.lx]
+          if (kind === CELL_CORRIDOR || kind === CELL_LOBBY) {
+            const corridorPhase =
+              hash2i((s ^ CFG.lamps.corridorSalt) | 0, 0x43, 0) % CFG.lamps.corridorStep
+            expect(
+              (((gx + gz - corridorPhase) % CFG.lamps.corridorStep) +
+                CFG.lamps.corridorStep) %
+                CFG.lamps.corridorStep
+            ).toBe(0)
+          } else {
+            expect((((gx - phase) % step) + step) % step).toBe(0)
+            expect((((gz - phase) % step) + step) % step).toBe(0)
+          }
           expect(d.colAt(l.lx, l.lz)).toBe(0)
         }
       }
@@ -175,32 +213,77 @@ describe('config purity', () => {
       expect(buildChunk(7, cx, cz, cfg).lamps.length).toBe(0)
     }
   })
+
+  it('propagates the config generation version into ChunkData', () => {
+    const cfg = structuredClone(CFG)
+    cfg.version = 999
+    expect(buildChunk(7, 0, 0, cfg).version).toBe(999)
+  })
 })
 
 describe('office invariant (I1)', () => {
-  it('a single office chunk is one connected component of all cells', () => {
+  it('every compiled office slice is one connected component', () => {
+    const cfg = structuredClone(CFG)
+    cfg.zoneBands = [{ id: ZONE_OFFICE, max: 1.01 }]
     for (const s of SEEDS) {
-      const data = new ChunkData(0, 0, ZONE_OFFICE)
-      office.generate(data, {
-        seed: s,
-        cx: 0,
-        cz: 0,
-        zone: ZONE_OFFICE,
-        rng: RNG.fromHash(s, 0, 0),
-        config: CFG,
-        borders: {},
-      })
-      const canPass = (ax, az, bx, bz) => {
-        if (bx === ax + 1) return data.vAt(ax + 1, az) === 0
-        if (bx === ax - 1) return data.vAt(ax, az) === 0
-        if (bz === az + 1) return data.hAt(ax, az + 1) === 0
-        return data.hAt(ax, az) === 0
+      for (const [cx, cz] of COORDS) {
+        expect(countChunkComponents(buildChunk(s, cx, cz, cfg))).toBe(1)
       }
-      const hub = (CHUNK / 2) | 0
-      const seen = floodReachable(hub, hub, CHUNK, CHUNK, canPass)
-      let reached = 0
-      for (const v of seen) reached += v
-      expect(reached).toBe(CHUNK * CHUNK)
     }
+  })
+})
+
+describe('anomaly determinism', () => {
+  it('pins exit and clearing inputs in regenerated output', () => {
+    const a = buildChunk(77, 0, 0, CFG, { lx: 3, lz: 4 }, [{ lx: 8, lz: 9, r: 2 }])
+    const b = buildChunk(77, 0, 0, CFG, { lx: 3, lz: 4 }, [{ lx: 8, lz: 9, r: 2 }])
+    const ordinary = buildChunk(77, 0, 0, CFG)
+    expect(digest(a)).toBe(digest(b))
+    expect(digest(a)).not.toBe(digest(ordinary))
+    expect(a.exit).toEqual({ lx: 3, lz: 4 })
+  })
+
+  it('marks clearing cuts across semantic rooms as wide thresholds', () => {
+    const ordinary = buildChunk(0, 1, -3, CFG)
+    const data = buildChunk(0, 1, -3, CFG, null, [{ lx: 8, lz: 8, r: 2 }])
+    expect(data.zone).toBe(ZONE_OFFICE)
+    let changedCrossSpaceEdges = 0
+    for (let z = 0; z < CHUNK; z++) {
+      for (let x = 1; x < CHUNK; x++) {
+        const west = data.spaceId[z * CHUNK + x - 1]
+        const east = data.spaceId[z * CHUNK + x]
+        const passage = data.passageVAt(x, z)
+        if (west && east && west !== east) {
+          expect(passage).not.toBe(PASSAGE_OPEN)
+          if (passage !== ordinary.passageVAt(x, z)) {
+            expect(passage).toBe(PASSAGE_WIDE)
+            changedCrossSpaceEdges++
+          }
+        }
+      }
+    }
+    for (let z = 1; z < CHUNK; z++) {
+      for (let x = 0; x < CHUNK; x++) {
+        const north = data.spaceId[(z - 1) * CHUNK + x]
+        const south = data.spaceId[z * CHUNK + x]
+        const passage = data.passageHAt(x, z)
+        if (north && south && north !== south) {
+          expect(passage).not.toBe(PASSAGE_OPEN)
+          if (passage !== ordinary.passageHAt(x, z)) {
+            expect(passage).toBe(PASSAGE_WIDE)
+            changedCrossSpaceEdges++
+          }
+        }
+      }
+    }
+    expect(changedCrossSpaceEdges).toBeGreaterThan(0)
+  })
+
+  it('normalizes a door frame after transition carving removes its supports', () => {
+    const data = buildChunk(89, -10, -6, CFG)
+    expect(data.zone).toBe(ZONE_OFFICE)
+    expect(data.hAt(5, 12)).toBe(0)
+    expect(data.hAt(7, 12)).toBe(0)
+    expect(data.passageHAt(6, 12)).toBe(PASSAGE_WIDE)
   })
 })

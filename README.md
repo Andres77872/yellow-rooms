@@ -1,32 +1,53 @@
-# React + TypeScript + Vite
+# Yellow Rooms
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+A deterministic, infinitely streamed first-person liminal-space game built with
+Three.js and Vite.
 
-Currently, two official plugins are available:
+## Run locally
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
+npm run dev
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Useful verification commands:
+
+```bash
+npm test
+npm run lint
+npm run build
+```
+
+## World generation
+
+The world is generated reproducibly from a text seed. The headless generation
+pipeline produces thin-wall `ChunkData`; rendering, collision, AI, minimap, and
+debug tools all consume that same topology.
+
+World-gen version 7 adds:
+
+- domain-warped macro regions with guaranteed pillars transitions between office
+  and warehouse styles;
+- portal-first 3x3-chunk office districts with routed circulation, room
+  allocation, explicit doors/wide passages, and plan-level validation;
+- semantic cell, space, and passage metadata instead of raster-inferred doors;
+- global structural warehouse bays and deterministic connectivity repair;
+- independently keyed fixture/dead-lamp rolls and circulation-aware lighting;
+- deterministic plan caching with defensive public snapshots.
+
+The design rationale, primary research sources, tradeoffs, and staged follow-ups
+are documented in [docs/map-generation-research.md](docs/map-generation-research.md).
+
+## Main generation modules
+
+- `src/world/regions.js` — coherent style regions and transition buffering
+- `src/world/zones/officePlan.js` — district contracts, circulation, rooms,
+  scoring, validation, and chunk compilation
+- `src/world/border.js` — canonical shared-edge ownership
+- `src/world/topology.js` — wall and column-aware safety repair for open zones
+- `src/world/mapTypes.js` — semantic cell and passage vocabulary
+- `src/world/pipeline.js` — pure public generation pipeline
+
+Generation is covered by deterministic golden tests, macro-plan and seam
+invariants, multi-chunk wall/navigation flood tests, region-distribution tests,
+semantic-door checks, and lamp statistics.

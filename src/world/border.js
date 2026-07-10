@@ -1,12 +1,23 @@
-import { CHUNK, ZONE_WAREHOUSE } from './constants.js'
+import { CHUNK, ZONE_OFFICE, ZONE_WAREHOUSE } from './constants.js'
 import { hash2i } from './core/hash.js'
-import { nearestOfficeGuideLocal, officeGuidePositions } from './layoutGuides.js'
-import { selectZone } from './zones/index.js'
+import {
+  PASSAGE_DOOR,
+  PASSAGE_OPEN,
+  PASSAGE_WALL,
+  PASSAGE_WIDE,
+} from './mapTypes.js'
+import { selectZone } from './regions.js'
+import {
+  chunksShareOfficeDistrict,
+  officeDistrictHContract,
+  officeDistrictVContract,
+  officeInternalHContract,
+  officeInternalVContract,
+} from './zones/officePlan.js'
 
-// Per-edge border reconciliation. A shared border is identified by its LOWER
-// chunk coordinate, so both neighbours compute the IDENTICAL doorway array from
-// the same key — seams are consistent with no communication. Returns a
-// Uint8Array(CHUNK): 1 = wall at that row/col, 0 = doorway/open.
+// Per-edge border reconciliation. A shared border is identified by its lower
+// chunk coordinate, so both neighbours compute an identical wall + passage
+// contract from the same key without communication.
 //
 // The seam style is ZONE-AWARE (see config.border.openness) so the world reads
 // as a continuation rather than a grid of walled boxes:
@@ -14,10 +25,8 @@ import { selectZone } from './zones/index.js'
 //     liminal space; two warehouses may get a short wall STUB as a landmark.
 //   - one OPEN   (office<->open): a walled partition with a wide transition
 //     MOUTH, so rooms open into the hall instead of via a single door.
-//   - both WALLED(office<->office): a partition whose doorways snap to the
-//     GLOBAL office corridor guide field, so openings line up across seam after
-//     seam — corridors of doorways run for miles. Corners always stay walled.
-// Every branch leaves >=1 open cell, so the infinite graph stays connected.
+//   - both WALLED: an exact internal plan slice, a canonical district portal,
+//     or a deterministic fallback partition for custom zone openness settings.
 
 const isOpen = (zone, b) => (b.openness[zone] ?? 0) >= 1
 const doorPos = (salt, kx, kz) => 1 + (hash2i(salt | 0, kx, kz) % (CHUNK - 2)) // [1, CHUNK-2]
@@ -35,7 +44,7 @@ function addStub(out, kx, kz, seed, salt, b) {
 
 // office<->open: wall the seam but carve a wide contiguous mouth (a threshold the
 // rooms spill through), centred in the interior so the corners stay walled.
-function mouth(out, kx, kz, gBase, axis, seed, salt, config) {
+function mouth(out, kx, kz, seed, salt, config) {
   const b = config.border
   out.fill(1)
   const h = hash2i((seed ^ salt ^ b.mouthSalt) | 0, kx, kz)
@@ -44,9 +53,7 @@ function mouth(out, kx, kz, gBase, axis, seed, salt, config) {
   const hi = CHUNK - 2
   const half = w >> 1
   const room = Math.max(1, hi - half - (lo + half) + 1)
-  let center = lo + half + ((h >>> 8) % room)
-  center = nearestOfficeGuideLocal(gBase, center, seed, config, axis)
-  center = Math.max(lo + half, Math.min(hi - half, center))
+  const center = lo + half + ((h >>> 8) % room)
   for (let i = 0; i < w; i++) {
     const p = center - half + i
     if (p >= lo && p <= hi) out[p] = 0
@@ -54,53 +61,61 @@ function mouth(out, kx, kz, gBase, axis, seed, salt, config) {
   return out
 }
 
-// office<->office: partition with doorways on the GLOBAL office guide field.
-// `gBase` is the global index of the seam's first cell (kz*CHUNK for a vertical
-// seam, kx*CHUNK for a horizontal one), and the axis selects guide rows/columns.
-function partition(out, gBase, kx, kz, seed, salt, config, axis) {
-  const b = config.border
+// Fallback for custom configurations that mark a non-office style as walled.
+// Office-to-office seams use the district planner and never reach this path.
+function partition(out, kx, kz, seed, salt) {
   out.fill(1)
-  let n = 0
-  for (const i of officeGuidePositions(gBase, seed, config, axis, true)) {
-    out[i] = 0
-    n++
-  }
-  // Safety net: guarantee >= officeMinDoors even if the lattice landed sparse.
-  for (let g = 0; n < b.officeMinDoors && g < CHUNK; g++) {
-    const p = doorPos((seed ^ salt) | 0, kx + g, kz)
-    if (out[p] === 1) {
-      out[p] = 0
-      n++
-    }
-  }
+  out[doorPos((seed ^ salt) | 0, kx, kz)] = 0
   return out
 }
 
-function reconcile(za, zb, kx, kz, gBase, axis, seed, salt, config) {
+function reconcile(za, zb, kx, kz, seed, salt, config) {
   const b = config.border
   const out = new Uint8Array(CHUNK)
   const openA = isOpen(za, b)
   const openB = isOpen(zb, b)
   if (openA && openB) {
     if (za === ZONE_WAREHOUSE && zb === ZONE_WAREHOUSE) addStub(out, kx, kz, seed, salt, b)
-    return out // open seam (halls merge); maybe one short stub landmark
+    return makeContract('open', out)
   }
-  if (openA || openB) return mouth(out, kx, kz, gBase, axis, seed, salt, config) // transition threshold
-  return partition(out, gBase, kx, kz, seed, salt, config, axis) // office<->office
+  if (openA || openB) return makeContract('mouth', mouth(out, kx, kz, seed, salt, config))
+  return makeContract('office', partition(out, kx, kz, seed, salt))
+}
+
+function makeContract(kind, walls) {
+  const passages = new Uint8Array(CHUNK)
+  const openKind = kind === 'office' ? PASSAGE_DOOR : kind === 'mouth' ? PASSAGE_WIDE : PASSAGE_OPEN
+  for (let i = 0; i < CHUNK; i++) passages[i] = walls[i] ? PASSAGE_WALL : openKind
+  return { kind, walls, passages }
 }
 
 // Vertical border between chunk (kx,kz)[east face] and (kx+1,kz)[west face].
-// Rows run along z, so the lattice aligns on global rows (gBase = kz*CHUNK).
-export function vBorder(kx, kz, seed, config) {
+// Rows run along z; office seams are exact district-plan slices or macro portals.
+export function vBorderContract(kx, kz, seed, config) {
   const za = selectZone(kx, kz, seed, config)
   const zb = selectZone(kx + 1, kz, seed, config)
-  return reconcile(za, zb, kx, kz, kz * CHUNK, 'z', seed, config.border.saltV, config)
+  if (za === ZONE_OFFICE && zb === ZONE_OFFICE) {
+    if (chunksShareOfficeDistrict(kx, kz, kx + 1, kz, config)) {
+      return officeInternalVContract(seed, kx, kz, config)
+    }
+    return officeDistrictVContract(seed, kx, kz, config)
+  }
+  return reconcile(za, zb, kx, kz, seed, config.border.saltV, config)
 }
 
 // Horizontal border between chunk (kx,kz)[south face] and (kx,kz+1)[north face].
-// Columns run along x, so the lattice aligns on global cols (gBase = kx*CHUNK).
-export function hBorder(kx, kz, seed, config) {
+// Columns run along x; office seams are exact district-plan slices or macro portals.
+export function hBorderContract(kx, kz, seed, config) {
   const za = selectZone(kx, kz, seed, config)
   const zb = selectZone(kx, kz + 1, seed, config)
-  return reconcile(za, zb, kx, kz, kx * CHUNK, 'x', seed, config.border.saltH, config)
+  if (za === ZONE_OFFICE && zb === ZONE_OFFICE) {
+    if (chunksShareOfficeDistrict(kx, kz, kx, kz + 1, config)) {
+      return officeInternalHContract(seed, kx, kz, config)
+    }
+    return officeDistrictHContract(seed, kx, kz, config)
+  }
+  return reconcile(za, zb, kx, kz, seed, config.border.saltH, config)
 }
+
+export const vBorder = (kx, kz, seed, config) => vBorderContract(kx, kz, seed, config).walls
+export const hBorder = (kx, kz, seed, config) => hBorderContract(kx, kz, seed, config).walls

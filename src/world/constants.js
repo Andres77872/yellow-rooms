@@ -229,11 +229,11 @@ export const OUTLINE_FADE_FAR = 0.95
 // --- Thin-wall model (refactor) ---------------------------------------
 // World-gen version: bump whenever the algorithm changes the bytes a seed
 // produces. Guards the golden determinism test.
-export const WORLD_GEN_VERSION = 6
+export const WORLD_GEN_VERSION = 7
 
 // Interior zones, selected by the low-frequency region field. The registry in
 // zones/index.js maps these ids to generator modules.
-export const ZONE_OFFICE = 0 // BSP rooms + thin walls + doorways
+export const ZONE_OFFICE = 0 // district-planned circulation, rooms, and explicit doors
 export const ZONE_PILLARS = 1 // open hall, seamless global column lattice
 export const ZONE_WAREHOUSE = 2 // big open space, sparse long wall runs
 
@@ -241,11 +241,11 @@ export const ZONE_WAREHOUSE = 2 // big open space, sparse long wall runs
 export const THICK = 0.16 // visual wall slab thickness (world units)
 export const WALL_COL_HALF = 0.08 // collision half-thickness of a wall line
 export const COL_HALF = 0.4 // freestanding column half-width
-export const HEADER_H = 0.5 // doorway lintel header height (stage F)
+export const HEADER_H = 0.5 // doorway lintel header height
 
-// Decorative door frames + open leaves (mesh-only — derived from the wall gaps
-// in mesh.js, so they touch no generation bytes and need no WORLD_GEN_VERSION
-// bump). A single-cell doorway gets a casing: two jamb posts + a lintel filling
+// Decorative door frames + open leaves (mesh-only — selected by explicit
+// PASSAGE_DOOR metadata in mesh.js). A single-cell doorway gets a casing: two
+// jamb posts + a lintel filling
 // the wall above the DOOR_H (= WALL_H - HEADER_H) opening, standing FRAME_DEPTH
 // proud of the THICK wall. A deterministic DOOR_LEAF_FRACTION of doorways also
 // show an open door leaf laid flat against the wall (it never blocks the

@@ -28,7 +28,7 @@ const ZONE_TINT = {
 }
 
 // World-gen top-down map for the thin-wall model. Draws wall edges, columns,
-// border doorways, lamps (lit/dead), the exit and live entities. LIVE reads
+// border openings, lamps (lit/dead), the exit and live entities. LIVE reads
 // loaded chunks; EXPLORE regenerates any region for an arbitrary seed
 // (generation is a pure function of (seed, cx, cz)). A flood-fill validator
 // (shared with the tests) proves traversability.
@@ -350,9 +350,9 @@ export class WorldMapTool {
           this._lamp(wx, wz, l.lit)
         }
 
-        // Border doorways on the owned West/North lines (gaps in a walled border).
+        // Border openings on the owned West/North lines.
         ctx.fillStyle = '#8fd0c0'
-        this._borderDoors(d, ox, oz)
+        this._borderOpenings(d, ox, oz)
       }
     }
 
@@ -391,32 +391,32 @@ export class WorldMapTool {
     )
     this._stat.conn.set(this.validate ? `${reached.size}/${openCount} open · ${sealed} sealed` : 'off')
     this._stat.cont.set(
-      cont ? `score ${cont.score.toFixed(2)} · ${cont.sealed} sealed · align ${cont.alignment.toFixed(2)}` : 'off'
+      cont ? `score ${cont.score.toFixed(2)} · ${cont.sealed} unsafe · plan variety ${cont.planVariety.toFixed(2)}` : 'off'
     )
     this._stat.seed.set(`${this.source === 1 ? 'explore' : 'live'} 0x${(this.previewSeed >>> 0).toString(16)}`)
     this._stat.cursor.set(this._hover ? `${this._hover.wx.toFixed(1)}, ${this._hover.wz.toFixed(1)}` : '—')
   }
 
-  // Mark doorway gaps on a chunk's owned West (lx=0) and North (lz=0) borders,
+  // Mark openings on a chunk's owned West (lx=0) and North (lz=0) borders,
   // but only when that border is otherwise walled (skip fully-open halls).
-  _borderDoors(d, ox, oz) {
+  _borderOpenings(d, ox, oz) {
     let westWalled = false
     let northWalled = false
     for (let z = 0; z < CHUNK; z++) if (d.vAt(0, z) === 1) westWalled = true
     for (let x = 0; x < CHUNK; x++) if (d.hAt(x, 0) === 1) northWalled = true
     if (westWalled) {
       for (let z = 0; z < CHUNK; z++) {
-        if (d.vAt(0, z) === 0) this._door(ox, oz + (z + 0.5) * CELL)
+        if (d.vAt(0, z) === 0) this._opening(ox, oz + (z + 0.5) * CELL)
       }
     }
     if (northWalled) {
       for (let x = 0; x < CHUNK; x++) {
-        if (d.hAt(x, 0) === 0) this._door(ox + (x + 0.5) * CELL, oz)
+        if (d.hAt(x, 0) === 0) this._opening(ox + (x + 0.5) * CELL, oz)
       }
     }
   }
 
-  _door(wx, wz) {
+  _opening(wx, wz) {
     const s = 3
     this.ctx.fillRect(this._sx(wx) - s / 2, this._sy(wz) - s / 2, s, s)
   }
@@ -430,7 +430,7 @@ export class WorldMapTool {
     const ctx = this.ctx
     ctx.lineWidth = Math.max(2, this.view.scale * 0.4)
     for (const want of [0, 1]) {
-      // walls first, open doors on top so doorways/mouths pop
+      // Draw walls first and openings on top so portals and mouths pop.
       ctx.strokeStyle = want ? 'rgba(120,230,140,.9)' : 'rgba(225,80,70,.8)'
       ctx.beginPath()
       for (let ccz = c0z; ccz <= c1z; ccz++) {

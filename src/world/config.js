@@ -5,26 +5,27 @@ import {
   WORLD_GEN_VERSION,
 } from './constants.js'
 
-// Single tuning surface: every generation knob lives here, so designers edit one
-// file. Generators read values via the `config` passed in ctx — they never
-// import a magic number. Truly structural values (CELL, CHUNK, WALL_H, load
-// radii) stay in constants.js. (This module imports only constants → no cycles.)
+// Primary designer-facing tuning surface. Generators read these values through
+// the `config` passed in ctx; structural constants, deterministic salts, and
+// scoring weights remain beside their implementations.
 export const DEFAULT_WORLD_CONFIG = {
   version: WORLD_GEN_VERSION,
 
-  // Zone selection: low-frequency value-noise field, bucketed into bands. A
-  // larger `scale` => lower frequency => bigger, more coherent regions, so the
-  // player stays in one style longer. Bands are ordered closed->medium->open
-  // (office < pillars < warehouse), so the middle PILLARS band naturally buffers
-  // office<->warehouse transitions: style changes read as a gradient.
-  // Band maxes are EMPIRICAL QUANTILES of the value-noise field at chunk
-  // resolution (the smoothed bilinear noise concentrates mass around 0.5, so
-  // equal-width bands do NOT give equal area). 0.465 / 0.655 are the measured
-  // 45th / 75th percentiles => ~45% office, ~30% pillars, ~25% warehouse.
-  region: { scale: 4.5, salt: 0x5a5a },
+  // Domain-warped macro regions keep each style coherent across several chunks.
+  // Warehouse cells touching a raw office sample become pillars, making the
+  // middle style a guaranteed transition rather than a statistical hope.
+  region: {
+    scale: 11,
+    salt: 0x5a5a,
+    warpAmp: 1.15,
+    octaves: 3,
+    lacunarity: 2,
+    gain: 0.35,
+    bufferTransitions: true,
+  },
   zoneBands: [
-    { id: ZONE_OFFICE, max: 0.465 },
-    { id: ZONE_PILLARS, max: 0.655 },
+    { id: ZONE_OFFICE, max: 0.48 },
+    { id: ZONE_PILLARS, max: 0.62 },
     { id: ZONE_WAREHOUSE, max: 1.01 },
   ],
 
@@ -33,8 +34,8 @@ export const DEFAULT_WORLD_CONFIG = {
   //   both open   -> seam left open (halls merge); warehouse<->warehouse may get
   //                  a short wall STUB landmark.
   //   one open    -> a wide transition MOUTH (rooms open into the hall).
-  //   both walled -> office partition with doorways snapped to a GLOBAL lattice
-  //                  (doorSpacing), so openings line up across seams for miles.
+  //   both walled -> an internal district-plan slice or a sparse canonical
+  //                  portal at a district boundary.
   border: {
     saltV: 0x1357, // vertical-seam stream
     saltH: 0x9bd7, // horizontal-seam stream
@@ -43,9 +44,6 @@ export const DEFAULT_WORLD_CONFIG = {
       [ZONE_PILLARS]: 1, // open (column hall)
       [ZONE_WAREHOUSE]: 1, // open (big liminal space)
     },
-    doorSpacing: 5, // fallback for older configs without office.corridors
-    doorPhaseSalt: 0x33a7, // fallback phase salt for older configs
-    officeMinDoors: 2, // guarantee at least this many doors on an office seam
     mouthWidth: [3, 5], // office<->open: contiguous transition-mouth width (cells)
     thresholdDepth: 2, // cells opened behind seam doors/mouths so transitions read as rooms, not slots
     mouthSalt: 0x5e2d,
@@ -57,19 +55,33 @@ export const DEFAULT_WORLD_CONFIG = {
   // Per-zone interior tunables.
   office: {
     roomMin: 3,
-    roomMax: 7,
-    braid: 0.35,
-    // Global corridor guide lines. Office doorways and post-BSP corridor
-    // carving both read this field, so routes continue across chunk borders.
-    corridors: { spacing: 5, phaseSalt: 0x33a7, mouthSnap: 2 },
-    // Small deterministic lobbies at some guide intersections. These are the
-    // "wrong but familiar" empty pockets that make Level-0 style rooms feel
-    // deliberately liminal instead of like raw maze output.
-    junctions: { chance: 0.48, radius: 1, salt: 0x4b1d },
+    roomMax: 8,
+    minRoomArea: 6,
+    minRoomWidth: 2,
+    maxRoomAspect: 3,
+    targetRoomCompactness: 0.5,
+    braid: 0.2,
+    districtChunks: 3,
+    planCandidates: 4,
+    targetWallFraction: 0.2,
+    // Reserved corridor spines are planned before rooms across the configured
+    // district (3x3 by default). Multiple cheap candidates are scored for useful
+    // coverage and structural wall density.
+    corridors: {
+      hubRadius: 1,
+      maxRoomDepth: 3,
+      maxSeamRatio: 1.25,
+      targetCoverage: 0.16,
+    },
+    portals: {
+      jitter: 3,
+      minSpacing: 5,
+      salt: 0x25d7,
+    },
   },
   pillars: { spacing: 2, phase: 0 },
   warehouse: {
-    colChance: 0.012,
+    columns: { spacing: 6, chance: 0.45, salt: 0x2c91, phaseSalt: 0x19e3 },
     // Sparse straight partitions generated from global edge coordinates. Runs
     // can cross chunk seams without neighbour communication.
     fragments: { salt: 0x8f37, chance: 0.16, lineSpacing: 4, anchorStep: 9, runLen: [3, 7] },
@@ -83,7 +95,11 @@ export const DEFAULT_WORLD_CONFIG = {
   lamps: {
     step: 4,
     salt: 0x6c61,
+    deadSalt: 0x47d3,
     deadChance: 0.18,
+    corridorStep: 4,
+    corridorSalt: 0x2f61,
+    corridorChance: 1,
     phase: {
       [ZONE_OFFICE]: 0,
       [ZONE_PILLARS]: 1,

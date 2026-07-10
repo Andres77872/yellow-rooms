@@ -1,13 +1,16 @@
 import { CHUNK } from './constants.js'
+import { chunksShareOfficeDistrict } from './zones/officePlan.js'
 
 // Continuity / "isolation" audit for the thin-wall generator. THREE-free and
 // pure data, so it is shared by the property tests (continuity.test.js) and the
 // debug world map (WorldMapTool) — one source of truth, like connectivity.js.
 //
 // It inspects SHARED BORDERS (the only place chunks couple) and reports how
-// continuous the world reads: open zones should merge (no near-solid seams),
-// office<->open seams should have a wide transition mouth, office<->office
-// doorways should line up across seams, and NO seam may be fully sealed.
+// continuous the world reads: open zones should merge, office<->open seams
+// should have a wide transition mouth, district boundaries need portals, and
+// internal office seams should vary like ordinary plan cuts. A planned internal
+// seam may be solid; macro-plan connectivity, not per-chunk permeability, is
+// the architectural invariant.
 //
 // Seam storage (thin-wall ownership): the vertical seam between (cx,cz) and
 // (cx+1,cz) is the EAST chunk's west line — east.vAt(0,z). The horizontal seam
@@ -53,11 +56,16 @@ const openKey = (line) => {
 const isOpen = (zone, config) => (config.border.openness[zone] ?? 0) >= 1
 
 // Seam style from the two adjacent zones (mirrors border.js reconcile()).
-export function classifySeam(za, zb, config) {
-  const a = isOpen(za, config)
-  const b = isOpen(zb, config)
-  if (a && b) return 'open'
-  if (a || b) return 'mouth'
+export function classifySeam(za, zb, config, chunkA = null, chunkB = null) {
+  const openA = isOpen(za, config)
+  const openB = isOpen(zb, config)
+  if (openA && openB) return 'open'
+  if (openA || openB) return 'mouth'
+  if (
+    chunkA &&
+    chunkB &&
+    chunksShareOfficeDistrict(chunkA.cx, chunkA.cz, chunkB.cx, chunkB.cz, config)
+  ) return 'planned'
   return 'office'
 }
 
@@ -68,26 +76,30 @@ function blank() {
     minOpen: CHUNK, // fewest open cells on any seam (must be >= 1)
     open: { n: 0, openSum: 0 }, // open<->open: should be near-fully open
     mouth: { n: 0, withMouth: 0 }, // office<->open: should all have a wide mouth
-    office: { n: 0, minDoors: CHUNK, cornerWalls: 0 }, // office<->office partitions
-    aligned: { pairs: 0, matched: 0 }, // adjacent office seams sharing door rows
+    office: { n: 0, minDoors: CHUNK, cornerWalls: 0 }, // office district boundaries
+    planned: { n: 0, solid: 0, keys: new Set() }, // internal district plan slices
   }
 }
 
 function record(s, line, kind, mouthMin) {
   s.seams++
   const oc = openCount(line)
-  if (oc === 0) s.sealed++
-  if (oc < s.minOpen) s.minOpen = oc
+  if (oc === 0 && kind !== 'planned') s.sealed++
+  if (kind !== 'planned' && oc < s.minOpen) s.minOpen = oc
   if (kind === 'open') {
     s.open.n++
     s.open.openSum += openFraction(line)
   } else if (kind === 'mouth') {
     s.mouth.n++
     if (longestOpenRun(line) >= mouthMin) s.mouth.withMouth++
-  } else {
+  } else if (kind === 'office') {
     s.office.n++
     s.office.minDoors = Math.min(s.office.minDoors, oc)
     if (line[0] === 1 && line[CHUNK - 1] === 1) s.office.cornerWalls++
+  } else {
+    s.planned.n++
+    if (oc === 0) s.planned.solid++
+    s.planned.keys.add(openKey(line))
   }
 }
 
@@ -97,52 +109,27 @@ export function auditPatch(dataAt, X0, Z0, NX, NZ, config) {
   const s = blank()
   const mouthMin = config.border.mouthWidth[0]
 
-  // Vertical seams (between cx and cx+1); align-compare consecutive office seams
-  // within a fixed row band (cz) — the global lattice should give identical rows.
+  // Vertical seams (between cx and cx+1).
   for (let cz = Z0; cz < Z0 + NZ; cz++) {
-    let prevKey = null
     for (let cx = X0; cx < X0 + NX - 1; cx++) {
       const a = dataAt(cx, cz)
       const east = dataAt(cx + 1, cz)
-      if (!a || !east) {
-        prevKey = null
-        continue
-      }
+      if (!a || !east) continue
       const line = vSeamLine(east)
-      const kind = classifySeam(a.zone, east.zone, config)
+      const kind = classifySeam(a.zone, east.zone, config, a, east)
       record(s, line, kind, mouthMin)
-      if (kind === 'office') {
-        const key = openKey(line)
-        if (prevKey !== null) {
-          s.aligned.pairs++
-          if (key === prevKey) s.aligned.matched++
-        }
-        prevKey = key
-      } else prevKey = null
     }
   }
 
-  // Horizontal seams (between cz and cz+1); align within a fixed column band (cx).
+  // Horizontal seams (between cz and cz+1).
   for (let cx = X0; cx < X0 + NX; cx++) {
-    let prevKey = null
     for (let cz = Z0; cz < Z0 + NZ - 1; cz++) {
       const a = dataAt(cx, cz)
       const south = dataAt(cx, cz + 1)
-      if (!a || !south) {
-        prevKey = null
-        continue
-      }
+      if (!a || !south) continue
       const line = hSeamLine(south)
-      const kind = classifySeam(a.zone, south.zone, config)
+      const kind = classifySeam(a.zone, south.zone, config, a, south)
       record(s, line, kind, mouthMin)
-      if (kind === 'office') {
-        const key = openKey(line)
-        if (prevKey !== null) {
-          s.aligned.pairs++
-          if (key === prevKey) s.aligned.matched++
-        }
-        prevKey = key
-      } else prevKey = null
     }
   }
 
@@ -151,11 +138,15 @@ export function auditPatch(dataAt, X0, Z0, NX, NZ, config) {
   const r = (num, den) => (den > 0 ? num / den : 1)
   s.openness = r(s.open.openSum, s.open.n)
   s.mouthCoverage = r(s.mouth.withMouth, s.mouth.n)
-  s.alignment = r(s.aligned.matched, s.aligned.pairs)
+  s.portalCoverage = s.office.n === 0 || s.office.minDoors >= 1 ? 1 : 0
+  s.planVariety = r(s.planned.keys.size, s.planned.n)
+  s.planned.patterns = s.planned.keys.size
+  delete s.planned.keys
   s.score =
     (s.sealed === 0 ? 1 : 0) * 0.4 +
     s.openness * 0.2 +
     s.mouthCoverage * 0.2 +
-    s.alignment * 0.2
+    s.portalCoverage * 0.1 +
+    s.planVariety * 0.1
   return s
 }

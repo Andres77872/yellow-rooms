@@ -106,7 +106,7 @@ export function buildChunkMeshes(data, geom, materials, ox, oz) {
     group.add(walls)
   }
 
-  // --- Decorative door frames + open leaves (derived from the wall gaps) ---
+  // --- Decorative door frames + open leaves (from explicit passage metadata) ---
   // Purely visual: a casing (two jambs + a lintel) around every single-cell
   // doorway, plus an open door leaf laid flat against the wall on a deterministic
   // subset. Reuses the unit box (axis-aligned scales, like the walls), so it adds

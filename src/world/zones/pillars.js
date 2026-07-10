@@ -5,8 +5,8 @@ export const id = ZONE_PILLARS
 
 // Open hall with a column lattice phased on GLOBAL coordinates, so columns line
 // up perfectly across chunk seams ("columns for miles"). No interior wall edges
-// at all → the cell graph is the full 4-connected grid (columns block a small
-// AABB but never a cell edge, so connectivity is untouched).
+// at all → the thin-wall graph is the full 4-connected grid. The separate
+// column-aware navigation graph still accounts for their blocking AABBs.
 export function generate(data, ctx) {
   const { cx, cz, zone, config, borders, borderZones } = ctx
   const { spacing, phase } = config.pillars
