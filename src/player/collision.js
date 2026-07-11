@@ -20,7 +20,7 @@ const SKIN = 0.001
 // one wall per axis can overlap and the push-out converges in a couple of passes.
 //
 // Mutates `pos` in place; returns which axes were blocked.
-export function moveAndCollide(cm, pos, dx, dz) {
+export function moveAndCollide(cm, pos, dx, dz, cy = 0) {
   const hit = { x: false, z: false }
   const r = PLAYER_R
   const m = r + WALL_COL_HALF
@@ -35,7 +35,7 @@ export function moveAndCollide(cm, pos, dx, dz) {
       const L0 = Math.floor((oldX + r) / CELL) + 1
       const L1 = Math.floor((pos.x + r) / CELL)
       for (let L = L0; L <= L1; L++) {
-        if (rowHasWallV(cm, L, gz0, gz1)) {
+        if (rowHasWallV(cm, L, gz0, gz1, cy)) {
           pos.x = L * CELL - m - SKIN
           hit.x = true
           break
@@ -45,14 +45,14 @@ export function moveAndCollide(cm, pos, dx, dz) {
       const L0 = Math.ceil((oldX - r) / CELL) - 1
       const L1 = Math.ceil((pos.x - r) / CELL)
       for (let L = L0; L >= L1; L--) {
-        if (rowHasWallV(cm, L, gz0, gz1)) {
+        if (rowHasWallV(cm, L, gz0, gz1, cy)) {
           pos.x = L * CELL + m + SKIN
           hit.x = true
           break
         }
       }
     }
-    resolveColumns(cm, pos, r, true, dx, hit)
+    resolveColumns(cm, pos, r, true, dx, hit, cy)
   }
 
   // --- Z axis ---
@@ -65,7 +65,7 @@ export function moveAndCollide(cm, pos, dx, dz) {
       const L0 = Math.floor((oldZ + r) / CELL) + 1
       const L1 = Math.floor((pos.z + r) / CELL)
       for (let L = L0; L <= L1; L++) {
-        if (colHasWallH(cm, L, gx0, gx1)) {
+        if (colHasWallH(cm, L, gx0, gx1, cy)) {
           pos.z = L * CELL - m - SKIN
           hit.z = true
           break
@@ -75,31 +75,31 @@ export function moveAndCollide(cm, pos, dx, dz) {
       const L0 = Math.ceil((oldZ - r) / CELL) - 1
       const L1 = Math.ceil((pos.z - r) / CELL)
       for (let L = L0; L >= L1; L--) {
-        if (colHasWallH(cm, L, gx0, gx1)) {
+        if (colHasWallH(cm, L, gx0, gx1, cy)) {
           pos.z = L * CELL + m + SKIN
           hit.z = true
           break
         }
       }
     }
-    resolveColumns(cm, pos, r, false, dz, hit)
+    resolveColumns(cm, pos, r, false, dz, hit, cy)
   }
 
-  depenetrate(cm, pos, hit)
+  depenetrate(cm, pos, hit, cy)
   return hit
 }
 
-function rowHasWallV(cm, lineX, gz0, gz1) {
-  for (let gz = gz0; gz <= gz1; gz++) if (cm.wallVAt(lineX, gz)) return true
+function rowHasWallV(cm, lineX, gz0, gz1, cy) {
+  for (let gz = gz0; gz <= gz1; gz++) if (cm.wallVAt(lineX, gz, cy)) return true
   return false
 }
-function colHasWallH(cm, lineZ, gx0, gx1) {
-  for (let gx = gx0; gx <= gx1; gx++) if (cm.wallHAt(gx, lineZ)) return true
+function colHasWallH(cm, lineZ, gx0, gx1, cy) {
+  for (let gx = gx0; gx <= gx1; gx++) if (cm.wallHAt(gx, lineZ, cy)) return true
   return false
 }
 
 // AABB-vs-column resolution along one axis (axisX = true -> push on X).
-function resolveColumns(cm, pos, r, axisX, d, hit) {
+function resolveColumns(cm, pos, r, axisX, d, hit, cy) {
   const reach = r + COL_HALF
   const cgx0 = worldToCell(pos.x - reach)
   const cgx1 = worldToCell(pos.x + reach)
@@ -107,7 +107,7 @@ function resolveColumns(cm, pos, r, axisX, d, hit) {
   const cgz1 = worldToCell(pos.z + reach)
   for (let cz = cgz0; cz <= cgz1; cz++) {
     for (let cx = cgx0; cx <= cgx1; cx++) {
-      if (!cm.columnAt(cx, cz)) continue
+      if (!cm.columnAt(cx, cz, cy)) continue
       const ccx = (cx + 0.5) * CELL
       const ccz = (cz + 0.5) * CELL
       if (Math.abs(pos.x - ccx) >= reach || Math.abs(pos.z - ccz) >= reach) continue
@@ -130,7 +130,7 @@ function resolveColumns(cm, pos, r, axisX, d, hit) {
 // as soon as nothing overlaps beyond SKIN — which is the common case, so this is
 // usually a single cheap scan. Walls are spaced CELL apart and CELL >> 2*reach, so
 // constraints never conflict and it settles in 1-2 iterations.
-function depenetrate(cm, pos, hit) {
+function depenetrate(cm, pos, hit, cy) {
   const r = PLAYER_R
   const m = r + WALL_COL_HALF
   const reach = r + COL_HALF
@@ -146,7 +146,7 @@ function depenetrate(cm, pos, hit) {
       const wx = gx * CELL
       const xpen = m - Math.abs(pos.x - wx)
       if (xpen <= best) continue
-      if (rowHasWallV(cm, gx, gz0, gz1)) {
+      if (rowHasWallV(cm, gx, gz0, gz1, cy)) {
         best = xpen
         axis = 1
         push = pos.x >= wx ? wx + m + SKIN : wx - m - SKIN
@@ -160,7 +160,7 @@ function depenetrate(cm, pos, hit) {
       const wz = gz * CELL
       const zpen = m - Math.abs(pos.z - wz)
       if (zpen <= best) continue
-      if (colHasWallH(cm, gz, gx0, gx1)) {
+      if (colHasWallH(cm, gz, gx0, gx1, cy)) {
         best = zpen
         axis = 2
         push = pos.z >= wz ? wz + m + SKIN : wz - m - SKIN
@@ -170,7 +170,7 @@ function depenetrate(cm, pos, hit) {
     // Freestanding columns (AABB) — eject along the shallower-overlap axis (MTV).
     for (let cz = worldToCell(pos.z - reach); cz <= worldToCell(pos.z + reach); cz++) {
       for (let cx = worldToCell(pos.x - reach); cx <= worldToCell(pos.x + reach); cx++) {
-        if (!cm.columnAt(cx, cz)) continue
+        if (!cm.columnAt(cx, cz, cy)) continue
         const ccx = (cx + 0.5) * CELL
         const ccz = (cz + 0.5) * CELL
         const ox = reach - Math.abs(pos.x - ccx)
@@ -199,7 +199,7 @@ function depenetrate(cm, pos, hit) {
 // Line-of-sight via an Amanatides-Woo grid DDA: step cell to cell and block on
 // the wall LINE crossed at each step. Replaces point-sampling, which would pass
 // straight through zero-width walls. Endpoints' own cells are not tested.
-export function hasLineOfSight(cm, x0, z0, x1, z1) {
+export function hasLineOfSight(cm, x0, z0, x1, z1, cy = 0) {
   let gx = worldToCell(x0)
   let gz = worldToCell(z0)
   const gxe = worldToCell(x1)
@@ -217,11 +217,11 @@ export function hasLineOfSight(cm, x0, z0, x1, z1) {
   let guard = 0
   while ((gx !== gxe || gz !== gze) && guard++ < 4096) {
     if (tMaxX < tMaxZ) {
-      if (cm.wallVAt(sx > 0 ? gx + 1 : gx, gz)) return false
+      if (cm.wallVAt(sx > 0 ? gx + 1 : gx, gz, cy)) return false
       gx += sx
       tMaxX += tDeltaX
     } else {
-      if (cm.wallHAt(gx, sz > 0 ? gz + 1 : gz)) return false
+      if (cm.wallHAt(gx, sz > 0 ? gz + 1 : gz, cy)) return false
       gz += sz
       tMaxZ += tDeltaZ
     }

@@ -17,7 +17,7 @@ const STOP = (line) => line * CELL - PLAYER_R - WALL_COL_HALF - 0.001
 
 describe('collision: walls', () => {
   it('stops the player at a vertical wall and never penetrates it', () => {
-    const data = new ChunkData(0, 0, 0)
+    const data = new ChunkData(0, 0, 0, 0)
     for (let z = 0; z < CHUNK; z++) data.setV(5, z, 1) // wall on line x=5
     const cm = mockCM(data)
     const pos = { x: 5 * CELL - 1, z: 7.5 }
@@ -28,7 +28,7 @@ describe('collision: walls', () => {
   })
 
   it('passes through a doorway gap in the wall', () => {
-    const data = new ChunkData(0, 0, 0)
+    const data = new ChunkData(0, 0, 0, 0)
     for (let z = 0; z < CHUNK; z++) data.setV(5, z, 1)
     data.setV(5, 7, 0) // doorway at row z=7
     const cm = mockCM(data)
@@ -39,7 +39,7 @@ describe('collision: walls', () => {
   })
 
   it('slides along a wall (blocked axis stops, free axis moves)', () => {
-    const data = new ChunkData(0, 0, 0)
+    const data = new ChunkData(0, 0, 0, 0)
     for (let z = 0; z < CHUNK; z++) data.setV(5, z, 1)
     const cm = mockCM(data)
     const pos = { x: 5 * CELL - 1, z: 7.5 }
@@ -49,7 +49,7 @@ describe('collision: walls', () => {
   })
 
   it('blocks on a freestanding column', () => {
-    const data = new ChunkData(0, 0, 0)
+    const data = new ChunkData(0, 0, 0, 0)
     data.setCol(5, 5, 1)
     const cm = mockCM(data)
     const colCenterX = 5.5 * CELL
@@ -64,7 +64,7 @@ describe('collision: walls', () => {
 
 describe('collision: line of sight', () => {
   it('is blocked by a wall between two cells', () => {
-    const data = new ChunkData(0, 0, 0)
+    const data = new ChunkData(0, 0, 0, 0)
     for (let z = 0; z < CHUNK; z++) data.setV(5, z, 1)
     const cm = mockCM(data)
     // From cell x=2 to cell x=8 across the wall at line 5.
@@ -72,7 +72,7 @@ describe('collision: line of sight', () => {
   })
 
   it('is clear through a doorway', () => {
-    const data = new ChunkData(0, 0, 0)
+    const data = new ChunkData(0, 0, 0, 0)
     for (let z = 0; z < CHUNK; z++) data.setV(5, z, 1)
     data.setV(5, 7, 0)
     const cm = mockCM(data)
@@ -80,7 +80,7 @@ describe('collision: line of sight', () => {
   })
 
   it('is clear in fully open space', () => {
-    const cm = mockCM(new ChunkData(0, 0, 0))
+    const cm = mockCM(new ChunkData(0, 0, 0, 0))
     expect(hasLineOfSight(cm, 3, 3, 30, 12)).toBe(true)
   })
 })
@@ -127,7 +127,7 @@ function penetration(cm, x, z) {
 describe('collision: no embedding / tunnelling (depenetration)', () => {
   it('does not embed or pass through when sliding +Z into a vertical wall that begins beside it', () => {
     // Vertical wall on line x=5, present only for rows z>=7 (a wall end at z=7).
-    const data = new ChunkData(0, 0, 0)
+    const data = new ChunkData(0, 0, 0, 0)
     for (let z = 7; z < CHUNK; z++) data.setV(5, z, 1)
     const cm = mockCM(data)
     // Centre 0.05 WEST of the line (legal: row 6 is open), then strafe south into
@@ -142,7 +142,7 @@ describe('collision: no embedding / tunnelling (depenetration)', () => {
 
   it('does not embed or pass through when sliding +X into a horizontal wall that begins beside it', () => {
     // Horizontal wall on line z=5, present only for columns x>=7.
-    const data = new ChunkData(0, 0, 0)
+    const data = new ChunkData(0, 0, 0, 0)
     for (let x = 7; x < CHUNK; x++) data.setH(x, 5, 1)
     const cm = mockCM(data)
     const pos = { x: 6.5 * CELL, z: 5 * CELL - 0.05 }
@@ -155,7 +155,7 @@ describe('collision: no embedding / tunnelling (depenetration)', () => {
 
   it('does not slip through a wall end when approached diagonally', () => {
     // Wall on line x=5 for rows 7..13; the player rounds its north end (row 6).
-    const data = new ChunkData(0, 0, 0)
+    const data = new ChunkData(0, 0, 0, 0)
     for (let z = 7; z < CHUNK; z++) data.setV(5, z, 1)
     const cm = mockCM(data)
     let worst = 0
@@ -167,7 +167,7 @@ describe('collision: no embedding / tunnelling (depenetration)', () => {
   })
 
   it('rests at a consistent distance from a wall regardless of approach phase', () => {
-    const data = new ChunkData(0, 0, 0)
+    const data = new ChunkData(0, 0, 0, 0)
     for (let z = 0; z < CHUNK; z++) data.setV(5, z, 1)
     const cm = mockCM(data)
     const rests = [1.0, 1.03, 0.97, 1.11].map((gap) => {
@@ -180,7 +180,7 @@ describe('collision: no embedding / tunnelling (depenetration)', () => {
 
   it('does not falsely block walking straight past a wall end in an open row', () => {
     // Wall on line x=5 only at row 7; row 6 is fully open and must stay passable.
-    const data = new ChunkData(0, 0, 0)
+    const data = new ChunkData(0, 0, 0, 0)
     data.setV(5, 7, 1)
     const cm = mockCM(data)
     const pos = { x: 3 * CELL, z: 6.5 * CELL } // open row 6, west of the wall

@@ -12,7 +12,7 @@ function forcedZone(zone) {
 
 describe('generation topology validation and repair', () => {
   it('repairs the known warehouse wall-loop regression', () => {
-    const data = buildChunk(933, 2, 1, CFG)
+    const data = buildChunk(933, 2, 0, 1, CFG)
     expect(data.zone).toBe(ZONE_WAREHOUSE)
     expect(data.repairs.connectivity).toBeGreaterThan(0)
     expect(countChunkComponents(data)).toBe(1)
@@ -20,7 +20,7 @@ describe('generation topology validation and repair', () => {
   })
 
   it('repairs the known column-aware navigation regression', () => {
-    const data = buildChunk(104, -2, 2, CFG)
+    const data = buildChunk(104, -2, 0, 2, CFG)
     expect(data.zone).toBe(ZONE_WAREHOUSE)
     expect(data.repairs.navigation + data.repairs.columns).toBeGreaterThan(0)
     expect(countChunkComponents(data, true)).toBe(1)
@@ -32,7 +32,7 @@ describe('generation topology validation and repair', () => {
       for (let seed = 0; seed < 160; seed++) {
         const cx = (seed % 11) - 5
         const cz = ((seed * 7) % 13) - 6
-        const data = buildChunk(seed, cx, cz, cfg)
+        const data = buildChunk(seed, cx, 0, cz, cfg)
         expect(countChunkComponents(data)).toBe(1)
         expect(countChunkComponents(data, true)).toBe(1)
       }
@@ -48,7 +48,7 @@ describe('generation topology validation and repair', () => {
       const chunks = new Map()
       for (let cz = Z0; cz < Z0 + N; cz++) {
         for (let cx = X0; cx < X0 + N; cx++) {
-          chunks.set(chunkKey(cx, cz), buildChunk(seed, cx, cz, CFG))
+          chunks.set(chunkKey(cx, cz), buildChunk(seed, cx, 0, cz, CFG))
         }
       }
       const at = (gx, gz) => {

@@ -3,29 +3,35 @@ import {
   CHUNK,
   MAP_REVEAL_R,
   cIdx,
-  chunkKey,
+  chunkKey3,
   worldToCell,
 } from './constants.js'
 import { hasLineOfSight } from '../player/collision.js'
 import { generateChunk } from './generate.js'
+import { buildStairCells } from './stairCells.js'
 
 // Player-explored fog-of-war state for the HUD minimap. Pure data/logic (no
 // THREE), so it stays unit-testable like ChunkData / collision.
 //
-// The live world streams chunks in and DISPOSES them beyond UNLOAD_RADIUS, so
-// it can't be the source of truth for places behind the player. ChunkData is
+// The live world streams chunks in and DISPOSES them beyond the unload radii,
+// so it can't be the source of truth for places behind the player. ChunkData is
 // immutable + deterministic after generation, so we retain a REFERENCE to each
 // explored chunk's data (zero-copy, survives unload) plus a per-chunk reveal
 // mask — the only mutable state we own. A cell becomes "seen" once it is within
 // MAP_REVEAL_R of the player AND has line-of-sight to the player (true fog of
 // war: you don't see through walls). The reveal pass only recomputes when the
 // player crosses into a new cell, so standing still costs nothing.
+//
+// v8: everything is keyed per FLOOR (cx, cy, cz). Each floor keeps its own
+// reveal mask, so climbing a stair swaps the minimap to that floor's fog and
+// the old floor's map is preserved for the player's return.
 export class ExploredMap {
   constructor(cm) {
     this.cm = cm
-    this.chunks = new Map() // chunkKey -> { data: ChunkData, revealed: Uint8Array }
+    this.chunks = new Map() // chunkKey3 -> { data, cells: stair descriptors, revealed }
     this.lastCX = null
     this.lastCZ = null
+    this.lastCY = null
   }
 
   // Drop all fog (called per level/seed change so nothing leaks between runs).
@@ -33,18 +39,21 @@ export class ExploredMap {
     this.chunks.clear()
     this.lastCX = null
     this.lastCZ = null
+    this.lastCY = null
   }
 
-  // Reveal pass: mark cells in a disc around the player that have line of sight.
-  // No-op until the player crosses a cell boundary.
-  update(px, pz) {
+  // Reveal pass: mark cells in a disc around the player that have line of sight
+  // on the player's floor. No-op until the player crosses a cell boundary or
+  // changes floors.
+  update(px, pz, pcy = 0) {
     const gx = worldToCell(px)
     const gz = worldToCell(pz)
-    if (gx === this.lastCX && gz === this.lastCZ) return
+    if (gx === this.lastCX && gz === this.lastCZ && pcy === this.lastCY) return
     this.lastCX = gx
     this.lastCZ = gz
+    this.lastCY = pcy
 
-    this._mark(gx, gz) // own cell (LOS would pass anyway; cheap guard)
+    this._mark(gx, gz, pcy) // own cell (LOS would pass anyway; cheap guard)
     const R = MAP_REVEAL_R
     const R2 = R * R
     for (let cz = gz - R; cz <= gz + R; cz++) {
@@ -55,7 +64,7 @@ export class ExploredMap {
         if (cx === gx && cz === gz) continue
         const wxc = (cx + 0.5) * CELL
         const wzc = (cz + 0.5) * CELL
-        if (hasLineOfSight(this.cm, px, pz, wxc, wzc)) this._mark(cx, cz)
+        if (hasLineOfSight(this.cm, px, pz, wxc, wzc, pcy)) this._mark(cx, cz, pcy)
       }
     }
   }
@@ -63,10 +72,10 @@ export class ExploredMap {
   // --- Renderer queries (mirror ChunkManager's global thin-wall lookups over
   //     the stored data, so the minimap never special-cases chunk seams) ---
 
-  isRevealed(gx, gz) {
+  isRevealed(gx, gz, cy = 0) {
     const cx = Math.floor(gx / CHUNK)
     const cz = Math.floor(gz / CHUNK)
-    const e = this.chunks.get(chunkKey(cx, cz))
+    const e = this.chunks.get(chunkKey3(cx, cy, cz))
     if (!e) return false
     return e.revealed[cIdx(gx - cx * CHUNK, gz - cz * CHUNK)] === 1
   }
@@ -74,47 +83,61 @@ export class ExploredMap {
   // Stored ChunkData for a chunk (lazily filled for unloaded-but-explored
   // neighbours queried by the wall lookups). Returns null only if generation
   // somehow yields nothing.
-  dataAt(cx, cz) {
-    return this._entry(cx, cz).data || null
+  dataAt(cx, cy, cz) {
+    return this._entry(cx, cy, cz).data || null
   }
 
-  wallVAt(gx, gz) {
+  wallVAt(gx, gz, cy = 0) {
     const cx = Math.floor(gx / CHUNK)
     const cz = Math.floor(gz / CHUNK)
-    const d = this.dataAt(cx, cz)
+    const d = this.dataAt(cx, cy, cz)
     if (!d) return false
     return d.vAt(gx - cx * CHUNK, gz - cz * CHUNK) === 1
   }
 
-  wallHAt(gx, gz) {
+  wallHAt(gx, gz, cy = 0) {
     const cx = Math.floor(gx / CHUNK)
     const cz = Math.floor(gz / CHUNK)
-    const d = this.dataAt(cx, cz)
+    const d = this.dataAt(cx, cy, cz)
     if (!d) return false
     return d.hAt(gx - cx * CHUNK, gz - cz * CHUNK) === 1
   }
 
-  columnAt(gx, gz) {
+  columnAt(gx, gz, cy = 0) {
     const cx = Math.floor(gx / CHUNK)
     const cz = Math.floor(gz / CHUNK)
-    const d = this.dataAt(cx, cz)
+    const d = this.dataAt(cx, cy, cz)
     if (!d) return false
     return d.colAt(gx - cx * CHUNK, gz - cz * CHUNK) === 1
   }
 
-  // --- internals ---
-
-  _mark(gx, gz) {
+  // Canonical stair descriptor mirror (for the minimap's stair glyphs).
+  stairAt(gx, gz, cy = 0) {
     const cx = Math.floor(gx / CHUNK)
     const cz = Math.floor(gz / CHUNK)
-    this._entry(cx, cz).revealed[cIdx(gx - cx * CHUNK, gz - cz * CHUNK)] = 1
+    const e = this._entry(cx, cy, cz)
+    if (!e.cells) return null
+    return e.cells.get(cIdx(gx - cx * CHUNK, gz - cz * CHUNK)) || null
   }
 
-  _entry(cx, cz) {
-    const key = chunkKey(cx, cz)
+  // --- internals ---
+
+  _mark(gx, gz, cy) {
+    const cx = Math.floor(gx / CHUNK)
+    const cz = Math.floor(gz / CHUNK)
+    this._entry(cx, cy, cz).revealed[cIdx(gx - cx * CHUNK, gz - cz * CHUNK)] = 1
+  }
+
+  _entry(cx, cy, cz) {
+    const key = chunkKey3(cx, cy, cz)
     let e = this.chunks.get(key)
     if (!e) {
-      e = { data: this._dataFor(cx, cz), revealed: new Uint8Array(CHUNK * CHUNK) }
+      const data = this._dataFor(cx, cy, cz)
+      e = {
+        data,
+        cells: data ? buildStairCells(data, cx, cy, cz) : null,
+        revealed: new Uint8Array(CHUNK * CHUNK),
+      }
       this.chunks.set(key, e)
     }
     return e
@@ -125,27 +148,32 @@ export class ExploredMap {
   // fall back to regeneration for the rare unloaded-neighbour query. The
   // fallback MUST pass the same exit/clearing args ChunkManager built with, or
   // the spawn/exit chunks would diverge from the geometry that actually exists.
-  _dataFor(cx, cz) {
+  _dataFor(cx, cy, cz) {
     const cm = this.cm
-    const live = cm.chunks.get(chunkKey(cx, cz))?.data
+    const live = cm.chunks.get(chunkKey3(cx, cy, cz))?.data
     if (live) return live
     return generateChunk(
       cm.seed,
       cx,
+      cy,
       cz,
       cm.config,
-      this._exitCellFor(cx, cz),
-      this._clearingsFor(cx, cz)
+      this._exitCellFor(cx, cy, cz),
+      this._clearingsFor(cx, cy, cz)
     )
   }
 
-  _exitCellFor(cx, cz) {
+  _exitCellFor(cx, cy, cz) {
     const ex = this.cm.exit
-    return ex && ex.cx === cx && ex.cz === cz ? { lx: ex.lx, lz: ex.lz } : null
+    return ex && ex.cx === cx && (ex.cy ?? 0) === cy && ex.cz === cz
+      ? { lx: ex.lx, lz: ex.lz }
+      : null
   }
 
-  _clearingsFor(cx, cz) {
-    const list = (this.cm.clearings || []).filter((c) => c.cx === cx && c.cz === cz)
+  _clearingsFor(cx, cy, cz) {
+    const list = (this.cm.clearings || []).filter(
+      (c) => c.cx === cx && (c.cy ?? 0) === cy && c.cz === cz
+    )
     return list.length ? list : null
   }
 }

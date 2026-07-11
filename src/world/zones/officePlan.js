@@ -23,7 +23,9 @@ const SALT_CIRCULATION = 0x31c7
 const SALT_ROOMS = 0x6a09
 const SALT_DOORS = 0x4d23
 const SALT_SPACE_ID = 0x72e5
-const CACHE_LIMIT = 32
+// Sized for v8's stacked floors: up to 3 resident layers, each with its own
+// per-layer-seed districts, keep ~2-3x the districts warm vs a single floor.
+const CACHE_LIMIT = 64
 const PLAN_CACHES = new WeakMap()
 
 const idx = (size, x, z) => z * size + x

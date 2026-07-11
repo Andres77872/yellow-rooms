@@ -8,6 +8,14 @@ import {
   LAMP_FADE_BAND,
   ENTITY_VANISH_DIST,
   NEAR,
+  WALL_H,
+  SLAB_T,
+  LAYER_H,
+  LOAD_RADIUS_Y,
+  UNLOAD_RADIUS_Y,
+  LIGHT_SPILL_R,
+  LIGHT_RANGE,
+  FLOOR_SWITCH_Y,
 } from '../constants.js'
 
 // The draw-distance contract. FOG_DENSITY, FAR, LOAD_RADIUS and LAMP_QUERY_R
@@ -65,5 +73,31 @@ describe('fog / streaming / far-plane coupling', () => {
     // PLAYER_R 0.5 minus wall collision half-thickness 0.08, minus head-bob
     // sway ~0.05 -> the eye never gets closer than ~0.3u to a surface.
     expect(NEAR).toBeLessThanOrEqual(0.3)
+  })
+
+  // --- Layered-world coupling (v8) ---
+
+  it('layer height is exactly one wall height plus one slab', () => {
+    // mesh.js, ground.js, the stair ramp and the handoff all assume floor
+    // surfaces are LAYER_H apart with a SLAB_T void between ceiling and the
+    // next floor. Retuning WALL_H/SLAB_T must move LAYER_H with them.
+    expect(LAYER_H).toBeCloseTo(WALL_H + SLAB_T, 12)
+    expect(SLAB_T).toBeGreaterThan(0)
+  })
+
+  it('vertical streaming radii keep stair oscillation rebuild-free', () => {
+    expect(LOAD_RADIUS_Y).toBeGreaterThanOrEqual(1)
+    expect(UNLOAD_RADIUS_Y).toBeGreaterThan(LOAD_RADIUS_Y)
+  })
+
+  it('lamp spill through stair apertures cannot exceed a lamp reach', () => {
+    // A lamp farther than LIGHT_RANGE from the hole physically cannot push
+    // light through it; a larger spill radius would only add pop-in sources.
+    expect(LIGHT_SPILL_R).toBeLessThanOrEqual(LIGHT_RANGE)
+  })
+
+  it('the floor handoff fires strictly past mid-ramp, before the top', () => {
+    expect(FLOOR_SWITCH_Y).toBeGreaterThan(LAYER_H / 2)
+    expect(FLOOR_SWITCH_Y).toBeLessThan(LAYER_H)
   })
 })

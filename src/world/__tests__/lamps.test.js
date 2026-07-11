@@ -18,7 +18,7 @@ describe('feature-keyed lamp randomness', () => {
       let dead = 0
       for (let cz = -20; cz < 20; cz++) {
         for (let cx = -20; cx < 20; cx++) {
-          const data = buildChunk(0x71a9, cx, cz, cfg)
+          const data = buildChunk(0x71a9, cx, 0, cz, cfg)
           fixtures += data.lamps.length
           for (const lamp of data.lamps) dead += lamp.lit ? 0 : 1
         }
@@ -34,8 +34,8 @@ describe('feature-keyed lamp randomness', () => {
     const b = structuredClone(a)
     b.lamps.deadSalt ^= 0x7777
     for (const [cx, cz] of [[0, 0], [4, -3], [-8, 5]]) {
-      const pa = buildChunk(123, cx, cz, a).lamps.map(({ lx, lz }) => [lx, lz])
-      const pb = buildChunk(123, cx, cz, b).lamps.map(({ lx, lz }) => [lx, lz])
+      const pa = buildChunk(123, cx, 0, cz, a).lamps.map(({ lx, lz }) => [lx, lz])
+      const pb = buildChunk(123, cx, 0, cz, b).lamps.map(({ lx, lz }) => [lx, lz])
       expect(pb).toEqual(pa)
     }
   })
@@ -47,7 +47,7 @@ describe('feature-keyed lamp randomness', () => {
       let lit = 0
       for (let cz = 0; cz < cfg.office.districtChunks; cz++) {
         for (let cx = 0; cx < cfg.office.districtChunks; cx++) {
-          const data = buildChunk(seed, cx, cz, cfg)
+          const data = buildChunk(seed, cx, 0, cz, cfg)
           for (const lamp of data.lamps) {
             const kind = data.cellKind[lamp.lz * CHUNK + lamp.lx]
             if (kind !== CELL_CORRIDOR && kind !== CELL_LOBBY) continue

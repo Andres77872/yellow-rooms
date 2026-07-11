@@ -1,33 +1,47 @@
 import { CHUNK, ZONE_OFFICE } from './constants.js'
 import { ChunkData } from './ChunkData.js'
 import { RNG } from './core/rng.js'
+import { hash2i } from './core/hash.js'
 import { ZONES } from './zones/index.js'
 import { selectZone } from './regions.js'
 import { vBorderContract, hBorderContract } from './border.js'
 import { placeLights } from './lamps.js'
+import { stampStairs } from './stairStamp.js'
 import { DEFAULT_WORLD_CONFIG } from './config.js'
 import { PASSAGE_OPEN } from './mapTypes.js'
 import { repairChunkTopology } from './topology.js'
 import { normalizeDoorPassages } from './doors.js'
 
 const TOPOLOGY_SALT = 0x74a1
+const SALT_LAYER = 0x4c59
 
-// The layered generation pipeline. Pure function of (seed, cx, cz, config) ->
-// ChunkData. No THREE: runs headless and is tested directly.
+// Per-layer seed (v8): every 2D stage below is keyed by this instead of the
+// root seed, so each floor gets its own zone geography, office district plans,
+// warehouse structure, and lamp pattern — with ZERO internal signature changes
+// to those stages. Identity at cy=0 keeps layer 0 byte-compatible with v7
+// (except where stair stamps land). Slab contracts (stairStamp/slab.js) use
+// the ROOT seed: they belong to the slab BETWEEN two layers, not to either.
+export const layerSeed = (seed, cy) =>
+  cy === 0 ? seed >>> 0 : hash2i((seed ^ SALT_LAYER) | 0, cy, 0)
+
+// The layered generation pipeline. Pure function of (seed, cx, cy, cz, config)
+// -> ChunkData. No THREE: runs headless and is tested directly.
 //
 //   seed     : uint32 root seed (from hashStr of the seed text)
-//   cx, cz   : chunk coordinates
+//   cx,cy,cz : chunk coordinates (cy = floor index, any integer)
 //   exitCell : {lx, lz} | null — host chunk for the level exit (carves a clearing)
 //   clearings: [{lx, lz, r?}] | null — extra forced-open clearings (e.g. spawn)
-export function buildChunk(seed, cx, cz, config = DEFAULT_WORLD_CONFIG, exitCell = null, clearings = null) {
+export function buildChunk(seed, cx, cy, cz, config = DEFAULT_WORLD_CONFIG, exitCell = null, clearings = null) {
+  const lseed = layerSeed(seed, cy)
+
   // L1 — zone select
-  const zone = selectZone(cx, cz, seed, config)
-  const data = new ChunkData(cx, cz, zone, config.version)
+  const zone = selectZone(cx, cz, lseed, config)
+  const data = new ChunkData(cx, cy, cz, zone, config.version)
 
   // L2 — border contracts. This chunk OWNS its West line (lx=0) and North line
   // (lz=0); East/South borders are owned by the neighbours (their line 0).
-  const cW = vBorderContract(cx - 1, cz, seed, config)
-  const cN = hBorderContract(cx, cz - 1, seed, config)
+  const cW = vBorderContract(cx - 1, cz, lseed, config)
+  const cN = hBorderContract(cx, cz - 1, lseed, config)
   for (let z = 0; z < CHUNK; z++) data.setPassageV(0, z, cW.passages[z])
   for (let x = 0; x < CHUNK; x++) data.setPassageH(x, 0, cN.passages[x])
 
@@ -35,17 +49,17 @@ export function buildChunk(seed, cx, cz, config = DEFAULT_WORLD_CONFIG, exitCell
   const borders = {
     wW: cW.walls,
     wN: cN.walls,
-    wE: vBorderContract(cx, cz, seed, config).walls,
-    wS: hBorderContract(cx, cz, seed, config).walls,
+    wE: vBorderContract(cx, cz, lseed, config).walls,
+    wS: hBorderContract(cx, cz, lseed, config).walls,
   }
   const borderZones = {
-    w: selectZone(cx - 1, cz, seed, config),
-    n: selectZone(cx, cz - 1, seed, config),
-    e: selectZone(cx + 1, cz, seed, config),
-    s: selectZone(cx, cz + 1, seed, config),
+    w: selectZone(cx - 1, cz, lseed, config),
+    n: selectZone(cx, cz - 1, lseed, config),
+    e: selectZone(cx + 1, cz, lseed, config),
+    s: selectZone(cx, cz + 1, lseed, config),
   }
-  const rng = RNG.fromHash(seed, cx, cz)
-  ZONES[zone].generate(data, { seed, cx, cz, zone, rng, config, borders, borderZones })
+  const rng = RNG.fromHash(lseed, cx, cz)
+  ZONES[zone].generate(data, { seed: lseed, cx, cz, zone, rng, config, borders, borderZones })
 
   // L4 — open-zone safety repair. Office topology is validated and scored on
   // the authoritative district plan; mutating an office after slicing would
@@ -53,13 +67,20 @@ export function buildChunk(seed, cx, cz, config = DEFAULT_WORLD_CONFIG, exitCell
   if (zone !== ZONE_OFFICE) {
     data.repairs = repairChunkTopology(
       data,
-      RNG.fromHash(seed, cx, cz, TOPOLOGY_SALT),
+      RNG.fromHash(lseed, cx, cz, TOPOLOGY_SALT),
       PASSAGE_OPEN
     )
   }
 
+  // L4.5 — stair stamps (v8). Realize this layer's halves of the two slab
+  // contracts (halo carve, then guard walls; connectivity-safe by construction
+  // — see stairStamp.js). After repair so nothing re-walls the halo; before
+  // lamps so fixtures see the ceiling holes; before L6 so the anomaly carves
+  // respect the stamp's protected edges.
+  stampStairs(data, seed, cx, cy, cz, config)
+
   // L5 — lights (independent stream, global module grid).
-  placeLights(data, { seed, cx, cz, zone, config })
+  placeLights(data, { seed: lseed, cx, cz, zone, config })
 
   // L6 — anomaly: carve clearings for the exit and/or spawn, if this is the host.
   if (exitCell) {

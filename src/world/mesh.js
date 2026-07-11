@@ -4,6 +4,8 @@ import {
   CHUNK,
   CHUNK_WORLD,
   WALL_H,
+  LAYER_H,
+  STAIR_STEPS,
   THICK,
   COL_HALF,
   HEADER_H,
@@ -16,6 +18,7 @@ import {
   cIdx,
 } from './constants.js'
 import { collectDoorways } from './doors.js'
+import { STAIR_E, STAIR_S, STAIR_W } from './slab.js'
 
 const _m = new THREE.Matrix4()
 const _q = new THREE.Quaternion()
@@ -24,26 +27,141 @@ const _s = new THREE.Vector3()
 
 // Build the THREE meshes for one chunk from its ChunkData (thin-wall model).
 // Returns { group, lamps, exitWorld, dispose }. Geometry/materials are shared
-// (created once); only per-chunk InstancedMesh GPU buffers are owned here.
+// (created once); only per-chunk InstancedMesh GPU buffers — and, for stair
+// chunks, the hole-punched slab geometries — are owned here.
 //
 // Walls are emitted as one instanced unit-box per cell-edge (each <= CELL long,
-// so wallpaper texel density matches a full cell), plus columns — all in a
-// single InstancedMesh / draw call. A chunk OWNS its West (lx=0) and North
-// (lz=0) border lines and all interior lines; the East/South borders are drawn
-// by the neighbours as their line 0, so every shared wall is drawn exactly once.
-export function buildChunkMeshes(data, geom, materials, ox, oz) {
-  const group = new THREE.Group()
-  group.position.set(ox, 0, oz)
+// so wallpaper texel density matches a full cell), plus columns and stair
+// steps — all in a single InstancedMesh / draw call. A chunk OWNS its West
+// (lx=0) and North (lz=0) border lines and all interior lines; the East/South
+// borders are drawn by the neighbours as their line 0, so every shared wall is
+// drawn exactly once. Vertically (v8) a chunk owns its floor top face and its
+// ceiling underside; the SLAB_T gap between one chunk's ceiling and the next
+// layer's floor is only ever seen through stair holes, whose rim skirts are
+// owned by the LOWER chunk (the slab owner, matching the contract convention).
 
-  // Floor + ceiling (shared geometry, repositioned).
-  const floor = new THREE.Mesh(geom.floor, materials.carpet)
-  floor.position.set(CHUNK_WORLD / 2, 0, CHUNK_WORLD / 2)
+// One quad = two front-facing triangles; corners CCW as seen from the normal.
+function pushQuad(arr, n, uv, c0, c1, c2, c3, u0, u1, u2, u3, nx, ny, nz) {
+  for (const [c, u] of [
+    [c0, u0],
+    [c1, u1],
+    [c2, u2],
+    [c0, u0],
+    [c2, u2],
+    [c3, u3],
+  ]) {
+    arr.push(c[0], c[1], c[2])
+    n.push(nx, ny, nz)
+    uv.push(u[0], u[1])
+  }
+}
+
+// Hole-punched horizontal slab face: row-span merged quads over the cell grid
+// skipping `holes` ("lx,lz" strings), at local height y, facing up or down.
+// UVs are 1 per cell, matching scaleUV(plane, CHUNK) on the shared geometry.
+function buildSlabFace(holes, y, faceUp) {
+  const pos = []
+  const nrm = []
+  const uv = []
+  const emit = (x0, z, x1) => {
+    const ax = x0 * CELL
+    const bx = (x1 + 1) * CELL
+    const az = z * CELL
+    const bz = (z + 1) * CELL
+    const A = [ax, y, az]
+    const B = [bx, y, az]
+    const C = [bx, y, bz]
+    const D = [ax, y, bz]
+    const uA = [x0, z]
+    const uB = [x1 + 1, z]
+    const uC = [x1 + 1, z + 1]
+    const uD = [x0, z + 1]
+    if (faceUp) pushQuad(pos, nrm, uv, A, D, C, B, uA, uD, uC, uB, 0, 1, 0)
+    else pushQuad(pos, nrm, uv, A, B, C, D, uA, uB, uC, uD, 0, -1, 0)
+  }
+  for (let z = 0; z < CHUNK; z++) {
+    let start = -1
+    for (let x = 0; x <= CHUNK; x++) {
+      const solid = x < CHUNK && !holes.has(`${x},${z}`)
+      if (solid && start < 0) start = x
+      if (!solid && start >= 0) {
+        emit(start, z, x - 1)
+        start = -1
+      }
+    }
+  }
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3))
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2))
+  return geo
+}
+
+// Inward-facing skirt around a rectangular ceiling hole, spanning the slab
+// thickness (local y WALL_H..LAYER_H) — so looking at the hole edge from the
+// stairwell shows a solid slab, never a paper-thin plane.
+function appendHoleRim(geo, holeCells) {
+  const pos = Array.from(geo.attributes.position.array)
+  const nrm = Array.from(geo.attributes.normal.array)
+  const uv = Array.from(geo.attributes.uv.array)
+  let x0 = CHUNK, z0 = CHUNK, x1 = -1, z1 = -1
+  for (const c of holeCells) {
+    x0 = Math.min(x0, c.lx)
+    z0 = Math.min(z0, c.lz)
+    x1 = Math.max(x1, c.lx)
+    z1 = Math.max(z1, c.lz)
+  }
+  const wx0 = x0 * CELL
+  const wx1 = (x1 + 1) * CELL
+  const wz0 = z0 * CELL
+  const wz1 = (z1 + 1) * CELL
+  const y0 = WALL_H
+  const y1 = LAYER_H
+  const v = (u, y) => [u / CELL, y / CELL]
+  // West face (+x into the hole), East (-x), North (+z), South (-z).
+  pushQuad(pos, nrm, uv, [wx0, y0, wz1], [wx0, y0, wz0], [wx0, y1, wz0], [wx0, y1, wz1], v(wz1, y0), v(wz0, y0), v(wz0, y1), v(wz1, y1), 1, 0, 0)
+  pushQuad(pos, nrm, uv, [wx1, y0, wz0], [wx1, y0, wz1], [wx1, y1, wz1], [wx1, y1, wz0], v(wz0, y0), v(wz1, y0), v(wz1, y1), v(wz0, y1), -1, 0, 0)
+  pushQuad(pos, nrm, uv, [wx0, y0, wz0], [wx1, y0, wz0], [wx1, y1, wz0], [wx0, y1, wz0], v(wx0, y0), v(wx1, y0), v(wx1, y1), v(wx0, y1), 0, 0, 1)
+  pushQuad(pos, nrm, uv, [wx1, y0, wz1], [wx0, y0, wz1], [wx0, y1, wz1], [wx1, y1, wz1], v(wx1, y0), v(wx0, y0), v(wx0, y1), v(wx1, y1), 0, 0, -1)
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3))
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2))
+}
+
+export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
+  const group = new THREE.Group()
+  group.position.set(ox, oy, oz)
+
+  // Floor + ceiling. The shared full-chunk planes cover the common (no-hole)
+  // case with zero per-chunk geometry; stair chunks build hole-punched merged
+  // row-span quads (<= ~16 quads) that this chunk owns and must dispose.
+  const ownedGeos = []
+  let floor
+  if (!data.stairDown) {
+    floor = new THREE.Mesh(geom.floor, materials.carpet)
+    floor.position.set(CHUNK_WORLD / 2, 0, CHUNK_WORLD / 2)
+  } else {
+    const holes = new Set(data.stairDown.run.map((c) => `${c.lx},${c.lz}`))
+    const g = buildSlabFace(holes, 0, true)
+    ownedGeos.push(g)
+    floor = new THREE.Mesh(g, materials.carpet)
+  }
   group.add(floor)
-  const ceil = new THREE.Mesh(geom.ceiling, materials.ceiling)
-  ceil.position.set(CHUNK_WORLD / 2, WALL_H, CHUNK_WORLD / 2)
+
+  let ceil
+  if (!data.stairUp) {
+    ceil = new THREE.Mesh(geom.ceiling, materials.ceiling)
+    ceil.position.set(CHUNK_WORLD / 2, WALL_H, CHUNK_WORLD / 2)
+  } else {
+    const holes = new Set(data.stairUp.run.map((c) => `${c.lx},${c.lz}`))
+    const g = buildSlabFace(holes, WALL_H, false)
+    appendHoleRim(g, data.stairUp.run) // slab-owner renders the hole's cut faces
+    ownedGeos.push(g)
+    ceil = new THREE.Mesh(g, materials.ceiling)
+  }
   group.add(ceil)
 
-  // --- Collect wall + column instance transforms ---
+  // --- Collect wall + column + stair-step instance transforms ---
   const inst = [] // [{px,py,pz, sx,sy,sz}]
   const wallY = WALL_H / 2
   // Vertical wall lines (lx in [0..CHUNK-1]): slab at world x = lx*CELL,
@@ -87,6 +205,34 @@ export function buildChunkMeshes(data, geom, materials, ox, oz) {
         sx: COL_HALF * 2,
         sy: WALL_H,
         sz: COL_HALF * 2,
+      })
+    }
+  }
+  // Stair steps (up-stair only — the lower chunk owns the whole flight).
+  // STAIR_STEPS solid risers over the two run cells; collision is the analytic
+  // ramp (player/ground.js), these are render detail. The top step's top face
+  // sits flush with the upper layer's floor at LAYER_H.
+  if (data.stairUp) {
+    const s = data.stairUp
+    const horiz = s.dir === STAIR_E || s.dir === STAIR_W
+    const sign = s.dir === STAIR_E || s.dir === STAIR_S ? 1 : -1
+    const tread = (2 * CELL) / STAIR_STEPS
+    const rise = LAYER_H / STAIR_STEPS
+    // Ramp-start edge (landing -> run0), in chunk-local world units.
+    const start = horiz
+      ? Math.max(s.landing.lx, s.run[0].lx) * CELL
+      : Math.max(s.landing.lz, s.run[0].lz) * CELL
+    const cross = horiz ? (s.landing.lz + 0.5) * CELL : (s.landing.lx + 0.5) * CELL
+    for (let i = 0; i < STAIR_STEPS; i++) {
+      const along = start + sign * (i + 0.5) * tread
+      const h = (i + 1) * rise
+      inst.push({
+        px: horiz ? along : cross,
+        py: h / 2,
+        pz: horiz ? cross : along,
+        sx: horiz ? tread : CELL,
+        sy: h,
+        sz: horiz ? CELL : tread,
       })
     }
   }
@@ -172,7 +318,7 @@ export function buildChunkMeshes(data, geom, materials, ox, oz) {
   }
 
   // --- Fluorescent ceiling panels (lit feed the light pool; dead are dark) ---
-  const lamps = [] // world Vector3 of LIT lamps
+  const lamps = [] // world Vector3 of LIT lamps, tagged with the layer index
   const lit = data.lamps.filter((l) => l.lit)
   const dead = data.lamps.filter((l) => !l.lit)
   _s.set(1, 1, 1)
@@ -187,7 +333,9 @@ export function buildChunkMeshes(data, geom, materials, ox, oz) {
       // Light-point hangs lower than the recessed panel mesh so the lamp sits
       // clearly IN the room: ceiling tiles around it now catch real N·L and the
       // light shafts/shadows originate in-room (not coplanar with the ceiling).
-      lamps.push(new THREE.Vector3(ox + (l.lx + 0.5) * CELL, WALL_H - 0.5, oz + (l.lz + 0.5) * CELL))
+      const v = new THREE.Vector3(ox + (l.lx + 0.5) * CELL, oy + WALL_H - 0.5, oz + (l.lz + 0.5) * CELL)
+      v.cy = data.cy // floor tag for the cross-floor light filter
+      lamps.push(v)
     })
     panels.instanceMatrix.needsUpdate = true
     panels.computeBoundingSphere()
@@ -215,7 +363,7 @@ export function buildChunkMeshes(data, geom, materials, ox, oz) {
     group.add(exit)
     exitWorld = new THREE.Vector3(
       ox + (data.exit.lx + 0.5) * CELL,
-      1.35,
+      oy + 1.35,
       oz + (data.exit.lz + 0.5) * CELL
     )
   }
@@ -226,6 +374,7 @@ export function buildChunkMeshes(data, geom, materials, ox, oz) {
     leaves?.dispose()
     panels?.dispose()
     deadPanels?.dispose()
+    for (const g of ownedGeos) g.dispose()
     group.parent?.remove(group)
   }
 

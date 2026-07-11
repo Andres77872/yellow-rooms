@@ -41,7 +41,7 @@ export class AiTool {
       buttonRow('', [
         button({
           label: 'force teleport',
-          onClick: () => s.forceTeleport(this.engine.camera, this.engine.controller.pos),
+          onClick: () => s.forceTeleport(this.engine.camera, this.engine.controller.pos, this.engine.controller.floor),
         }),
       ]).el
     )
@@ -172,9 +172,9 @@ export class AiTool {
         ? `tp ${Math.max(0, s._timer).toFixed(1)}s · lost ${Math.max(0, s._lostTimer).toFixed(1)}s`
         : `spawn ${Math.max(0, s._spawnTimer).toFixed(1)}s`
     )
-    this._r.dist.set(`${f.dist.toFixed(1)} m`)
+    this._r.dist.set(`${f.dist.toFixed(1)} m${f.dcy ? ` · Δcy ${f.dcy > 0 ? '+' : ''}${f.dcy}` : ''}`)
     this._r.flags.set(`${f.seen ? '●' : '○'} ${f.los ? '●' : '○'} ${f.inFrustum ? '●' : '○'}`)
-    const light = this.engine.cm.lightAt(s.pos.x, s.pos.z)
+    const light = this.engine.cm.lightAt(s.pos.x, s.pos.z, s.cy)
     this._r.light.set(`${light.toFixed(2)}${s.inBeam ? ' · BEAM' : ''}`)
     this._r.tension.set(f.tension.toFixed(2))
     this._r.level.set(`${s.level}  catch ${s.catchDist.toFixed(2)}`)

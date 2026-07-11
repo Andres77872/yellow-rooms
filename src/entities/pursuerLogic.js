@@ -30,3 +30,13 @@ export function clampBandDist(dist, min, max) {
 export function decideMode(los) {
   return los ? 'beeline' : 'path'
 }
+
+// Movement fallback when NOT beelining (v8): with a route, follow it. Without
+// one, direct pressure only makes sense on the player's own floor — cross-floor
+// "toward the player" just grinds a wall under the slab, so hold and let the
+// stuck detector escalate to a relocate onto the player's floor.
+export function chooseFallback(losSameFloor, dcy, hasPath) {
+  if (losSameFloor) return 'beeline'
+  if (hasPath) return 'path'
+  return dcy === 0 ? 'direct' : 'hold'
+}

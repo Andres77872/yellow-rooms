@@ -498,9 +498,16 @@ export class UI {
 
     this.el.fl.classList.toggle('on', state.flashlightOn)
     if (exit) {
-      this.el.compass.style.opacity = '0.85'
+      // The exit lives on layer 0 (v8): when the player is on another floor,
+      // say so — "2m" at an unreachable spot a slab away reads as a bug. The
+      // dimmed compass + a ▼/▲ floor count tell the player to find stairs.
+      const df = exit.floorDelta ?? 0
+      this.el.compass.style.opacity = df === 0 ? '0.85' : '0.45'
       this.el.compassArrow.style.transform = `rotate(${exit.relAngle}rad)`
-      this.el.dist.textContent = `${Math.round(exit.dist)}m`
+      this.el.dist.textContent =
+        df === 0
+          ? `${Math.round(exit.dist)}m`
+          : `${Math.round(exit.dist)}m ${df < 0 ? '▼' : '▲'}${Math.abs(df)}`
     } else {
       this.el.compass.style.opacity = '0.25'
       this.el.dist.textContent = '—'

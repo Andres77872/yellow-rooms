@@ -4,8 +4,14 @@ import {
   WALK_SPEED,
   SPRINT_SPEED,
   ACCEL,
+  FLOOR_SWITCH_Y,
+  GROUND_SNAP,
+  GRAVITY,
+  MAX_FALL_SPEED,
+  layerY,
 } from '../world/constants.js'
 import { moveAndCollide } from './collision.js'
+import { groundHeightAt } from './ground.js'
 import { HeadBob } from './headbob.js'
 
 const MAX_PITCH = Math.PI / 2 - 0.05
@@ -38,8 +44,15 @@ export class Controller {
     this.state = state
     camera.rotation.order = 'YXZ'
 
-    this.pos = new THREE.Vector3(0, 0, 0) // feet position (XZ plane)
+    this.pos = new THREE.Vector3(0, 0, 0) // feet position (y = ground height)
     this.vel = new THREE.Vector3()
+    // Vertical state (v8): the floor index selects which layer's walls collide
+    // and which lamps/minimap/streaming context apply. `pos.y` follows the
+    // ground (stairs are an analytic ramp); `vy` only runs while airborne.
+    this.floor = 0
+    this.vy = 0
+    this.grounded = true
+    this.onFloorChange = null // (floor:int) => void, wired by the Engine
     this.yaw = 0
     this.pitch = 0
     this.speed = 0
@@ -126,9 +139,12 @@ export class Controller {
     this.onToggleFlashlight?.(this.state.flashlightOn)
   }
 
-  teleport(x, z, yaw = 0) {
-    this.pos.set(x, 0, z)
+  teleport(x, z, cy = 0, yaw = 0) {
+    this.pos.set(x, layerY(cy), z)
     this.vel.set(0, 0, 0)
+    this.floor = cy
+    this.vy = 0
+    this.grounded = true
     this.yaw = yaw
     this.pitch = 0
     this.speed = 0
@@ -181,11 +197,48 @@ export class Controller {
     this.vel.x = approach(this.vel.x, tx, md)
     this.vel.z = approach(this.vel.z, tz, md)
 
-    const hit = moveAndCollide(cm, this.pos, this.vel.x * dt, this.vel.z * dt)
+    const hit = moveAndCollide(cm, this.pos, this.vel.x * dt, this.vel.z * dt, this.floor)
     if (hit.x) this.vel.x = 0
     if (hit.z) this.vel.z = 0
 
+    // Vertical resolve (v8). Grounded movement is glue-to-ground: the stair
+    // ramp rises ~0.05u per substep, far inside GROUND_SNAP, so walking stairs
+    // is pure snap-follow (GROUND_SNAP doubles as the max climb rate — a
+    // bigger instantaneous ground jump becomes a fall/land, not a teleport).
+    // The gravity branch is a safety net for teleports/debug drops only: in
+    // normal play every hole edge is either guard-walled or opens onto the
+    // ramp top at the same height.
+    const g = groundHeightAt(cm, this.pos.x, this.pos.z, this.floor)
+    if (this.pos.y <= g + GROUND_SNAP && this.vy <= 0) {
+      this.pos.y = g
+      this.vy = 0
+      this.grounded = true
+    } else {
+      this.vy = Math.max(this.vy - GRAVITY * dt, -MAX_FALL_SPEED)
+      this.pos.y += this.vy * dt
+      this.grounded = false
+      if (this.pos.y <= g) {
+        this.pos.y = g
+        this.vy = 0
+        this.grounded = true
+      }
+    }
+
+    // Floor handoff with hysteresis: flip mid-ramp, well clear of the two
+    // stamped edges the layers' rasters disagree on (see FLOOR_SWITCH_Y). The
+    // +-2.8 band means a flip needs 2.0u of vertical travel to flip back, so
+    // jitter at the threshold can never thrash the floor index.
+    const yRel = this.pos.y - layerY(this.floor)
+    if (yRel >= FLOOR_SWITCH_Y) this._setFloor(this.floor + 1)
+    else if (yRel <= -FLOOR_SWITCH_Y) this._setFloor(this.floor - 1)
+
     this.speed = Math.hypot(this.vel.x, this.vel.z)
+  }
+
+  _setFloor(f) {
+    if (f === this.floor) return
+    this.floor = f
+    this.onFloorChange?.(f)
   }
 
   // Per-frame: resources, camera transform, footsteps.
@@ -204,7 +257,7 @@ export class Controller {
     const moving = this.speed > 0.4
     this.headbob.update(dt, this.speed, moving)
     const cam = this.camera
-    cam.position.set(this.pos.x, EYE_H, this.pos.z)
+    cam.position.set(this.pos.x, this.pos.y + EYE_H, this.pos.z)
     cam.position.y += this.headbob.bobY
     cam.position.addScaledVector(_right.set(1, 0, 0).applyEuler(_euler.set(0, this.yaw, 0)), this.headbob.bobX)
     cam.rotation.set(this.pitch, this.yaw, 0, 'YXZ')

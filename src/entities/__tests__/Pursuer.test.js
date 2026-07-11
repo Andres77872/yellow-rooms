@@ -1,21 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { WALK_SPEED, PURSUER_LEASH, PURSUER_BAND_MIN, PURSUER_BAND_MAX, PURSUER_CATCH } from '../../world/constants.js'
-import { pursuerSpeed, shouldRelocate, clampBandDist, decideMode } from '../pursuerLogic.js'
+import { WALK_SPEED, PURSUER_LEASH, PURSUER_BAND_MIN, PURSUER_BAND_MAX, PURSUER_CATCH, LAYER_H } from '../../world/constants.js'
+import { pursuerSpeed, shouldRelocate, clampBandDist, decideMode, chooseFallback } from '../pursuerLogic.js'
 import { mergeEnemy } from '../../core/enemyMerge.js'
 
 // Mock the shared modules so the class test fully controls vision/pathing and we
 // assert on the Pursuer's own decision logic, not the real A*/collision.
 vi.mock('../sense.js', () => ({
-  EYE_Y: 1.6,
+  EYE_Y_REL: 1.6,
   inFrustum: vi.fn(() => false),
   sightGate: vi.fn(() => false),
   findHiddenSpot: vi.fn(() => null),
 }))
 vi.mock('../../world/pathfind.js', () => ({
   findPath: vi.fn(() => null),
-  followPath: vi.fn((cm, pos, path, i, step) => {
-    pos.x += step // move so "never stops" is observable
-    return { i: i + 1, movedSq: step * step, done: false }
+  followPath: vi.fn((cm, ent, path, i, step) => {
+    ent.pos.x += step // move so "never stops" is observable
+    return { i: i + 1, movedSq: step * step, done: false, stair: false }
   }),
 }))
 vi.mock('../../player/collision.js', () => ({
@@ -32,7 +32,7 @@ import { sightGate, findHiddenSpot } from '../sense.js'
 import { findPath, followPath } from '../../world/pathfind.js'
 import { moveAndCollide, hasLineOfSight } from '../../player/collision.js'
 
-const cm = { columnAt: () => false }
+const cm = { columnAt: () => false, stairAt: () => null, isBlocked: () => false }
 const scene = { add() {} }
 const geom = { pursuer: undefined }
 const materials = { pursuer: undefined }
@@ -48,9 +48,9 @@ beforeEach(() => {
   sightGate.mockReturnValue(false)
   findHiddenSpot.mockReturnValue(null)
   findPath.mockReturnValue(null)
-  followPath.mockImplementation((c, pos, path, i, step) => {
-    pos.x += step
-    return { i: i + 1, movedSq: step * step, done: false }
+  followPath.mockImplementation((c, ent, path, i, step) => {
+    ent.pos.x += step
+    return { i: i + 1, movedSq: step * step, done: false, stair: false }
   })
   hasLineOfSight.mockReturnValue(true)
   moveAndCollide.mockImplementation((c, pos, dx, dz) => {
@@ -76,6 +76,15 @@ describe('pursuerLogic (pure)', () => {
   it('decideMode picks beeline with LOS, path without', () => {
     expect(decideMode(true)).toBe('beeline')
     expect(decideMode(false)).toBe('path')
+  })
+
+  it('chooseFallback: direct only on the same floor, hold across floors', () => {
+    expect(chooseFallback(true, 0, false)).toBe('beeline')
+    expect(chooseFallback(false, 0, true)).toBe('path')
+    expect(chooseFallback(false, 1, true)).toBe('path')
+    expect(chooseFallback(false, 0, false)).toBe('direct')
+    expect(chooseFallback(false, 1, false)).toBe('hold')
+    expect(chooseFallback(false, -1, false)).toBe('hold')
   })
 
   it('chaseSpeed stays below WALK_SPEED across all levels', () => {
@@ -111,7 +120,7 @@ describe('Pursuer class', () => {
     expect(p.active).toBe(false) // still inside the grace window
     expect(r0.dist).toBe(Infinity)
 
-    findHiddenSpot.mockReturnValue({ x: 60, z: 0 })
+    findHiddenSpot.mockReturnValue({ x: 60, z: 0, cy: 0 })
     p.update(5, player, camera) // grace elapsed
     expect(p.active).toBe(true)
     expect(p.mesh.visible).toBe(true)
@@ -123,7 +132,7 @@ describe('Pursuer class', () => {
     p.active = true
     const player = { x: 0, z: 0 }
 
-    p.pos.set(20, 1.6, 0)
+    p.pos.set(20, 0, 0)
     hasLineOfSight.mockReturnValue(true)
     const before = dist(p, player)
     const r = p.update(0.1, player, camera)
@@ -131,7 +140,7 @@ describe('Pursuer class', () => {
     expect(moveAndCollide).toHaveBeenCalled()
     expect(r.caught).toBe(false)
 
-    p.pos.set(1.0, 1.6, 0) // inside catch radius
+    p.pos.set(1.0, 0, 0) // inside catch radius
     const r2 = p.update(0.1, player, camera)
     expect(r2.caught).toBe(true)
     expect(PURSUER_CATCH).toBeGreaterThan(1.0)
@@ -142,10 +151,10 @@ describe('Pursuer class', () => {
     p.reset(1, { x: 0, z: 0 })
     p.active = true
     const player = { x: 0, z: 0 }
-    p.pos.set(30, 1.6, 0)
+    p.pos.set(30, 0, 0)
     hasLineOfSight.mockReturnValue(false)
 
-    findPath.mockReturnValue([10, 0, 5, 0, 0, 0]) // a real route
+    findPath.mockReturnValue([10, 0, 0, 5, 0, 0, 0, 0, 0]) // a real route (triples)
     let x0 = p.pos.x
     p.update(0.1, player, camera)
     expect(followPath).toHaveBeenCalled()
@@ -154,7 +163,7 @@ describe('Pursuer class', () => {
     findPath.mockReturnValue(null) // no route -> direct fallback, still moves
     p._pathLen = 0 // force a recompute (clear the cached route from above)
     p._repathT = 0
-    p.pos.set(30, 1.6, 0)
+    p.pos.set(30, 0, 0)
     p.update(0.1, player, camera)
     expect(p.pos.x).not.toBe(30)
     expect(p.stateLabel).toBe('pathing(direct)')
@@ -165,8 +174,8 @@ describe('Pursuer class', () => {
     p.reset(1, { x: 0, z: 0 })
     p.active = true
     const player = { x: 0, z: 0 }
-    p.pos.set(PURSUER_LEASH + 50, 1.6, 0) // well past the leash
-    findHiddenSpot.mockReturnValue({ x: 60, z: 0 })
+    p.pos.set(PURSUER_LEASH + 50, 0, 0) // well past the leash
+    findHiddenSpot.mockReturnValue({ x: 60, z: 0, cy: 0 })
 
     p.update(0.1, player, camera)
     expect(findHiddenSpot).toHaveBeenCalledTimes(1)
@@ -175,7 +184,7 @@ describe('Pursuer class', () => {
     expect(d).toBeLessThanOrEqual(PURSUER_BAND_MAX + 5)
 
     // Drag it past the leash again immediately — cooldown must block a re-relocate.
-    p.pos.set(PURSUER_LEASH + 50, 1.6, 0)
+    p.pos.set(PURSUER_LEASH + 50, 0, 0)
     p.update(0.1, player, camera)
     expect(findHiddenSpot).toHaveBeenCalledTimes(1)
   })
@@ -185,7 +194,7 @@ describe('Pursuer class', () => {
     p.reset(1, { x: 0, z: 0 })
     p.active = true
     const player = { x: 0, z: 0 }
-    p.pos.set(PURSUER_LEASH + 60, 1.6, 0)
+    p.pos.set(PURSUER_LEASH + 60, 0, 0)
     findHiddenSpot.mockReturnValue(null) // every sampler attempt fails -> bearing snap
 
     expect(() => p.update(0.1, player, camera)).not.toThrow()
@@ -197,7 +206,7 @@ describe('Pursuer class', () => {
     p.reset(1, { x: 0, z: 0 })
     p.active = true
     const player = { x: 0, z: 0 }
-    p.pos.set(15, 1.6, 0)
+    p.pos.set(15, 0, 0)
 
     sightGate.mockReturnValue(false)
     expect(p.update(0.1, player, camera).seen).toBe(false)
@@ -205,15 +214,49 @@ describe('Pursuer class', () => {
     expect(p.update(0.1, player, camera).seen).toBe(true)
   })
 
+  it('chases across floors: no beeline, pathfinds with both floor indices', () => {
+    const p = makePursuer()
+    p.reset(1, { x: 0, z: 0 })
+    p.active = true
+    p.cy = 0
+    const player = { x: 0, y: LAYER_H, z: 0 } // one floor up
+    p.pos.set(10, 0, 0)
+    hasLineOfSight.mockReturnValue(true) // even with 2D LOS true...
+    findPath.mockReturnValue([3, 0, 0, 3, 0, 1]) // route via a stair
+    p.update(0.1, player, camera, { playerCy: 1 })
+    // ...a cross-floor player must NOT be beelined at through the slab:
+    expect(p.stateLabel).toBe('pathing')
+    expect(findPath).toHaveBeenCalledWith(
+      cm, 10, 0, 0, 0, 0, 1,
+      expect.objectContaining({ leash: expect.any(Number) })
+    )
+    expect(followPath).toHaveBeenCalled()
+  })
+
+  it('holds (not direct-grinds) when cross-floor with no route', () => {
+    const p = makePursuer()
+    p.reset(1, { x: 0, z: 0 })
+    p.active = true
+    p.cy = 0
+    const player = { x: 0, y: LAYER_H, z: 0 }
+    p.pos.set(10, 0, 0)
+    hasLineOfSight.mockReturnValue(true)
+    findPath.mockReturnValue(null)
+    const x0 = p.pos.x
+    p.update(0.1, player, camera, { playerCy: 1 })
+    expect(p.stateLabel).toBe('holding')
+    expect(p.pos.x).toBe(x0) // no movement
+  })
+
   it('escalates a stuck state to a relocate without teleporting onto the player', () => {
     const p = makePursuer()
     p.reset(1, { x: 0, z: 0 })
     p.active = true
     const player = { x: 0, z: 0 }
-    p.pos.set(12, 1.6, 0)
+    p.pos.set(12, 0, 0)
     hasLineOfSight.mockReturnValue(true)
     moveAndCollide.mockImplementation(() => ({ x: true, z: true })) // wall-stuck: no progress
-    findHiddenSpot.mockReturnValue({ x: 60, z: 0 })
+    findHiddenSpot.mockReturnValue({ x: 60, z: 0, cy: 0 })
 
     for (let k = 0; k < 6; k++) p.update(0.5, player, camera) // accrue > stuck-relocate seconds
     expect(findHiddenSpot).toHaveBeenCalled() // stuck escalated to a relocate

@@ -10,7 +10,7 @@ function buildPatch(seed, X0, Z0, NX, NZ, config = CFG) {
   const chunks = new Map()
   for (let cz = Z0; cz < Z0 + NZ; cz++) {
     for (let cx = X0; cx < X0 + NX; cx++) {
-      chunks.set(chunkKey(cx, cz), buildChunk(seed, cx, cz, config))
+      chunks.set(chunkKey(cx, cz), buildChunk(seed, cx, 0, cz, config))
     }
   }
   // Vertical wall on global line `lineGX`, global row `gz`.

@@ -112,6 +112,22 @@ export const DEFAULT_WORLD_CONFIG = {
     },
   },
 
+  // Stairs through the slab between adjacent layers (v8). A slab contract —
+  // pure function of (ROOT seed, cx, cz, lower cy) — tells both layers whether
+  // and where a straight-run stairwell pierces the slab. `chance` gates most
+  // stairs; the fallback elects exactly one chunk per districtChunks² block per
+  // slab so every floor ALWAYS has an up- and a down-stair within Chebyshev
+  // 2*districtChunks-1 chunks (no stranded floors). Tests may set
+  // `enabled: false` to restore exact v7-style plan slices.
+  stairs: {
+    enabled: true,
+    chance: 0.3,
+    districtChunks: 4,
+    salt: 0x51ab, // existence gate stream
+    posSalt: 0x9d2f, // position/orientation stream
+    fallbackSalt: 0xfa11, // fallback-chunk election stream
+  },
+
   // Exit / spawn clearing radius (cells).
   exit: { clearRadius: 1 },
 }

@@ -206,6 +206,46 @@ export class AudioBus {
     }
   }
 
+  // A nearby entity's footfall (v8). `muffled` renders it through a slab —
+  // lowpassed, heavier and softer: the "something is on the stairs above you"
+  // cue when the Pursuer closes in from another floor.
+  entityThump(vol = 0.06, muffled = false) {
+    if (!this.started || this.voices >= 14) return
+    const ctx = this.ctx
+    const src = ctx.createBufferSource()
+    src.buffer = this.whiteBuf
+    src.loop = true
+    src.playbackRate.value = 0.35 + Math.random() * 0.15 // heavier than a footstep
+    const f = ctx.createBiquadFilter()
+    if (muffled) {
+      f.type = 'lowpass'
+      f.frequency.value = 260 + Math.random() * 80
+      f.Q.value = 0.5
+    } else {
+      f.type = 'bandpass'
+      f.frequency.value = 480 + Math.random() * 160
+      f.Q.value = 0.8
+    }
+    const g = ctx.createGain()
+    src.connect(f)
+    f.connect(g)
+    g.connect(this.sfxGain)
+    const t = ctx.currentTime
+    const v = muffled ? vol * 0.7 : vol
+    g.gain.setValueAtTime(0, t)
+    g.gain.linearRampToValueAtTime(v, t + 0.008)
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18)
+    src.start(t)
+    src.stop(t + 0.22)
+    this.voices++
+    src.onended = () => {
+      this.voices--
+      src.disconnect()
+      f.disconnect()
+      g.disconnect()
+    }
+  }
+
   _distantEvent() {
     if (!this.started) return
     const ctx = this.ctx

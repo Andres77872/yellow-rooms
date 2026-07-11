@@ -8,13 +8,26 @@ export const CHUNK_WORLD = CELL * CHUNK // world units per chunk side (42)
 
 export const WALL_H = 3.2 // low drop-ceiling height (claustrophobic)
 
+// --- Layers (v8: floors stacked along Y) ---
+// The world is a stack of unbounded floors; chunk keys are (cx, cy, cz). The
+// slab between layer cy and cy+1 is SLAB_T thick and owned by the LOWER layer
+// (the same lower-coordinate convention border contracts use). Floor surface
+// of layer cy sits at cy*LAYER_H; its ceiling at cy*LAYER_H + WALL_H.
+export const SLAB_T = 0.4 // slab thickness between floors
+export const LAYER_H = WALL_H + SLAB_T // 3.6 — floor-to-floor height
+
 // (Interior layout is the thin-wall edge model — see ChunkData.js / zones/. The
 // zone ids and tunables live in config.js + the ZONE_* constants below.)
 
 // --- Streaming ---
 export const LOAD_RADIUS = 4 // chunks loaded around the player (Chebyshev)
 export const UNLOAD_RADIUS = 5 // hysteresis: dispose only beyond this
-export const MAX_BUILDS_PER_FRAME = 2 // amortise generation across frames
+// Vertical radii are small: another floor is only visible through a stair
+// aperture, and only cy±1 is reachable before a floor handoff re-centres the
+// load box. UNLOAD_RADIUS_Y 2 means oscillating on a staircase never rebuilds.
+export const LOAD_RADIUS_Y = 1 // layers loaded above/below the player
+export const UNLOAD_RADIUS_Y = 2 // vertical hysteresis
+export const MAX_BUILDS_PER_FRAME = 4 // amortise generation across frames (27-chunk rows with 3 layers)
 
 // --- Minimap (player-explored fog-of-war) ---
 // Reveal radius (in cells) around the player for the HUD minimap. Cells within
@@ -29,6 +42,18 @@ export const EYE_H = 1.7
 export const WALK_SPEED = 5.2
 export const SPRINT_SPEED = 8.6
 export const ACCEL = 60
+// Vertical movement (v8). The player is glued to groundHeightAt while grounded
+// (stairs are an analytic ramp, so walking them is pure snap-follow: the ramp
+// rises ~0.05u per physics substep, far under GROUND_SNAP); gravity only runs
+// as a safety net when the ground drops away faster than GROUND_SNAP.
+export const GROUND_SNAP = 0.5 // max snap-to-ground per substep (doubles as climb rate)
+export const GRAVITY = 22
+export const MAX_FALL_SPEED = 30
+// Floor handoff hysteresis: the controller's floor index flips when |feetY -
+// floor*LAYER_H| exceeds this. At 2.8 the flip happens mid-ramp, 1.33u along
+// the ramp axis from the one stamped edge the two layers' rasters disagree on
+// — minus the 0.58 box reach that leaves a 0.75u margin (locked by test).
+export const FLOOR_SWITCH_Y = 2.8
 
 // --- Camera / fog ---
 export const FOV = 72
@@ -94,6 +119,18 @@ export const LIGHT_INTENSITY = 3.0 // per-lamp warm contribution (linear, pre-gr
 // the shader, so set-membership changes are invisible rather than a pop.
 export const LAMP_QUERY_R = 60
 export const LAMP_FADE_BAND = 12
+// Cross-floor lamp policy (v8). Lamps are shadowless, so an unfiltered lamp on
+// another floor would shine straight through the slab (LIGHT_RANGE 11 >>
+// LAYER_H 3.6). The pool is therefore floor-FILTERED: same-floor lamps always
+// count; cy±1 lamps count only within LIGHT_SPILL_R of a stair aperture (so
+// light visibly spills down stairwells — a beacon, and physically plausible);
+// farther floors never. A lamp beyond LIGHT_RANGE of the hole couldn't reach
+// through it anyway, so spill radius = LIGHT_RANGE loses nothing.
+export const LIGHT_SPILL_R = LIGHT_RANGE
+// Off-floor chunks render only within this Chebyshev ring of a chunk column
+// holding a stair aperture to the player's floor (plus a full-floor override
+// while the player is inside a stair footprint). See ChunkManager visibility.
+export const APERTURE_VIS_CHUNKS = 1
 
 // Cel ramp for the per-lamp N·L banding (see render/gradientRamp.js). CEL_BANDS
 // hard steps on the lit side; CEL_FLOOR keeps a tiny warm step on grazing walls.
@@ -189,6 +226,21 @@ export const PURSUER_STUCK_REPATH = 0.4 // seconds of ~zero progress before forc
 export const PURSUER_STUCK_RELOCATE = 2.0 // seconds of ~zero progress before a relocate (cooldown-gated)
 export const PURSUER_PATH_LEASH = 34 // pathfinder search leash in CELLS (~102 u, covers the full leash)
 
+// --- Stairs / 3D navigation (v8) -------------------------------------
+// A stair is a straight run: 1 cell wide x 3 walkable cells on the lower layer
+// (flat landing + 2 ascending run cells, rise LAYER_H over 2*CELL ≈ 31°), with
+// the exit cell on the upper layer past the ramp top. See world/slab.js.
+export const STAIR_STEPS = 12 // rendered step boxes per run (0.3 rise each)
+export const STAIR_RUN = 3 // Manhattan cells landing->exit (the A* stair-edge length)
+export const STAIR_LAYER_COST = 2 // extra A* cost per floor change (prefer same-floor routes)
+export const PATH_VLEASH = 2 // max |dcy| a single A* search attempts
+export const CROSS_FLOOR_NODE_MULT = 2 // A* node-budget multiplier when floors differ
+export const ENEMY_STAIR_SPEED = 0.8 // enemy speed multiplier on ramps (player keeps a small edge)
+// Stairwell sight aperture: parties one floor apart can only see each other
+// when BOTH are within this radius of the same stair hole (with per-floor LOS
+// to it) — "it's coming up the stairs" reads, nothing leaks through slabs.
+export const STAIR_SIGHT_R = 6
+
 // Screen-space lamp shadows (raymarch the depth buffer toward the nearest lamps).
 // Full-height pillars cast lateral floor shadows from overhead-but-offset lamps,
 // which a top-down map can't capture — so we trace the G-buffer depth instead.
@@ -260,8 +312,9 @@ export const OUTLINE_FADE_FAR = 0.95
 
 // --- Thin-wall model (refactor) ---------------------------------------
 // World-gen version: bump whenever the algorithm changes the bytes a seed
-// produces. Guards the golden determinism test.
-export const WORLD_GEN_VERSION = 7
+// produces. Guards the golden determinism test. v8: stacked floors — per-layer
+// seeds, slab contracts, stair stamps.
+export const WORLD_GEN_VERSION = 8
 
 // Interior zones, selected by the low-frequency region field. The registry in
 // zones/index.js maps these ids to generator modules.
@@ -291,9 +344,12 @@ export const DOOR_SALT = 0x0d00 | 0 // fixed hash salt for the per-door leaf/hin
 
 // Helpers ---------------------------------------------------------------
 export const idx = (lx, lz) => lz * CHUNK + lx
-export const chunkKey = (cx, cz) => `${cx},${cz}`
+export const chunkKey = (cx, cz) => `${cx},${cz}` // 2D (per-layer internals: plans, audits)
+export const chunkKey3 = (cx, cy, cz) => `${cx},${cy},${cz}` // streamed-chunk key
 export const worldToChunk = (w) => Math.floor(w / CHUNK_WORLD)
 export const worldToCell = (w) => Math.floor(w / CELL)
+export const worldToLayer = (wy) => Math.floor(wy / LAYER_H) // layer containing a world height
+export const layerY = (cy) => cy * LAYER_H // floor surface height of layer cy
 
 // Floor-modulo that works for negative operands (global lattice phases).
 export const fmod = (n, m) => ((n % m) + m) % m

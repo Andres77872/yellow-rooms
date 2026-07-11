@@ -2,6 +2,8 @@ import * as THREE from 'three'
 import { LIGHT_INTENSITY } from '../world/constants.js'
 import { Phase } from '../core/GameState.js'
 import { hasLineOfSight } from '../player/collision.js'
+import { groundHeightAt } from '../player/ground.js'
+import { sightGate } from '../entities/sense.js'
 import { WorldMapTool } from './WorldMapTool.js'
 import { LightTool } from './LightTool.js'
 import { AiTool } from './AiTool.js'
@@ -244,13 +246,14 @@ export class DebugMode {
     if (this.lightRoom) this.lightRoom.rebuildLamps()
   }
 
-  placeStalker(wx, wz) {
+  placeStalker(wx, wz, cy = this.engine.controller.floor) {
     const e = this.engine
-    if (e.cm.isBlocked(wx, wz)) return
+    if (e.cm.isBlocked(wx, wz, cy)) return
     const s = e.stalker
     s.active = true
-    s.pos.set(wx, s.pos.y, wz)
-    s.mesh.position.set(wx, s.mesh.scale.y * 0.95, wz)
+    s.cy = cy
+    s.pos.set(wx, groundHeightAt(e.cm, wx, wz, cy), wz)
+    s.mesh.position.set(wx, s.pos.y + s.mesh.scale.y * 0.95, wz)
     s.mesh.visible = true
   }
 
@@ -274,17 +277,22 @@ export class DebugMode {
     const p = e.controller.pos
     const cam = e.camera
     const dx = p.x - s.pos.x
+    const dy = (p.y || 0) - s.pos.y
     const dz = p.z - s.pos.z
-    const dist = Math.hypot(dx, dz)
+    const dist = Math.hypot(dx, dy, dz)
     this._proj.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse)
     this._frustum.setFromProjectionMatrix(this._proj)
-    this._v.set(s.pos.x, 1.6, s.pos.z)
+    this._v.set(s.pos.x, s.pos.y + 1.6, s.pos.z)
     const inFrustum = this._frustum.containsPoint(this._v)
-    const los = hasLineOfSight(e.cm, p.x, p.z, s.pos.x, s.pos.z)
-    const seen = s.active && dist < s.sightDist && inFrustum && los
+    const sameFloor = s.cy === e.controller.floor
+    const los =
+      sameFloor && hasLineOfSight(e.cm, p.x, p.z, s.pos.x, s.pos.z, s.cy)
+    // Delegate the full rule (incl. the stairwell-aperture case) to the real
+    // gate so the debug readout can never drift from what the AI actually uses.
+    const seen = s.active && sightGate(e.cm, cam, s.pos, s.cy, p, e.controller.floor, s.sightDist)
     let tension = Math.max(0, 1 - dist / 22)
     if (seen) tension = Math.min(1, tension + 0.35)
-    this.aiFlags = { dist, inFrustum, los, seen, tension }
+    this.aiFlags = { dist, inFrustum, los, seen, tension, dcy: s.cy - e.controller.floor }
     this.aiSeen = seen
   }
 

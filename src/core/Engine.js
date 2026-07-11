@@ -37,6 +37,7 @@ import { Minimap } from '../ui/Minimap.js'
 import { ExploredMap } from '../world/ExploredMap.js'
 import { hashStr } from '../world/core/hash.js'
 import { RNG } from '../world/core/rng.js'
+import { chunkStairs, stairStrip } from '../world/slab.js'
 
 // Make color management explicit (it defaults to true in three r0.185). With it
 // on, `new THREE.Color(hex)` already converts the sRGB hex into the linear
@@ -88,6 +89,9 @@ export class Engine {
     this.controller = new Controller(camera, renderer.domElement, this.state)
     this.controller.sensitivity = this.settings.get('sensitivity')
     this.controller.setBobEnabled(this.settings.get('bob'))
+    // Floor handoff re-gates cross-floor chunk visibility the same frame.
+    this._transitStair = null
+    this.controller.onFloorChange = (f) => this.cm.updateVisibility(f, this._transitStair)
     this.controller.flashlight = null // handled in the lighting pass, not a real light
 
     this.audio = new AudioBus(camera)
@@ -225,9 +229,36 @@ export class Engine {
     let ecx = Math.round(Math.cos(ang) * dist)
     let ecz = Math.round(Math.sin(ang) * dist)
     if (Math.abs(ecx) < 2 && Math.abs(ecz) < 2) ecx += 5
-    const elx = r.int(3, CHUNK - 4)
-    const elz = r.int(3, CHUNK - 4)
-    cm.setExit(ecx, ecz, elx, elz)
+    let elx = r.int(3, CHUNK - 4)
+    let elz = r.int(3, CHUNK - 4)
+    // Keep the exit clearing off the host chunk's stair strips (v8): displace
+    // it deterministically to the next free cell of the interior box. The
+    // stamp's protected edges make a miss topology-safe; this is about the
+    // exit not sitting inside a stairwell mouth. Margin 2 preferred, 1 always
+    // satisfiable (the two strips + halos can't cover the whole box at 1).
+    {
+      const { up, down } = chunkStairs(cm.seed, ecx, ecz, 0, cm.config)
+      const strips = []
+      if (up.hasStair) strips.push(...stairStrip(up))
+      if (down.hasStair) strips.push(...stairStrip(down))
+      const clearOf = (lx, lz, m) =>
+        strips.every((c) => Math.max(Math.abs(c.lx - lx), Math.abs(c.lz - lz)) > m)
+      const span = CHUNK - 6 // interior box [3..CHUNK-4]
+      search: for (const margin of [2, 1]) {
+        const start = (elz - 3) * span + (elx - 3)
+        for (let i = 0; i < span * span; i++) {
+          const j = (start + i) % (span * span)
+          const lx = 3 + (j % span)
+          const lz = 3 + ((j / span) | 0)
+          if (clearOf(lx, lz, margin)) {
+            elx = lx
+            elz = lz
+            break search
+          }
+        }
+      }
+    }
+    cm.setExit(ecx, 0, ecz, elx, elz)
     this.exitTarget.set(
       ecx * CHUNK_WORLD + (elx + 0.5) * CELL,
       1.35,
@@ -235,9 +266,14 @@ export class Engine {
     )
 
     cm.reset()
+    // Belt-and-braces with cm.reset()'s visibility reset: the transit cache
+    // must also drop, or the first tick's stairAt(spawn)===null comparison
+    // would skip the re-gate after a mid-transit death.
+    this._transitStair = null
+    cm.updateVisibility(0, null)
     this.explored.reset() // fresh fog per level/seed (cm.seed/exit/clearings are set above)
     const yaw = Math.atan2(-(this.exitTarget.x - SPAWN), -(this.exitTarget.z - SPAWN))
-    this.controller.teleport(SPAWN, SPAWN, yaw)
+    this.controller.teleport(SPAWN, SPAWN, 0, yaw)
     this.stalker.reset(lvl, this.controller.pos)
     this.pursuer.reset(lvl, this.controller.pos)
     // Synchronous prewarm behind the title/transition overlay: the whole load
@@ -317,28 +353,59 @@ export class Engine {
     for (let i = 0; i < steps; i++) controller.step(dt / steps, cm)
     controller.applyFrame(dt)
     this._updateCameraMatrices()
-    cm.update(controller.pos.x, controller.pos.z)
+    cm.update(controller.pos.x, controller.pos.z, controller.floor)
+    // Cross-floor visibility: recompute when the player's stair-transit state
+    // changes (entering/leaving a stair footprint flips the far floor fully
+    // visible BEFORE the eye crosses the slab plane; floor changes re-gate via
+    // onFloorChange). Cheap: one stairAt lookup per tick.
+    const transit = cm.stairAt(
+      Math.floor(controller.pos.x / CELL),
+      Math.floor(controller.pos.z / CELL),
+      controller.floor
+    )
+    if (transit !== this._transitStair) {
+      this._transitStair = transit
+      cm.updateVisibility(controller.floor, transit)
+    }
     // Track explored area ALWAYS (the toggle gates only drawing); skip while
     // debug mode parks/teleports the player so it can't pollute the real map.
-    if (!this.debugMode.active) this.explored.update(controller.pos.x, controller.pos.z)
-    this.lightField.update(dt, controller.pos.x, controller.pos.z, cm)
+    if (!this.debugMode.active) {
+      this.explored.update(controller.pos.x, controller.pos.z, controller.floor)
+    }
+    this.lightField.update(dt, controller.pos.x, controller.pos.z, controller.floor, cm)
     this.deferred.lightUniforms.uFlashOn.value = state.flashlightOn ? 1 : 0
 
     // The flashlight freezes the entity, but only until the player has stared
     // too long (exposure past the level-scaled limit) — then the freeze fails.
     const stareLimit = this._stareLimit()
-    const ctx = { flashlightOn: state.flashlightOn, canFreeze: state.exposure < stareLimit }
+    const ctx = {
+      flashlightOn: state.flashlightOn,
+      canFreeze: state.exposure < stareLimit,
+      playerCy: controller.floor,
+    }
     const res = stalker.update(dt, controller.pos, this.camera, ctx)
     const res2 = this.pursuer.update(dt, controller.pos, this.camera, ctx)
     // Combine both threats: closest drives proximity-slow, either-seen stresses
     // sanity, tension is the max. Beam/stare stay Stalker-only (pass it first).
     const merged = mergeEnemy(res, res2)
+    // Slab-muffled footfalls (v8): a Pursuer closing in from ANOTHER floor is
+    // invisible (the slab blocks sight), so it announces itself — heavy,
+    // lowpassed thumps through the ceiling/floor, quickening as it nears.
+    if (this.pursuer.active && this.pursuer.cy !== controller.floor && res2.dist < 14) {
+      this._thumpT = (this._thumpT ?? 0) - dt
+      if (this._thumpT <= 0) {
+        this.audio.entityThump(0.05 + 0.04 * (1 - res2.dist / 14), true)
+        this._thumpT = 0.55
+      }
+    } else {
+      this._thumpT = 0
+    }
     this._updateProximity(merged)
     this._updateStare(dt, res, stareLimit) // beam/exposure is the Stalker's alone
     audio.setTension(merged.tension)
     // Fluorescent hum follows the lights: silent in the dark, swelling as the
     // player nears a lit lamp. Remap lightAt's 0.1..1 to a clean 0..1.
-    const lightHere = cm.lightAt(controller.pos.x, controller.pos.z)
+    const lightHere = cm.lightAt(controller.pos.x, controller.pos.z, controller.floor)
     audio.setHumProximity(
       Math.min(1, Math.max(0, (lightHere - STALKER_AMBIENT) / (1 - STALKER_AMBIENT)))
     )
@@ -350,8 +417,14 @@ export class Engine {
     if (this.minimap.visible) {
       const e = cm.exit
       const exitRevealed =
-        !!e && this.explored.isRevealed(e.cx * CHUNK + e.lx, e.cz * CHUNK + e.lz)
-      this.minimap.update({ controller, exit: e, exitRevealed, store: this.explored })
+        !!e && this.explored.isRevealed(e.cx * CHUNK + e.lx, e.cz * CHUNK + e.lz, e.cy)
+      this.minimap.update({
+        controller,
+        exit: e,
+        exitRevealed,
+        store: this.explored,
+        floor: controller.floor,
+      })
     }
     this._applyFX()
 
@@ -430,8 +503,10 @@ export class Engine {
     const dist = Math.hypot(dx, dz)
     const fAng = Math.atan2(-Math.sin(this.controller.yaw), -Math.cos(this.controller.yaw))
     const eAng = Math.atan2(dx, dz)
-    this.exitInfo = { dist, relAngle: norm(eAng - fAng) }
-    if (dist < 1.8) this._levelComplete()
+    this.exitInfo = { dist, relAngle: norm(eAng - fAng), floorDelta: 0 - this.controller.floor }
+    // The exit lives on layer 0; the floor gate stops a player one slab above
+    // the exit's XZ from completing the level through the ceiling.
+    if (dist < 1.8 && this.controller.floor === 0) this._levelComplete()
   }
 
   _applyFX() {
@@ -496,7 +571,7 @@ export class Engine {
         this.camera.position.set(SPAWN, EYE_H, SPAWN)
         this.camera.rotation.set(0, this._titleYaw, 0, 'YXZ')
         this.cm.update(SPAWN, SPAWN)
-        this.lightField.update(dt, SPAWN, SPAWN, this.cm)
+        this.lightField.update(dt, SPAWN, SPAWN, 0, this.cm)
       }
       this._updateFlicker(dt)
       this._updateCameraMatrices()

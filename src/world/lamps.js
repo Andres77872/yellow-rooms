@@ -46,6 +46,7 @@ export function placeLights(data, ctx) {
         continue
       }
       if (data.colAt(x, z)) continue // no lamp inside a column
+      if (data.hasCeilHole(x, z)) continue // no ceiling to mount on (stair hole)
       const h = hash2i((seed ^ fixtureSalt) | 0, gx, gz)
       if (h / 4294967296 >= fixtureChance) continue
       // A separately salted coordinate hash keeps fixture presence and failure

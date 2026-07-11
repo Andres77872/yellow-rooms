@@ -1,4 +1,5 @@
-import { CELL, CHUNK, FOV, COL_HALF, chunkKey } from '../world/constants.js'
+import { CELL, CHUNK, FOV, COL_HALF, chunkKey3 } from '../world/constants.js'
+import { STAIR_DX, STAIR_DZ } from '../world/slab.js'
 
 // Player-explored HUD minimap — a small circular "locator" disc, north-up and
 // player-centric, that draws ONLY the fog-of-war cells the player has seen (fed
@@ -71,7 +72,11 @@ export class Minimap {
     return SIZE / 2 + (wz - pz) * SCALE
   }
 
-  update({ controller, exit, exitRevealed, store }) {
+  // v8: `floor` filters everything to the player's current layer — each floor
+  // has its own fog (ExploredMap keys per cy), stairs get ▲/▼ glyphs, and a
+  // floor indicator sits in the disc. Changing floors just swaps which masks
+  // are read; the old floor's map is preserved for the way back.
+  update({ controller, exit, exitRevealed, store, floor = 0 }) {
     if (!this.visible) return
     const ctx = this.ctx
     const px = controller.pos.x
@@ -97,7 +102,7 @@ export class Minimap {
     ctx.fillStyle = C.seen
     for (let gz = gz0; gz <= gz1; gz++) {
       for (let gx = gx0; gx <= gx1; gx++) {
-        if (!store.isRevealed(gx, gz)) continue
+        if (!store.isRevealed(gx, gz, floor)) continue
         ctx.fillRect(this._sx(gx * CELL, px), this._sy(gz * CELL, pz), tile, tile)
       }
     }
@@ -109,24 +114,24 @@ export class Minimap {
     ctx.beginPath()
     for (let gz = gz0; gz <= gz1; gz++) {
       for (let gx = gx0; gx <= gx1; gx++) {
-        if (!store.isRevealed(gx, gz)) continue
+        if (!store.isRevealed(gx, gz, floor)) continue
         const xL = this._sx(gx * CELL, px)
         const xR = this._sx((gx + 1) * CELL, px)
         const yT = this._sy(gz * CELL, pz)
         const yB = this._sy((gz + 1) * CELL, pz)
-        if (store.wallVAt(gx, gz)) {
+        if (store.wallVAt(gx, gz, floor)) {
           ctx.moveTo(xL, yT)
           ctx.lineTo(xL, yB)
         }
-        if (store.wallVAt(gx + 1, gz)) {
+        if (store.wallVAt(gx + 1, gz, floor)) {
           ctx.moveTo(xR, yT)
           ctx.lineTo(xR, yB)
         }
-        if (store.wallHAt(gx, gz)) {
+        if (store.wallHAt(gx, gz, floor)) {
           ctx.moveTo(xL, yT)
           ctx.lineTo(xR, yT)
         }
-        if (store.wallHAt(gx, gz + 1)) {
+        if (store.wallHAt(gx, gz + 1, floor)) {
           ctx.moveTo(xL, yB)
           ctx.lineTo(xR, yB)
         }
@@ -139,28 +144,66 @@ export class Minimap {
     const csz = Math.max(2, COL_HALF * 2 * SCALE)
     for (let gz = gz0; gz <= gz1; gz++) {
       for (let gx = gx0; gx <= gx1; gx++) {
-        if (!store.isRevealed(gx, gz)) continue
-        if (!store.columnAt(gx, gz)) continue
+        if (!store.isRevealed(gx, gz, floor)) continue
+        if (!store.columnAt(gx, gz, floor)) continue
         const x = this._sx((gx + 0.5) * CELL, px)
         const y = this._sy((gz + 0.5) * CELL, pz)
         ctx.fillRect(x - csz / 2, y - csz / 2, csz, csz)
       }
     }
 
-    // 4) Lit lamps in revealed cells — faint warm glow (the fluorescent motif).
-    this._drawLamps(store, px, pz, gx0, gx1, gz0, gz1)
+    // 4) Stair glyphs on revealed cells: ▲ gold at an up-stair's landing,
+    // ▼ mint at a down-stair's exit — discovered stairwells are the primary
+    // wayfinding anchors of an infinite layered map.
+    this._drawStairs(store, floor, px, pz, gx0, gx1, gz0, gz1)
 
-    // 5) Exit — only once its cell has actually been discovered.
-    if (exitRevealed && exit) this._drawExit(exit, px, pz)
+    // 5) Lit lamps in revealed cells — faint warm glow (the fluorescent motif).
+    this._drawLamps(store, floor, px, pz, gx0, gx1, gz0, gz1)
 
-    // 6) Player wedge + dot at the disc centre.
+    // 6) Exit — only once its cell has actually been discovered, and only on
+    // its own floor (the exit lives on layer 0).
+    if (exitRevealed && exit && (exit.cy ?? 0) === floor) this._drawExit(exit, px, pz)
+
+    // 7) Player wedge + dot at the disc centre.
     this._drawPlayer(controller.yaw)
 
-    // 7) Scope vignette + N tick.
-    this._drawFrame()
+    // 8) Scope vignette + N tick + floor indicator.
+    this._drawFrame(floor)
   }
 
-  _drawLamps(store, px, pz, gx0, gx1, gz0, gz1) {
+  _drawStairs(store, floor, px, pz, gx0, gx1, gz0, gz1) {
+    const ctx = this.ctx
+    ctx.save()
+    for (let gz = gz0; gz <= gz1; gz++) {
+      for (let gx = gx0; gx <= gx1; gx++) {
+        if (!store.isRevealed(gx, gz, floor)) continue
+        const s = store.stairAt(gx, gz, floor)
+        if (!s) continue
+        // One glyph per stair: at the landing (up) / at the exit cell (down).
+        const up = s.part === 'landing'
+        if (!up && s.part !== 'exit') continue
+        const x = this._sx((gx + 0.5) * CELL, px)
+        const y = this._sy((gz + 0.5) * CELL, pz)
+        // Chevron points along the walking direction: ascent for ▲ (gold),
+        // toward the hole for ▼ (mint, i.e. against the ascent direction).
+        const dx = STAIR_DX[s.dir] * (up ? 1 : -1)
+        const dz = STAIR_DZ[s.dir] * (up ? 1 : -1)
+        const r = 4
+        ctx.fillStyle = up ? C.lamp : C.exit
+        ctx.shadowColor = up ? C.lampGlow : C.exitGlow
+        ctx.shadowBlur = 3
+        ctx.beginPath()
+        ctx.moveTo(x + dx * r, y + dz * r) // tip
+        ctx.lineTo(x - dz * r * 0.8 - dx * r * 0.6, y + dx * r * 0.8 - dz * r * 0.6)
+        ctx.lineTo(x + dz * r * 0.8 - dx * r * 0.6, y - dx * r * 0.8 - dz * r * 0.6)
+        ctx.closePath()
+        ctx.fill()
+      }
+    }
+    ctx.restore()
+  }
+
+  _drawLamps(store, floor, px, pz, gx0, gx1, gz0, gz1) {
     const ctx = this.ctx
     const c0x = Math.floor(gx0 / CHUNK)
     const c1x = Math.floor(gx1 / CHUNK)
@@ -172,13 +215,13 @@ export class Minimap {
     ctx.shadowBlur = 4
     for (let cz = c0z; cz <= c1z; cz++) {
       for (let cx = c0x; cx <= c1x; cx++) {
-        const e = store.chunks.get(chunkKey(cx, cz))
+        const e = store.chunks.get(chunkKey3(cx, floor, cz))
         if (!e || !e.data) continue
         for (const l of e.data.lamps) {
           if (!l.lit) continue
           const gx = cx * CHUNK + l.lx
           const gz = cz * CHUNK + l.lz
-          if (!store.isRevealed(gx, gz)) continue
+          if (!store.isRevealed(gx, gz, floor)) continue
           const x = this._sx((l.lx + 0.5) * CELL + cx * CHUNK * CELL, px)
           const y = this._sy((l.lz + 0.5) * CELL + cz * CHUNK * CELL, pz)
           ctx.beginPath()
@@ -236,7 +279,7 @@ export class Minimap {
     ctx.restore()
   }
 
-  _drawFrame() {
+  _drawFrame(floor = 0) {
     const ctx = this.ctx
     const c = SIZE / 2
     // Soft scope falloff toward the rim.
@@ -257,5 +300,9 @@ export class Minimap {
     ctx.moveTo(c, 14)
     ctx.lineTo(c, 19)
     ctx.stroke()
+    // Floor indicator: F0 ground, F2 above, B1 below (basement).
+    ctx.fillStyle = C.tick
+    ctx.textBaseline = 'bottom'
+    ctx.fillText(floor >= 0 ? `F${floor}` : `B${-floor}`, c, SIZE - 5)
   }
 }

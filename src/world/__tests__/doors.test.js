@@ -11,7 +11,7 @@ function wallLineV(data, lx) {
 
 describe('collectDoorways', () => {
   it('finds a single-cell gap punched through a wall line', () => {
-    const data = new ChunkData(0, 0, ZONE_OFFICE)
+    const data = new ChunkData(0, 0, 0, ZONE_OFFICE)
     wallLineV(data, 5)
     data.setPassageV(5, 7, PASSAGE_DOOR)
     const doors = collectDoorways(data, 1)
@@ -20,18 +20,18 @@ describe('collectDoorways', () => {
   })
 
   it('ignores wide gaps (transition mouths) and fully open lines', () => {
-    const data = new ChunkData(0, 0, ZONE_OFFICE)
+    const data = new ChunkData(0, 0, 0, ZONE_OFFICE)
     wallLineV(data, 5)
     data.setPassageV(5, 6, PASSAGE_WIDE)
     data.setPassageV(5, 7, PASSAGE_WIDE)
     data.setPassageV(5, 8, PASSAGE_WIDE)
     expect(collectDoorways(data, 1).length).toBe(0)
     // A chunk with no interior walls at all -> nothing to frame.
-    expect(collectDoorways(new ChunkData(0, 0, ZONE_OFFICE), 1).length).toBe(0)
+    expect(collectDoorways(new ChunkData(0, 0, 0, ZONE_OFFICE), 1).length).toBe(0)
   })
 
   it('detects horizontal doorways too', () => {
-    const data = new ChunkData(0, 0, ZONE_OFFICE)
+    const data = new ChunkData(0, 0, 0, ZONE_OFFICE)
     for (let x = 0; x < CHUNK; x++) data.setH(x, 4, 1)
     data.setPassageH(3, 4, PASSAGE_DOOR)
     const doors = collectDoorways(data, 1)
@@ -40,7 +40,7 @@ describe('collectDoorways', () => {
   })
 
   it('is deterministic, gates leaves on the fraction, and hinges into a real wall', () => {
-    const data = new ChunkData(2, -3, ZONE_OFFICE)
+    const data = new ChunkData(2, 0, -3, ZONE_OFFICE)
     wallLineV(data, 5)
     data.setPassageV(5, 7, PASSAGE_DOOR)
     const a = collectDoorways(data, 1)
@@ -54,14 +54,14 @@ describe('collectDoorways', () => {
   })
 
   it('does not infer a semantic door from an arbitrary raster gap', () => {
-    const data = new ChunkData(0, 0, ZONE_OFFICE)
+    const data = new ChunkData(0, 0, 0, ZONE_OFFICE)
     wallLineV(data, 5)
     data.setV(5, 7, 0)
     expect(collectDoorways(data, 1)).toEqual([])
   })
 
   it('turns an unsupported frame into a wide threshold after late carving', () => {
-    const data = new ChunkData(0, 0, ZONE_OFFICE)
+    const data = new ChunkData(0, 0, 0, ZONE_OFFICE)
     data.setPassageV(5, 7, PASSAGE_DOOR)
     expect(normalizeDoorPassages(data)).toBe(1)
     expect(data.passageVAt(5, 7)).toBe(PASSAGE_WIDE)

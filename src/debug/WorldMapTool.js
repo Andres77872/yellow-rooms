@@ -7,7 +7,7 @@ import {
   ZONE_WAREHOUSE,
   COL_HALF,
   FOV,
-  chunkKey,
+  chunkKey3,
   worldToCell,
 } from '../world/constants.js'
 import { generateChunk } from '../world/generate.js'
@@ -27,11 +27,12 @@ const ZONE_TINT = {
   [ZONE_WAREHOUSE]: 'rgba(120,110,60,.06)',
 }
 
-// World-gen top-down map for the thin-wall model. Draws wall edges, columns,
-// border openings, lamps (lit/dead), the exit and live entities. LIVE reads
-// loaded chunks; EXPLORE regenerates any region for an arbitrary seed
-// (generation is a pure function of (seed, cx, cz)). A flood-fill validator
-// (shared with the tests) proves traversability.
+// World-gen top-down map for the thin-wall model, one floor (v8 layer) at a
+// time. Draws wall edges, columns, border openings, lamps (lit/dead), stair
+// glyphs, the exit and live entities. LIVE reads loaded chunks; EXPLORE
+// regenerates any floor for an arbitrary seed (generation is a pure function
+// of (seed, cx, cy, cz)). A flood-fill validator (shared with the tests)
+// proves per-floor traversability.
 export class WorldMapTool {
   constructor(engine, dbg) {
     this.engine = engine
@@ -42,7 +43,9 @@ export class WorldMapTool {
     this.seams = false // seam-openness / continuity overlay
     this.previewSeed = engine.cm.seed
     this.level = engine.state.level
-    this._gen = new Map() // explore cache: `${seed}:cx,cz` -> ChunkData
+    this.floor = 0 // cy of the drawn layer
+    this.followFloor = true // track engine.controller.floor each update
+    this._gen = new Map() // explore cache: `${seed}:cx,cy,cz` -> ChunkData
     this._hover = null // {wx,wz}
     this._build()
   }
@@ -86,6 +89,23 @@ export class WorldMapTool {
     this._seedRow.el.appendChild(seedBtns.el)
     this._seedRow.el.style.display = 'none'
     ctl.body.appendChild(this._seedRow.el)
+
+    // Floor stepper (v8 layered world). Stepping detaches from the player;
+    // the follow toggle re-attaches.
+    this._floorRead = readout('floor')
+    ctl.body.appendChild(
+      buttonRow('floor', [
+        button({ label: '−', onClick: () => this._stepFloor(-1) }),
+        button({ label: '+', onClick: () => this._stepFloor(1) }),
+      ]).el
+    )
+    ctl.body.appendChild(this._floorRead.el)
+    this._follow = toggle({
+      label: 'follow player floor',
+      value: this.followFloor,
+      onChange: (v) => (this.followFloor = v),
+    })
+    ctl.body.appendChild(this._follow.el)
 
     ctl.body.appendChild(
       slider({
@@ -160,6 +180,12 @@ export class WorldMapTool {
     this.view.cz = p.z
   }
 
+  _stepFloor(d) {
+    this.followFloor = false
+    this._follow.set(false)
+    this.floor += d
+  }
+
   _bindCanvas() {
     const c = this.canvas
     let dragging = false
@@ -199,7 +225,7 @@ export class WorldMapTool {
       if (!this.dbg.aiPlace) return
       const r = c.getBoundingClientRect()
       const w = this._screenToWorld(e.clientX - r.left, e.clientY - r.top)
-      this.engine.debugMode.placeStalker(w.wx, w.wz)
+      this.engine.debugMode.placeStalker(w.wx, w.wz, this.floor)
     })
   }
 
@@ -217,15 +243,16 @@ export class WorldMapTool {
     return LOGH / 2 + (wz - this.view.cz) * this.view.scale
   }
 
-  // Returns the ChunkData for a chunk, or null if unknown (LIVE & unloaded).
+  // Returns the ChunkData for a chunk on the drawn floor, or null if unknown
+  // (LIVE & unloaded).
   _chunkData(cx, cz) {
     if (this.source === 0) {
-      return this.engine.cm.chunks.get(chunkKey(cx, cz))?.data ?? null
+      return this.engine.cm.chunks.get(chunkKey3(cx, this.floor, cz))?.data ?? null
     }
-    const key = `${this.previewSeed}:${cx},${cz}`
+    const key = `${this.previewSeed}:${chunkKey3(cx, this.floor, cz)}`
     let g = this._gen.get(key)
     if (!g) {
-      g = generateChunk(this.previewSeed, cx, cz)
+      g = generateChunk(this.previewSeed, cx, this.floor, cz)
       this._gen.set(key, g)
     }
     return g
@@ -246,10 +273,23 @@ export class WorldMapTool {
     if (!d) return true
     return d.hAt(gx - cx * CHUNK, gz - cz * CHUNK) === 1
   }
+  // Is this cell a stair run (ramp) or hole (open slab) on the drawn floor?
+  // Mirrors pathfind's cellBlocked stair term with the tool's own data access
+  // (EXPLORE mode has no ChunkManager to query).
+  _stairBlocked(gx, gz) {
+    const cx = Math.floor(gx / CHUNK)
+    const cz = Math.floor(gz / CHUNK)
+    const d = this._chunkData(cx, cz)
+    if (!d) return false
+    const lx = gx - cx * CHUNK
+    const lz = gz - cz * CHUNK
+    return d.hasCeilHole(lx, lz) || d.hasFloorHole(lx, lz)
+  }
 
   onShow() {}
 
   update() {
+    if (this.followFloor) this.floor = this.engine.controller.floor
     const ctx = this.ctx
     const { cx, cz, scale } = this.view
     const halfW = LOGW / 2 / scale
@@ -291,10 +331,12 @@ export class WorldMapTool {
         ctx.fillStyle = ZONE_TINT[d.zone] || 'rgba(120,110,60,.05)'
         ctx.fillRect(this._sx(ox), this._sy(oz), CHUNK_WORLD * scale, CHUNK_WORLD * scale)
 
-        // Sealed-pocket overlay (cells unreached by the validator).
+        // Sealed-pocket overlay (cells unreached by the validator; stair
+        // run/hole cells are non-nodes and get the hatch glyph instead).
         if (reached) {
           for (let lz = 0; lz < CHUNK; lz++) {
             for (let lx = 0; lx < CHUNK; lx++) {
+              if (d.hasCeilHole(lx, lz) || d.hasFloorHole(lx, lz)) continue
               const gx = ccx * CHUNK + lx
               const gz = ccz * CHUNK + lz
               if (!reached.has(gx + ',' + gz)) {
@@ -341,6 +383,9 @@ export class WorldMapTool {
             }
           }
         }
+
+        // Stair glyphs (this floor's stairUp landing/run, stairDown hole/exit).
+        this._drawStairs(d, ox, oz)
 
         // Lamps.
         for (const l of d.lamps) {
@@ -389,7 +434,10 @@ export class WorldMapTool {
     this._stat.zones.set(
       `off ${zoneN[ZONE_OFFICE]} · pil ${zoneN[ZONE_PILLARS]} · whs ${zoneN[ZONE_WAREHOUSE]}`
     )
-    this._stat.conn.set(this.validate ? `${reached.size}/${openCount} open · ${sealed} sealed` : 'off')
+    this._floorRead.set(`cy ${this.floor}`)
+    this._stat.conn.set(
+      this.validate ? `cy ${this.floor} · ${reached.size}/${openCount} open · ${sealed} sealed` : 'off'
+    )
     this._stat.cont.set(
       cont ? `score ${cont.score.toFixed(2)} · ${cont.sealed} unsafe · plan variety ${cont.planVariety.toFixed(2)}` : 'off'
     )
@@ -480,6 +528,61 @@ export class WorldMapTool {
     }
   }
 
+  // Stair glyphs for one chunk of the drawn floor. The up-stair contributes
+  // its landing (gold up-triangle pointing along the ascent) and run cells;
+  // the down-stair its exit (hollow triangle pointing back down the flight)
+  // and hole cells. Run/hole cells get a subtle hatch — the slab is open
+  // there and they are not walkable on this floor.
+  _drawStairs(d, ox, oz) {
+    if (!d.stairUp && !d.stairDown) return
+    const ctx = this.ctx
+    const w = CELL * this.view.scale
+    ctx.strokeStyle = 'rgba(216,178,74,.35)'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    for (const s of [d.stairUp, d.stairDown]) {
+      if (!s) continue
+      for (const c of s.run) {
+        const x = this._sx(ox + c.lx * CELL)
+        const y = this._sy(oz + c.lz * CELL)
+        ctx.moveTo(x, y + w)
+        ctx.lineTo(x + w, y)
+        ctx.moveTo(x, y + w * 0.5)
+        ctx.lineTo(x + w * 0.5, y)
+        ctx.moveTo(x + w * 0.5, y + w)
+        ctx.lineTo(x + w, y + w * 0.5)
+      }
+    }
+    ctx.stroke()
+    if (d.stairUp) this._stairTri(ox, oz, d.stairUp.landing, d.stairUp.dir, false)
+    if (d.stairDown) this._stairTri(ox, oz, d.stairDown.exit, d.stairDown.dir, true)
+  }
+
+  // Triangle in `cell` pointing along the ascent dir (0=N,1=E,2=S,3=W).
+  // `down` flips it (a down-stair exit points back down the flight) and
+  // hollows it so up/down read apart at a glance.
+  _stairTri(ox, oz, cell, dir, down) {
+    const ctx = this.ctx
+    const x = this._sx(ox + (cell.lx + 0.5) * CELL)
+    const y = this._sy(oz + (cell.lz + 0.5) * CELL)
+    const r = Math.max(2.5, Math.min(6, CELL * this.view.scale * 0.35))
+    const ang = [-Math.PI / 2, 0, Math.PI / 2, Math.PI][dir] + (down ? Math.PI : 0)
+    const spread = Math.PI * 0.78
+    ctx.beginPath()
+    ctx.moveTo(x + Math.cos(ang) * r, y + Math.sin(ang) * r)
+    ctx.lineTo(x + Math.cos(ang + spread) * r, y + Math.sin(ang + spread) * r)
+    ctx.lineTo(x + Math.cos(ang - spread) * r, y + Math.sin(ang - spread) * r)
+    ctx.closePath()
+    if (down) {
+      ctx.strokeStyle = '#d8b24a'
+      ctx.lineWidth = 1.2
+      ctx.stroke()
+    } else {
+      ctx.fillStyle = '#d8b24a'
+      ctx.fill()
+    }
+  }
+
   _drawExit() {
     const ex = this.engine.cm.exit
     if (!ex) return
@@ -488,6 +591,7 @@ export class WorldMapTool {
     const x = this._sx(wx)
     const y = this._sy(wz)
     const ctx = this.ctx
+    if (ex.cy !== this.floor) ctx.globalAlpha = 0.35 // exit lives on another floor
     ctx.fillStyle = '#7fffa0'
     ctx.beginPath()
     ctx.moveTo(x, y - 5)
@@ -496,15 +600,19 @@ export class WorldMapTool {
     ctx.lineTo(x - 5, y)
     ctx.closePath()
     ctx.fill()
+    ctx.globalAlpha = 1
   }
 
   _drawEntities() {
     const ctx = this.ctx
-    const p = this.engine.controller.pos
-    const yaw = this.engine.controller.yaw
+    const ctrl = this.engine.controller
+    const p = ctrl.pos
+    const yaw = ctrl.yaw
     const px = this._sx(p.x)
     const pz = this._sy(p.z)
 
+    // Player wedge + dot, dimmed when the map shows a different floor.
+    if (ctrl.floor !== this.floor) ctx.globalAlpha = 0.35
     const ang = Math.atan2(-Math.cos(yaw), -Math.sin(yaw))
     const half = (FOV * Math.PI) / 180 / 2
     const len = 9 * this.view.scale
@@ -518,45 +626,87 @@ export class WorldMapTool {
     ctx.beginPath()
     ctx.arc(px, pz, 3, 0, Math.PI * 2)
     ctx.fill()
+    ctx.globalAlpha = 1
 
+    if (!this.dbg.aiOverlay) return
+
+    // Stalker: solid square on this floor (with the full spawn-band debug),
+    // hollow + floor-delta tag when it is above/below the drawn layer.
     const s = this.engine.stalker
-    if (!this.dbg.aiOverlay || (!s.active && !s.alwaysVisible)) return
-    const sx = this._sx(s.pos.x)
-    const sz = this._sy(s.pos.z)
+    if (s.active || s.alwaysVisible) {
+      const sx = this._sx(s.pos.x)
+      const sz = this._sy(s.pos.z)
+      if (s.cy === this.floor) {
+        ctx.strokeStyle = 'rgba(255,120,80,.4)'
+        ctx.setLineDash([4, 4])
+        for (const r of [s.minRange, s.maxRange]) {
+          ctx.beginPath()
+          ctx.arc(px, pz, r * this.view.scale, 0, Math.PI * 2)
+          ctx.stroke()
+        }
+        ctx.setLineDash([])
 
-    ctx.strokeStyle = 'rgba(255,120,80,.4)'
-    ctx.setLineDash([4, 4])
-    for (const r of [s.minRange, s.maxRange]) {
-      ctx.beginPath()
-      ctx.arc(px, pz, r * this.view.scale, 0, Math.PI * 2)
-      ctx.stroke()
+        for (const c of s._lastCandidates) {
+          ctx.fillStyle = c.ok ? 'rgba(120,255,120,.7)' : 'rgba(255,80,80,.5)'
+          ctx.beginPath()
+          ctx.arc(this._sx(c.x), this._sy(c.z), 1.6, 0, Math.PI * 2)
+          ctx.fill()
+        }
+        if (s._lastTarget) {
+          ctx.strokeStyle = '#7fff7f'
+          ctx.beginPath()
+          ctx.arc(this._sx(s._lastTarget.x), this._sy(s._lastTarget.z), 4, 0, Math.PI * 2)
+          ctx.stroke()
+        }
+
+        const seen = this.dbg.aiSeen
+        ctx.strokeStyle = seen ? '#7fff7f' : 'rgba(255,90,74,.7)'
+        ctx.setLineDash(seen ? [] : [3, 3])
+        ctx.beginPath()
+        ctx.moveTo(px, pz)
+        ctx.lineTo(sx, sz)
+        ctx.stroke()
+        ctx.setLineDash([])
+
+        ctx.fillStyle = '#ff5a4a'
+        ctx.fillRect(sx - 3, sz - 3, 6, 6)
+      } else {
+        ctx.strokeStyle = 'rgba(255,90,74,.65)'
+        ctx.lineWidth = 1.2
+        ctx.strokeRect(sx - 3, sz - 3, 6, 6)
+        this._floorTag(sx, sz, s.cy - this.floor, 'rgba(255,90,74,.85)')
+      }
     }
-    ctx.setLineDash([])
 
-    for (const c of s._lastCandidates) {
-      ctx.fillStyle = c.ok ? 'rgba(120,255,120,.7)' : 'rgba(255,80,80,.5)'
+    // Pursuer: diamond in its dark blood-red; hollow + tag when off-floor.
+    const u = this.engine.pursuer
+    if (u && u.active) {
+      const ux = this._sx(u.pos.x)
+      const uz = this._sy(u.pos.z)
       ctx.beginPath()
-      ctx.arc(this._sx(c.x), this._sy(c.z), 1.6, 0, Math.PI * 2)
-      ctx.fill()
+      ctx.moveTo(ux, uz - 4)
+      ctx.lineTo(ux + 4, uz)
+      ctx.lineTo(ux, uz + 4)
+      ctx.lineTo(ux - 4, uz)
+      ctx.closePath()
+      if (u.cy === this.floor) {
+        ctx.fillStyle = '#c04038'
+        ctx.fill()
+      } else {
+        ctx.strokeStyle = 'rgba(192,64,56,.7)'
+        ctx.lineWidth = 1.2
+        ctx.stroke()
+        this._floorTag(ux, uz, u.cy - this.floor, 'rgba(192,64,56,.85)')
+      }
     }
-    if (s._lastTarget) {
-      ctx.strokeStyle = '#7fff7f'
-      ctx.beginPath()
-      ctx.arc(this._sx(s._lastTarget.x), this._sy(s._lastTarget.z), 4, 0, Math.PI * 2)
-      ctx.stroke()
-    }
+  }
 
-    const seen = this.dbg.aiSeen
-    ctx.strokeStyle = seen ? '#7fff7f' : 'rgba(255,90,74,.7)'
-    ctx.setLineDash(seen ? [] : [3, 3])
-    ctx.beginPath()
-    ctx.moveTo(px, pz)
-    ctx.lineTo(sx, sz)
-    ctx.stroke()
-    ctx.setLineDash([])
-
-    ctx.fillStyle = '#ff5a4a'
-    ctx.fillRect(sx - 3, sz - 3, 6, 6)
+  // Small `↑n`/`↓n` tag beside an off-floor entity marker.
+  _floorTag(x, y, delta, color) {
+    const ctx = this.ctx
+    ctx.fillStyle = color
+    ctx.font = '10px ui-monospace, monospace'
+    ctx.fillText(`${delta > 0 ? '↑' : '↓'}${Math.abs(delta)}`, x + 5, y - 4)
   }
 
   _drawHud() {
@@ -573,8 +723,10 @@ export class WorldMapTool {
     ctx.fillText('10m', LOGW - 10 - px10, LOGH - 14)
   }
 
-  // Flood OPEN cells (thin-wall adjacency) from the player's cell across the
-  // visible region; reports sealed pockets. Reuses the shared floodReachable.
+  // Flood OPEN cells (thin-wall adjacency) of the drawn floor from the
+  // player's cell across the visible region; reports sealed pockets. Stair
+  // run/hole cells are not walkable graph nodes (pathfind's cellBlocked rule),
+  // so the flood never enters them. Reuses the shared floodReachable.
   _flood(c0x, c1x, c0z, c1z) {
     const minGx = c0x * CHUNK
     const maxGx = (c1x + 1) * CHUNK - 1
@@ -585,6 +737,7 @@ export class WorldMapTool {
     const canPass = (ax, az, bx, bz) => {
       const gxa = minGx + ax
       const gza = minGz + az
+      if (this._stairBlocked(minGx + bx, minGz + bz)) return false
       if (bx === ax + 1) return !this._wallV(gxa + 1, gza)
       if (bx === ax - 1) return !this._wallV(gxa, gza)
       if (bz === az + 1) return !this._wallH(gxa, gza + 1)
@@ -597,6 +750,28 @@ export class WorldMapTool {
       sx = (W / 2) | 0
       sz = (H / 2) | 0
     }
+    // The seed itself must be a walkable, KNOWN cell of the drawn floor: the
+    // player may be mid-ramp (their cell is stair-blocked here), or the tool
+    // may be viewing another floor — else the whole patch reads as sealed.
+    const seedBad = (x, z) =>
+      this._stairBlocked(minGx + x, minGz + z) ||
+      !this._chunkData(Math.floor((minGx + x) / CHUNK), Math.floor((minGz + z) / CHUNK))
+    if (seedBad(sx, sz)) {
+      search: for (let ring = 1; ring < Math.max(W, H); ring++) {
+        for (let oz = -ring; oz <= ring; oz++) {
+          for (let ox = -ring; ox <= ring; ox++) {
+            if (Math.max(Math.abs(ox), Math.abs(oz)) !== ring) continue
+            const nx = sx + ox
+            const nz = sz + oz
+            if (nx < 0 || nx >= W || nz < 0 || nz >= H) continue
+            if (seedBad(nx, nz)) continue
+            sx = nx
+            sz = nz
+            break search
+          }
+        }
+      }
+    }
     const seen = floodReachable(sx, sz, W, H, canPass)
     const reached = new Set()
     let open = 0
@@ -606,6 +781,7 @@ export class WorldMapTool {
         const gx = minGx + x
         const gz = minGz + z
         if (!this._chunkData(Math.floor(gx / CHUNK), Math.floor(gz / CHUNK))) continue
+        if (this._stairBlocked(gx, gz)) continue // ramp/hole: not an open cell
         open++
         if (seen[z * W + x]) reached.add(gx + ',' + gz)
         else if (x > 0 && x < W - 1 && z > 0 && z < H - 1) sealed++

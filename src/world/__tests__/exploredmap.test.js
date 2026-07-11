@@ -16,7 +16,7 @@ function mockCM(data) {
     config: DEFAULT_WORLD_CONFIG,
     exit: null,
     clearings: [],
-    chunks: new Map([['0,0', { data }]]),
+    chunks: new Map([['0,0,0', { data }]]), // live map is keyed (cx,cy,cz) in v8
     wallVAt: (gx, gz) => inRange(gx, gz) && data.vAt(gx, gz) === 1,
     wallHAt: (gx, gz) => inRange(gx, gz) && data.hAt(gx, gz) === 1,
     columnAt: (gx, gz) => inRange(gx, gz) && data.colAt(gx, gz) === 1,
@@ -25,7 +25,7 @@ function mockCM(data) {
 
 // A chunk split by a solid vertical wall on line x=5, with one doorway at row 7.
 function walledChunk(doorway = true) {
-  const data = new ChunkData(0, 0, 0)
+  const data = new ChunkData(0, 0, 0, 0)
   for (let z = 0; z < CHUNK; z++) data.setV(5, z, 1)
   if (doorway) data.setV(5, 7, 0) // doorway at row z=7
   return data
@@ -63,10 +63,22 @@ describe('ExploredMap: fog-of-war reveal', () => {
   it('recompute is a no-op until the player crosses a cell boundary', () => {
     const em = new ExploredMap(mockCM(walledChunk()))
     em.update(cellCenter(7), cellCenter(7))
-    const sum = () => em.chunks.get('0,0').revealed.reduce((a, b) => a + b, 0)
+    const sum = () => em.chunks.get('0,0,0').revealed.reduce((a, b) => a + b, 0)
     const before = sum()
     em.update(cellCenter(7) + 0.1, cellCenter(7) - 0.1) // same cell
     expect(sum()).toBe(before)
+  })
+
+  it('keeps each floor\'s fog isolated (v8)', () => {
+    const cm = mockCM(walledChunk())
+    cm.seed = 12345
+    const em = new ExploredMap(cm)
+    em.update(cellCenter(7), cellCenter(7), 0)
+    expect(em.isRevealed(7, 7, 0)).toBe(true)
+    expect(em.isRevealed(7, 7, 1)).toBe(false) // floor 1 untouched
+    em.update(cellCenter(7), cellCenter(7), 1) // player climbs a floor
+    expect(em.isRevealed(7, 7, 1)).toBe(true)
+    expect(em.isRevealed(7, 7, 0)).toBe(true) // floor 0 fog preserved
   })
 
   it('reset() clears all fog', () => {
@@ -82,13 +94,15 @@ describe('ExploredMap: fog-of-war reveal', () => {
 // Sanity: the regen fallback must reproduce ChunkManager's build for ordinary
 // chunks (no exit/clearing) so the minimap stays consistent after unload.
 describe('ExploredMap: dataAt fallback', () => {
-  it('regenerates an unloaded chunk identically to generateChunk', () => {
+  it('regenerates an unloaded chunk identically to generateChunk, per floor', () => {
     const cm = mockCM(walledChunk())
     cm.seed = 12345
     const em = new ExploredMap(cm)
-    const got = em.dataAt(3, 4) // not in cm.chunks -> fallback regen
-    const want = generateChunk(12345, 3, 4, DEFAULT_WORLD_CONFIG, null, null)
-    expect(Array.from(got.wallV)).toEqual(Array.from(want.wallV))
-    expect(Array.from(got.wallH)).toEqual(Array.from(want.wallH))
+    for (const cy of [0, 1, -2]) {
+      const got = em.dataAt(3, cy, 4) // not in cm.chunks -> fallback regen
+      const want = generateChunk(12345, 3, cy, 4, DEFAULT_WORLD_CONFIG, null, null)
+      expect(Array.from(got.wallV)).toEqual(Array.from(want.wallV))
+      expect(Array.from(got.wallH)).toEqual(Array.from(want.wallH))
+    }
   })
 })

@@ -11,5 +11,6 @@ export const CELL_OPEN = 0
 export const CELL_ROOM = 1
 export const CELL_CORRIDOR = 2
 export const CELL_LOBBY = 3
+export const CELL_STAIR = 4 // stair landing/run cells (v8; see world/slab.js)
 
 export const isPassageOpen = (kind) => kind !== PASSAGE_WALL

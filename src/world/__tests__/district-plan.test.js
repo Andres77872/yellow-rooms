@@ -238,17 +238,22 @@ describe('multi-chunk office district plan', () => {
     expect(buildOfficeDistrictPlan(seed, 0, 0, nonFinite).size).toBe(3 * CHUNK)
   })
 
+  // Byte-exactness needs the stair stamps off: they are post-slice edits (the
+  // same class as exit/spawn clearings) and are covered by the halo-diff test
+  // below plus stairs.test.js.
   it('slices chunks from the district while preserving internal seam bytes', () => {
-    const plan = buildOfficeDistrictPlan(seed, 0, 0, cfg)
+    const cfgNS = structuredClone(cfg)
+    cfgNS.stairs.enabled = false
+    const plan = buildOfficeDistrictPlan(seed, 0, 0, cfgNS)
     const chunks = new Map()
-    for (let cz = 0; cz < cfg.office.districtChunks; cz++) {
-      for (let cx = 0; cx < cfg.office.districtChunks; cx++) {
-        chunks.set(chunkKey(cx, cz), buildChunk(seed, cx, cz, cfg))
+    for (let cz = 0; cz < cfgNS.office.districtChunks; cz++) {
+      for (let cx = 0; cx < cfgNS.office.districtChunks; cx++) {
+        chunks.set(chunkKey(cx, cz), buildChunk(seed, cx, 0, cz, cfgNS))
       }
     }
 
-    for (let cz = 0; cz < cfg.office.districtChunks; cz++) {
-      for (let cx = 0; cx < cfg.office.districtChunks; cx++) {
+    for (let cz = 0; cz < cfgNS.office.districtChunks; cz++) {
+      for (let cx = 0; cx < cfgNS.office.districtChunks; cx++) {
         const data = chunks.get(chunkKey(cx, cz))
         expect(data.repairs).toEqual({ connectivity: 0, navigation: 0, columns: 0 })
         const dc = officeDistrictCoords(cx, cz, cfg)
@@ -286,6 +291,58 @@ describe('multi-chunk office district plan', () => {
           for (let x = 0; x < CHUNK; x++) {
             expect(data.hAt(x, 0)).toBe(plan.hAt(x0 + x, z0))
             expect(data.passageHAt(x, 0)).toBe(plan.passageHAt(x0 + x, z0))
+          }
+        }
+      }
+    }
+  })
+
+  // With stairs on, a stamped office chunk may differ from its plan slice —
+  // but ONLY inside the stamp halo rects (strip bbox + 1 cell, expanded one
+  // more cell for passage bytes that door normalization may downgrade when the
+  // halo removes a frame's support). Repairs must stay zero: the stamp never
+  // triggers a post-slice topology pass.
+  it('stamps stairs into office chunks only inside the halo rects', () => {
+    const cfgStairs = structuredClone(cfg)
+    cfgStairs.stairs.chance = 1
+    const cfgNS = structuredClone(cfg)
+    cfgNS.stairs.enabled = false
+    const K = cfgStairs.office.districtChunks
+    for (let cz = 0; cz < K; cz++) {
+      for (let cx = 0; cx < K; cx++) {
+        const plain = buildChunk(seed, cx, 0, cz, cfgNS)
+        const stamped = buildChunk(seed, cx, 0, cz, cfgStairs)
+        expect(stamped.repairs).toEqual({ connectivity: 0, navigation: 0, columns: 0 })
+
+        // Allowed region: union of both contracts' strips grown by 2 cells.
+        const rects = []
+        for (const s of [stamped.stairUp, stamped.stairDown]) {
+          if (!s) continue
+          const cells = [s.landing, s.run[0], s.run[1], s.exit]
+          rects.push({
+            x0: Math.min(...cells.map((c) => c.lx)) - 2,
+            z0: Math.min(...cells.map((c) => c.lz)) - 2,
+            x1: Math.max(...cells.map((c) => c.lx)) + 2,
+            z1: Math.max(...cells.map((c) => c.lz)) + 2,
+          })
+        }
+        const inRects = (x, z) => rects.some((r) => x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1)
+
+        for (let z = 0; z < CHUNK; z++) {
+          for (let x = 0; x < CHUNK; x++) {
+            const i = z * CHUNK + x
+            const cellSame =
+              stamped.cellKind[i] === plain.cellKind[i] &&
+              stamped.cols[i] === plain.cols[i]
+            const vSame =
+              stamped.wallV[i] === plain.wallV[i] &&
+              stamped.passageV[i] === plain.passageV[i]
+            const hSame =
+              stamped.wallH[i] === plain.wallH[i] &&
+              stamped.passageH[i] === plain.passageH[i]
+            if (!cellSame || !vSame || !hSame) {
+              expect(inRects(x, z), `diff at (${x},${z}) of chunk (${cx},${cz})`).toBe(true)
+            }
           }
         }
       }
@@ -462,10 +519,10 @@ describe('global warehouse structure', () => {
   it('compiles horizontal and vertical global wall runs across chunk edges', () => {
     const cfg = forcedZone(ZONE_WAREHOUSE)
     const seed = 6
-    const west = buildChunk(seed, 0, 0, cfg)
-    const east = buildChunk(seed, 1, 0, cfg)
-    const north = buildChunk(seed, 0, 0, cfg)
-    const south = buildChunk(seed, 0, 1, cfg)
+    const west = buildChunk(seed, 0, 0, 0, cfg)
+    const east = buildChunk(seed, 1, 0, 0, cfg)
+    const north = buildChunk(seed, 0, 0, 0, cfg)
+    const south = buildChunk(seed, 0, 0, 1, cfg)
     expect(west.hAt(13, 2)).toBe(1)
     expect(east.hAt(0, 2)).toBe(1)
     expect(north.vAt(3, 13)).toBe(1)
@@ -477,6 +534,7 @@ describe('global warehouse structure', () => {
     cfg.border.stubChance = 0
     cfg.warehouse.fragments.chance = 0
     cfg.warehouse.columns.chance = 1
+    cfg.stairs.enabled = false // stair halos delete columns; the bay grid is asserted exactly
     const { spacing, phaseSalt } = cfg.warehouse.columns
     const seed = 0x51a7
     const px = hash2i((seed ^ phaseSalt) | 0, 0x58, 0) % spacing
@@ -484,7 +542,7 @@ describe('global warehouse structure', () => {
     let edgeColumn = false
     for (let cz = -5; cz <= 5; cz++) {
       for (let cx = -5; cx <= 5; cx++) {
-        const data = buildChunk(seed, cx, cz, cfg)
+        const data = buildChunk(seed, cx, 0, cz, cfg)
         for (let z = 0; z < CHUNK; z++) {
           for (let x = 0; x < CHUNK; x++) {
             const gx = cx * CHUNK + x

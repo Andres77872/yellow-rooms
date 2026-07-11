@@ -9,9 +9,11 @@ import {
   ENTITY_VANISH_DIST,
   CELL,
   worldToCell,
+  layerY,
 } from '../world/constants.js'
 import { moveAndCollide } from '../player/collision.js'
-import { sightGate, findHiddenSpot, EYE_Y } from './sense.js'
+import { groundHeightAt } from '../player/ground.js'
+import { sightGate, findHiddenSpot } from './sense.js'
 import { findPath, followPath } from '../world/pathfind.js'
 
 const _camPos = new THREE.Vector3()
@@ -38,7 +40,8 @@ export class Stalker {
     this.mesh.scale.set(1, 1.28, 1)
     this.mesh.visible = false
     scene.add(this.mesh)
-    this.pos = new THREE.Vector3()
+    this.pos = new THREE.Vector3() // feet position (y = ground height)
+    this.cy = 0 // floor index (v8)
     this.active = false
     this.level = 1
 
@@ -68,6 +71,7 @@ export class Stalker {
     this._cursor = 0 // current waypoint index
     this._lastGX = 0
     this._lastGZ = 0
+    this._lastCY = 0
     this._hasLast = false // have we ever seen the player (a last-seen cell)?
     this._repathT = 0
     this._pursueT = 0 // remaining pursue budget (s)
@@ -107,6 +111,7 @@ export class Stalker {
     this._pathLen = 0
     this._cursor = 0
     this._hasLast = false
+    this.cy = 0
     this.active = false
     this.inBeam = false
     this.mesh.visible = false
@@ -120,7 +125,7 @@ export class Stalker {
     if (!seen || !ctx || !ctx.flashlightOn) return false
     camera.getWorldPosition(_camPos)
     camera.getWorldDirection(_camDir)
-    _toE.set(this.pos.x, 1.0, this.pos.z).sub(_camPos)
+    _toE.set(this.pos.x, this.pos.y + 1.0, this.pos.z).sub(_camPos)
     const d = _toE.length()
     if (d < 1e-4) return true
     if (d > FLASH_RANGE) return false
@@ -128,14 +133,25 @@ export class Stalker {
   }
 
   // Returns true if a hidden spot was found and the entity was placed there.
-  _teleport(camera, player) {
-    const spot = findHiddenSpot(this.cm, camera, player.x, player.z, this.minRange, this.maxRange, {
+  // The 'dread' floor policy sometimes lands one floor off the player's —
+  // footsteps overhead, a silhouette down a stairwell — and the stair-aware
+  // pathfinder brings it the rest of the way.
+  _teleport(camera, player, playerCy = 0) {
+    const spot = findHiddenSpot(this.cm, camera, player.x, player.z, playerCy, this.minRange, this.maxRange, {
+      floorPolicy: 'dread',
       record: this.recordCandidates ? this._lastCandidates : null,
     })
     if (!spot) return false
-    this._lastTarget = { x: spot.x, z: spot.z }
-    this.pos.set(spot.x, EYE_Y, spot.z)
-    this.mesh.position.set(spot.x, this.mesh.scale.y * 0.95, spot.z)
+    this._lastTarget = { x: spot.x, z: spot.z, cy: spot.cy }
+    this.cy = spot.cy
+    this.pos.set(spot.x, layerY(spot.cy), spot.z)
+    // A teleport invalidates any pursue route computed from the OLD position —
+    // following it would walk toward stale waypoints (worst case adopting a
+    // stale cross-floor waypoint through solid slab).
+    this._pathLen = 0
+    this._cursor = 0
+    this._repathT = 0
+    this._faceMesh(player)
     this.mesh.visible = true
     return true
   }
@@ -148,10 +164,10 @@ export class Stalker {
   }
 
   // --- Debug controls ---
-  forceTeleport(camera, player) {
+  forceTeleport(camera, player, playerCy = 0) {
     this.active = true
     this._lostTimer = this.despawnDelay
-    if (!this._teleport(camera, player)) {
+    if (!this._teleport(camera, player, playerCy)) {
       this.active = false
       return false
     }
@@ -165,18 +181,48 @@ export class Stalker {
 
   // Light-scaled chase multiplier at the entity's position (dark = fast, lit = slow).
   _lightMul() {
-    const light = this.cm.lightAt(this.pos.x, this.pos.z)
+    const light = this.cm.lightAt(this.pos.x, this.pos.z, this.cy)
     return this.darkSpeedMul + (STALKER_LIGHT_SPEED - this.darkSpeedMul) * light
   }
 
   _faceMesh(player) {
-    this.mesh.position.set(this.pos.x, this.mesh.scale.y * 0.95, this.pos.z)
+    this.mesh.position.set(this.pos.x, this.pos.y + this.mesh.scale.y * 0.95, this.pos.z)
     this.mesh.rotation.y = Math.atan2(player.x - this.pos.x, player.z - this.pos.z)
   }
 
+  // One pursue tick: (re)route toward the last-seen cell/floor with the
+  // stair-aware A*, then advance along the path (followPath walks ramps and
+  // flips this.cy at stair waypoints). Shared by the corner-pursuit after lost
+  // sight AND the aperture-seen "it's coming up the stairs" chase.
+  _pursueStep(dt, player) {
+    this._repathT -= dt
+    const consumed = this._pathLen === 0 || this._cursor * 3 >= this._pathLen
+    if (consumed || this._repathT <= 0) {
+      const tx = (this._lastGX + 0.5) * CELL
+      const tz = (this._lastGZ + 0.5) * CELL
+      const p = findPath(this.cm, this.pos.x, this.pos.z, this.cy, tx, tz, this._lastCY, {
+        out: this._pathBuf,
+        leash: this.pathLeash,
+        maxNodes: this.pathBudget,
+      })
+      this._pathLen = p ? p.length : 0
+      this._cursor = 0
+      this._repathT = this.repathEvery
+      if (!p) this._pursueT = 0 // unreachable -> drop to HUNT next frame
+    }
+    if (this._pathLen > 0) {
+      const r = followPath(this.cm, this, this._pathBuf, this._cursor, this.chaseSpeed * this._lightMul() * dt)
+      this._cursor = r.i
+      this._faceMesh(player)
+      if (r.done) this._pursueT = 0 // reached the last-seen cell, still unseen -> HUNT
+    }
+  }
+
   // Returns { caught, tension, seen, dist, inBeam, frozen }.
-  // ctx = { flashlightOn, canFreeze } supplied by the Engine.
+  // ctx = { flashlightOn, canFreeze, playerCy } supplied by the Engine.
   update(dt, player, camera, ctx = {}) {
+    const playerCy = ctx.playerCy ?? 0
+
     // --- Dormant: not on the map; count down to the next (re)spawn. ---
     if (!this.active) {
       this.stateLabel = 'spawning'
@@ -184,7 +230,7 @@ export class Stalker {
         this._spawnTimer -= dt
         if (this._spawnTimer <= 0) {
           this._lostTimer = this.despawnDelay
-          if (this._teleport(camera, player)) {
+          if (this._teleport(camera, player, playerCy)) {
             this.active = true
             this._timer = this.interval
           } else {
@@ -197,17 +243,20 @@ export class Stalker {
     }
 
     const dx = player.x - this.pos.x
+    const dy = (player.y || 0) - this.pos.y
     const dz = player.z - this.pos.z
-    const dist = Math.hypot(dx, dz)
+    const dist = Math.hypot(dx, dy, dz) // 3D: a floor of separation is distance, not contact
 
-    // Cheap-first visibility gate (distance -> frustum -> line of sight).
-    const seen = sightGate(this.cm, camera, this.pos.x, this.pos.z, player.x, player.z, this.sightDist)
+    // Cheap-first visibility gate (3D distance -> floor gate -> frustum -> LOS).
+    const seen = sightGate(this.cm, camera, this.pos, this.cy, player, playerCy, this.sightDist)
     // Wider "is the PLAYER watching it" gate for despawn/teleport: `seen` caps
     // at sightDist (60u) but the thinned fog + persistent entity ink keep the
     // silhouette readable far beyond that, so removals must never happen while
-    // it's in frustum with LOS inside the fog-opaque range.
+    // it's in frustum with LOS inside the fog-opaque range. Cross-floor the gate
+    // is blind outside the stairwell aperture, so an entity left on another
+    // floor is automatically free to relocate.
     const observed =
-      seen || sightGate(this.cm, camera, this.pos.x, this.pos.z, player.x, player.z, ENTITY_VANISH_DIST)
+      seen || sightGate(this.cm, camera, this.pos, this.cy, player, playerCy, ENTITY_VANISH_DIST)
 
     // Flashlight beam (a strong, dynamic light) freezes the entity outright —
     // unless the player has stared so long the freeze has failed (canFreeze).
@@ -223,9 +272,10 @@ export class Stalker {
       this.stateLabel = 'frozen'
       this._lostTimer = this.despawnDelay
       this.mesh.rotation.y = Math.atan2(player.x - this.pos.x, player.z - this.pos.z)
-    } else if (seen) {
-      // CHASE: straight beeline at the player (LOS is clear, so the line is too).
-      // Arm the corner-pursuit window and remember where we last saw them.
+    } else if (seen && playerCy === this.cy) {
+      // CHASE: straight beeline at the player (same floor, LOS clear, so the
+      // line is walkable). Arm the corner-pursuit window and remember where we
+      // last saw them.
       this.stateLabel = 'chasing'
       this._lostTimer = this.despawnDelay
       this._pursueT = this.pursueTime
@@ -233,14 +283,29 @@ export class Stalker {
       this._cursor = 0
       this._lastGX = worldToCell(player.x)
       this._lastGZ = worldToCell(player.z)
+      this._lastCY = playerCy
       this._hasLast = true
       const step = this.chaseSpeed * this._lightMul() * dt
-      const inv = dist > 0.0001 ? 1 / dist : 0
+      const dxz = Math.hypot(dx, dz)
+      const inv = dxz > 0.0001 ? 1 / dxz : 0
       const before = this.pos.clone()
-      moveAndCollide(this.cm, this.pos, dx * inv * step, dz * inv * step)
+      moveAndCollide(this.cm, this.pos, dx * inv * step, dz * inv * step, this.cy)
+      this.pos.y = groundHeightAt(this.cm, this.pos.x, this.pos.z, this.cy)
       this._faceMesh(player)
       // If somehow wall-stuck on a clear chase, allow it to re-teleport sooner.
       if (this.pos.distanceTo(before) < step * 0.1) this._timer = Math.min(this._timer, 0.8)
+    } else if (seen) {
+      // Seen THROUGH a stairwell aperture (one floor apart): it can't lunge
+      // through the slab — arm the pursuit toward the player's floor and let
+      // the stair-aware A* bring it up/down the stairs.
+      this.stateLabel = 'pursuing(stairs)'
+      this._lostTimer = this.despawnDelay
+      this._pursueT = this.pursueTime
+      this._lastGX = worldToCell(player.x)
+      this._lastGZ = worldToCell(player.z)
+      this._lastCY = playerCy
+      this._hasLast = true
+      this._pursueStep(dt, player)
     } else {
       // --- Lost sight ---
       this._lostTimer -= dt
@@ -255,30 +320,11 @@ export class Stalker {
       }
 
       if (this._pursueT > 0 && this._hasLast) {
-        // PURSUE: route around the walls toward the last-seen cell.
+        // PURSUE: route around the walls (and up/down stairs) toward the
+        // last-seen cell on the last-seen floor.
         this.stateLabel = 'pursuing'
         this._pursueT -= dt
-        this._repathT -= dt
-        const consumed = this._pathLen === 0 || this._cursor * 2 >= this._pathLen
-        if (consumed || this._repathT <= 0) {
-          const tx = (this._lastGX + 0.5) * CELL
-          const tz = (this._lastGZ + 0.5) * CELL
-          const p = findPath(this.cm, this.pos.x, this.pos.z, tx, tz, {
-            out: this._pathBuf,
-            leash: this.pathLeash,
-            maxNodes: this.pathBudget,
-          })
-          this._pathLen = p ? p.length : 0
-          this._cursor = 0
-          this._repathT = this.repathEvery
-          if (!p) this._pursueT = 0 // unreachable -> drop to HUNT next frame
-        }
-        if (this._pathLen > 0) {
-          const r = followPath(this.cm, this.pos, this._pathBuf, this._cursor, this.chaseSpeed * this._lightMul() * dt)
-          this._cursor = r.i
-          this._faceMesh(player)
-          if (r.done) this._pursueT = 0 // reached the last-seen cell, still unseen -> HUNT
-        }
+        this._pursueStep(dt, player)
       } else {
         // HUNT: the original teleport-on-interval fallback, then despawn.
         this.stateLabel = 'hunting'
@@ -289,7 +335,7 @@ export class Stalker {
             this._timer = 0.4
           } else {
             this.stateLabel = 'teleport'
-            this._teleport(camera, player)
+            this._teleport(camera, player, playerCy)
             this._timer = this.interval
           }
         }

@@ -20,8 +20,8 @@ describe('office-to-open transitions', () => {
         const zone = selectZone(cx, cz, seed, CFG)
         const eastZone = selectZone(cx + 1, cz, seed, CFG)
         if (!vertical && isOpenZone(zone) !== isOpenZone(eastZone)) {
-          const west = buildChunk(seed, cx, cz, CFG)
-          const east = buildChunk(seed, cx + 1, cz, CFG)
+          const west = buildChunk(seed, cx, 0, cz, CFG)
+          const east = buildChunk(seed, cx + 1, 0, cz, CFG)
           const office = west.zone === ZONE_OFFICE ? west : east
           const open = west.zone === ZONE_OFFICE ? east : west
           const officeLines = west.zone === ZONE_OFFICE ? [CHUNK - 1, CHUNK - 2] : [1, 2]
@@ -42,8 +42,8 @@ describe('office-to-open transitions', () => {
 
         const southZone = selectZone(cx, cz + 1, seed, CFG)
         if (!horizontal && isOpenZone(zone) !== isOpenZone(southZone)) {
-          const north = buildChunk(seed, cx, cz, CFG)
-          const south = buildChunk(seed, cx, cz + 1, CFG)
+          const north = buildChunk(seed, cx, 0, cz, CFG)
+          const south = buildChunk(seed, cx, 0, cz + 1, CFG)
           const office = north.zone === ZONE_OFFICE ? north : south
           const open = north.zone === ZONE_OFFICE ? south : north
           const officeLines = north.zone === ZONE_OFFICE ? [CHUNK - 1, CHUNK - 2] : [1, 2]
@@ -70,7 +70,7 @@ describe('office-to-open transitions', () => {
   it('clears structural columns throughout an open-side mouth approach', () => {
     const mouth = new Uint8Array(CHUNK).fill(1)
     for (const z of [2, 3, 4]) mouth[z] = 0
-    const data = new ChunkData(0, 0, ZONE_PILLARS)
+    const data = new ChunkData(0, 0, 0, ZONE_PILLARS)
     pillars.generate(data, {
       seed: 7,
       cx: 0,

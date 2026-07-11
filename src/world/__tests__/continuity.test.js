@@ -21,7 +21,7 @@ const SEEDS = [1, 42, 0xbeef, 314159, 0xc0ffee, 99999, 7, 2026]
 function patch(seed) {
   const m = new Map()
   for (let cz = Z0; cz < Z0 + N; cz++) {
-    for (let cx = X0; cx < X0 + N; cx++) m.set(chunkKey(cx, cz), buildChunk(seed, cx, cz, CFG))
+    for (let cx = X0; cx < X0 + N; cx++) m.set(chunkKey(cx, cz), buildChunk(seed, cx, 0, cz, CFG))
   }
   return auditPatch((cx, cz) => m.get(chunkKey(cx, cz)) ?? null, X0, Z0, N, N, CFG)
 }
