@@ -1,0 +1,132 @@
+import { describe, it, expect } from 'vitest'
+import * as THREE from 'three'
+import { sightGate, findHiddenSpot } from '../sense.js'
+import { STAIR_SIGHT_R, LAYER_H } from '../../world/constants.js'
+
+// Floor-gated sensing truth table. The mock CM is wall-free (LOS always clear
+// in 2D) so the FLOOR gate is what's under test; apertures are injected.
+function makeCM(apertures = [], blocked = () => false) {
+  const m = new Map()
+  apertures.forEach((a, i) => m.set(String(i), a))
+  return {
+    wallVAt: () => false,
+    wallHAt: () => false,
+    columnAt: () => false,
+    isBlocked: blocked,
+    apertures: m,
+  }
+}
+
+// A camera at `from` looking at `at` — the frustum genuinely contains targets
+// ahead of it, so the gate's frustum stage behaves as in game.
+function cameraAt(from, at) {
+  const cam = new THREE.PerspectiveCamera(72, 16 / 9, 0.1, 200)
+  cam.position.set(from.x, from.y, from.z)
+  cam.lookAt(at.x, at.y, at.z)
+  cam.updateMatrixWorld(true)
+  cam.matrixWorldInverse.copy(cam.matrixWorld).invert()
+  return cam
+}
+
+const feet = (x, cy, z) => ({ x, y: cy * LAYER_H, z })
+
+describe('sightGate floor gating', () => {
+  const player = feet(0, 0, 0)
+
+  it('same floor: visible with clear LOS in frustum', () => {
+    const ent = feet(10, 0, 0)
+    const cam = cameraAt({ x: 0, y: 1.7, z: 0 }, { x: 10, y: 1.6, z: 0 })
+    expect(sightGate(makeCM(), cam, ent, 0, player, 0, 60)).toBe(true)
+  })
+
+  it('two floors apart: always blind', () => {
+    const ent = feet(10, 2, 0)
+    const cam = cameraAt({ x: 0, y: 1.7, z: 0 }, { x: 10, y: 2 * LAYER_H, z: 0 })
+    const cm = makeCM([{ centerX: 5, centerZ: 0, lowerCy: 0 }, { centerX: 5, centerZ: 0, lowerCy: 1 }])
+    expect(sightGate(cm, cam, ent, 2, player, 0, 60)).toBe(false)
+  })
+
+  it('one floor apart: blind without an aperture, visible near a shared one', () => {
+    const ent = feet(6, 1, 0)
+    const cam = cameraAt({ x: 0, y: 1.7, z: 0 }, { x: 6, y: LAYER_H, z: 0 })
+    // No aperture: the slab blocks.
+    expect(sightGate(makeCM(), cam, ent, 1, player, 0, 60)).toBe(false)
+    // Shared aperture between floors 0-1, both parties within STAIR_SIGHT_R:
+    const near = makeCM([{ centerX: 3, centerZ: 0, lowerCy: 0 }])
+    expect(sightGate(near, cam, ent, 1, player, 0, 60)).toBe(true)
+    // Aperture of the WRONG slab (1-2) does not help:
+    const wrong = makeCM([{ centerX: 3, centerZ: 0, lowerCy: 1 }])
+    expect(sightGate(wrong, cam, ent, 1, player, 0, 60)).toBe(false)
+    // Aperture too far from either party: blind.
+    const far = makeCM([{ centerX: STAIR_SIGHT_R + 50, centerZ: 0, lowerCy: 0 }])
+    expect(sightGate(far, cam, ent, 1, player, 0, 60)).toBe(false)
+  })
+
+  it('mid-transit: a player on the connecting stair still observes the lower floor', () => {
+    // Feet just past the handoff (hysteresis floor = 1) but standing on the
+    // stair's lower-layer strip: the entity at the stair base is plainly on
+    // screen and must read as observed (else it could despawn in full view).
+    const playerMid = { x: 6, y: LAYER_H - 0.6, z: 0 } // mid-band, floor index 1
+    const ent = feet(2, 0, 0)
+    const cam = cameraAt({ x: 6, y: LAYER_H + 1.1, z: 0 }, { x: 2, y: 1.6, z: 0 })
+    const cm = makeCM()
+    // Their cell resolves to the stair's lower-layer strip:
+    cm.stairAt = (gx, gz, cy) =>
+      cy === 0 && gx === Math.floor(6 / 3) && gz === 0
+        ? { part: 'run', baseCy: 0 }
+        : null
+    expect(sightGate(cm, cam, ent, 0, playerMid, 1, 60)).toBe(true)
+    // Same geometry but the player is NOT over the strip: slab blocks (no aperture).
+    cm.stairAt = () => null
+    expect(sightGate(cm, cam, ent, 0, playerMid, 1, 60)).toBe(false)
+  })
+
+  it('3D distance gates before anything else', () => {
+    const ent = feet(100, 0, 0)
+    const cam = cameraAt({ x: 0, y: 1.7, z: 0 }, { x: 100, y: 1.6, z: 0 })
+    expect(sightGate(makeCM(), cam, ent, 0, player, 0, 60)).toBe(false)
+  })
+})
+
+describe('findHiddenSpot floor policy', () => {
+  // Camera looking away so nothing is in frustum; deterministic rng.
+  const cam = cameraAt({ x: 0, y: 1.7, z: 0 }, { x: -100, y: 1.7, z: 0 })
+  const seq = (vals) => {
+    let i = 0
+    return () => vals[i++ % vals.length]
+  }
+
+  it("'same' policy always lands on the player's floor", () => {
+    const cm = makeCM()
+    for (let k = 0; k < 8; k++) {
+      const s = findHiddenSpot(cm, cam, 0, 0, 3, 10, 20, {
+        requireOffscreen: false,
+        rng: seq([(0.13 * (k + 1)) % 1, 0.7, 0.3, 0.9]),
+      })
+      expect(s).not.toBeNull()
+      expect(s.cy).toBe(3)
+    }
+  })
+
+  it("'dread' policy sometimes lands one floor off", () => {
+    const cm = makeCM()
+    // rng: ang, dist, dreadRoll(<0.2 -> off-floor), sign
+    const off = findHiddenSpot(cm, cam, 0, 0, 3, 10, 20, {
+      floorPolicy: 'dread',
+      requireOffscreen: false, // the floor policy is what's under test
+      rng: seq([0.5, 0.5, 0.1, 0.9]),
+    })
+    expect(off.cy).toBe(2) // 0.1 < 0.2 dread; sign roll 0.9 >= 0.5 -> one floor DOWN
+    const on = findHiddenSpot(cm, cam, 0, 0, 3, 10, 20, {
+      floorPolicy: 'dread',
+      requireOffscreen: false,
+      rng: seq([0.5, 0.5, 0.9]),
+    })
+    expect(on.cy).toBe(3)
+  })
+
+  it('rejects blocked cells (fail-closed covers unloaded chunks and holes)', () => {
+    const cm = makeCM([], () => true) // everything blocked
+    expect(findHiddenSpot(cm, cam, 0, 0, 0, 10, 20, { rng: seq([0.1, 0.5]) })).toBeNull()
+  })
+})
