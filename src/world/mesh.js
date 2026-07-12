@@ -13,12 +13,20 @@ import {
   FRAME_DEPTH,
   DOOR_LEAF_THICK,
   DOOR_LEAF_FRACTION,
+  WINDOW_SILL_H,
+  WINDOW_HEAD_Y,
+  WINDOW_TRIM_W,
+  BRIDGE_GUARD_H,
+  BRIDGE_GUARD_CAP_H,
+  BRIDGE_BEAM_H,
+  BRIDGE_BEAM_W,
   vIdx,
   hIdx,
   cIdx,
 } from './constants.js'
 import { collectDoorways } from './doors.js'
 import { STAIR_E, STAIR_S, STAIR_W } from './slab.js'
+import { WALL_PLAIN, WALL_RAIL, WALL_WINDOW } from './mapTypes.js'
 
 const _m = new THREE.Matrix4()
 const _q = new THREE.Quaternion()
@@ -97,35 +105,55 @@ function buildSlabFace(holes, y, faceUp) {
   return geo
 }
 
-// Inward-facing skirt around a rectangular ceiling hole, spanning the slab
-// thickness (local y WALL_H..LAYER_H) — so looking at the hole edge from the
-// stairwell shows a solid slab, never a paper-thin plane.
-function appendHoleRim(geo, holeCells) {
+// Inward-facing skirts around arbitrary ceiling-hole masks, spanning the slab
+// thickness (local y WALL_H..LAYER_H). Emitting each solid/void boundary edge
+// independently supports irregular masks and the two lobes split by a retained
+// bridge deck; the old bounding-rectangle rim incorrectly sealed such shapes.
+function appendHoleRims(geo, holes) {
   const pos = Array.from(geo.attributes.position.array)
   const nrm = Array.from(geo.attributes.normal.array)
   const uv = Array.from(geo.attributes.uv.array)
-  let x0 = CHUNK, z0 = CHUNK, x1 = -1, z1 = -1
-  for (const c of holeCells) {
-    x0 = Math.min(x0, c.lx)
-    z0 = Math.min(z0, c.lz)
-    x1 = Math.max(x1, c.lx)
-    z1 = Math.max(z1, c.lz)
-  }
-  const wx0 = x0 * CELL
-  const wx1 = (x1 + 1) * CELL
-  const wz0 = z0 * CELL
-  const wz1 = (z1 + 1) * CELL
   const y0 = WALL_H
   const y1 = LAYER_H
   const v = (u, y) => [u / CELL, y / CELL]
-  // West face (+x into the hole), East (-x), North (+z), South (-z).
-  pushQuad(pos, nrm, uv, [wx0, y0, wz1], [wx0, y0, wz0], [wx0, y1, wz0], [wx0, y1, wz1], v(wz1, y0), v(wz0, y0), v(wz0, y1), v(wz1, y1), 1, 0, 0)
-  pushQuad(pos, nrm, uv, [wx1, y0, wz0], [wx1, y0, wz1], [wx1, y1, wz1], [wx1, y1, wz0], v(wz0, y0), v(wz1, y0), v(wz1, y1), v(wz0, y1), -1, 0, 0)
-  pushQuad(pos, nrm, uv, [wx0, y0, wz0], [wx1, y0, wz0], [wx1, y1, wz0], [wx0, y1, wz0], v(wx0, y0), v(wx1, y0), v(wx1, y1), v(wx0, y1), 0, 0, 1)
-  pushQuad(pos, nrm, uv, [wx1, y0, wz1], [wx0, y0, wz1], [wx0, y1, wz1], [wx1, y1, wz1], v(wx1, y0), v(wx0, y0), v(wx0, y1), v(wx1, y1), 0, 0, -1)
+  const has = (x, z) => holes.has(`${x},${z}`)
+  for (let z = 0; z < CHUNK; z++) {
+    for (let x = 0; x < CHUNK; x++) {
+      if (!has(x, z)) continue
+      const wx0 = x * CELL
+      const wx1 = (x + 1) * CELL
+      const wz0 = z * CELL
+      const wz1 = (z + 1) * CELL
+      // West face (+x into the hole), East (-x), North (+z), South (-z).
+      if (!has(x - 1, z)) {
+        pushQuad(pos, nrm, uv, [wx0, y0, wz1], [wx0, y0, wz0], [wx0, y1, wz0], [wx0, y1, wz1], v(wz1, y0), v(wz0, y0), v(wz0, y1), v(wz1, y1), 1, 0, 0)
+      }
+      if (!has(x + 1, z)) {
+        pushQuad(pos, nrm, uv, [wx1, y0, wz0], [wx1, y0, wz1], [wx1, y1, wz1], [wx1, y1, wz0], v(wz0, y0), v(wz1, y0), v(wz1, y1), v(wz0, y1), -1, 0, 0)
+      }
+      if (!has(x, z - 1)) {
+        pushQuad(pos, nrm, uv, [wx0, y0, wz0], [wx1, y0, wz0], [wx1, y1, wz0], [wx0, y1, wz0], v(wx0, y0), v(wx1, y0), v(wx1, y1), v(wx0, y1), 0, 0, 1)
+      }
+      if (!has(x, z + 1)) {
+        pushQuad(pos, nrm, uv, [wx1, y0, wz1], [wx0, y0, wz1], [wx0, y1, wz1], [wx1, y1, wz1], v(wx1, y0), v(wx0, y0), v(wx0, y1), v(wx1, y1), 0, 0, -1)
+      }
+    }
+  }
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
   geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3))
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2))
+}
+
+function collectHoles(data, ceiling) {
+  const holes = new Set()
+  for (let z = 0; z < CHUNK; z++) {
+    for (let x = 0; x < CHUNK; x++) {
+      if (ceiling ? data.hasCeilHole(x, z) : data.hasFloorHole(x, z)) {
+        holes.add(`${x},${z}`)
+      }
+    }
+  }
+  return holes
 }
 
 export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
@@ -137,25 +165,25 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
   // row-span quads (<= ~16 quads) that this chunk owns and must dispose.
   const ownedGeos = []
   let floor
-  if (!data.stairDown) {
+  const floorHoles = collectHoles(data, false)
+  if (floorHoles.size === 0) {
     floor = new THREE.Mesh(geom.floor, materials.carpet)
     floor.position.set(CHUNK_WORLD / 2, 0, CHUNK_WORLD / 2)
   } else {
-    const holes = new Set(data.stairDown.run.map((c) => `${c.lx},${c.lz}`))
-    const g = buildSlabFace(holes, 0, true)
+    const g = buildSlabFace(floorHoles, 0, true)
     ownedGeos.push(g)
     floor = new THREE.Mesh(g, materials.carpet)
   }
   group.add(floor)
 
   let ceil
-  if (!data.stairUp) {
+  const ceilingHoles = collectHoles(data, true)
+  if (ceilingHoles.size === 0) {
     ceil = new THREE.Mesh(geom.ceiling, materials.ceiling)
     ceil.position.set(CHUNK_WORLD / 2, WALL_H, CHUNK_WORLD / 2)
   } else {
-    const holes = new Set(data.stairUp.run.map((c) => `${c.lx},${c.lz}`))
-    const g = buildSlabFace(holes, WALL_H, false)
-    appendHoleRim(g, data.stairUp.run) // slab-owner renders the hole's cut faces
+    const g = buildSlabFace(ceilingHoles, WALL_H, false)
+    appendHoleRims(g, ceilingHoles) // slab-owner renders every exposed cut face
     ownedGeos.push(g)
     ceil = new THREE.Mesh(g, materials.ceiling)
   }
@@ -163,20 +191,69 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
 
   // --- Collect wall + column + stair-step instance transforms ---
   const inst = [] // [{px,py,pz, sx,sy,sz}]
+  const featureFrameInst = []
   const wallY = WALL_H / 2
+  const addFeatureWall = (axis, line, cell, feature) => {
+    const vertical = axis === 'v'
+    const px = vertical ? line * CELL : (cell + 0.5) * CELL
+    const pz = vertical ? (cell + 0.5) * CELL : line * CELL
+    const sx = vertical ? THICK : CELL
+    const sz = vertical ? CELL : THICK
+    if (feature === WALL_WINDOW) {
+      inst.push({ px, py: WINDOW_SILL_H / 2, pz, sx, sy: WINDOW_SILL_H, sz })
+      inst.push({
+        px,
+        py: (WINDOW_HEAD_Y + WALL_H) / 2,
+        pz,
+        sx,
+        sy: WALL_H - WINDOW_HEAD_Y,
+        sz,
+      })
+      const openingH = WINDOW_HEAD_Y - WINDOW_SILL_H
+      const trimDepth = FRAME_DEPTH
+      if (vertical) {
+        const z0 = cell * CELL
+        const z1 = (cell + 1) * CELL
+        featureFrameInst.push(
+          { px, py: (WINDOW_SILL_H + WINDOW_HEAD_Y) / 2, pz: z0 + WINDOW_TRIM_W / 2, sx: trimDepth, sy: openingH, sz: WINDOW_TRIM_W },
+          { px, py: (WINDOW_SILL_H + WINDOW_HEAD_Y) / 2, pz: z1 - WINDOW_TRIM_W / 2, sx: trimDepth, sy: openingH, sz: WINDOW_TRIM_W },
+          { px, py: (WINDOW_SILL_H + WINDOW_HEAD_Y) / 2, pz, sx: trimDepth, sy: openingH, sz: WINDOW_TRIM_W },
+          { px, py: WINDOW_SILL_H, pz, sx: trimDepth, sy: WINDOW_TRIM_W, sz: CELL },
+          { px, py: WINDOW_HEAD_Y, pz, sx: trimDepth, sy: WINDOW_TRIM_W, sz: CELL }
+        )
+      } else {
+        const x0 = cell * CELL
+        const x1 = (cell + 1) * CELL
+        featureFrameInst.push(
+          { px: x0 + WINDOW_TRIM_W / 2, py: (WINDOW_SILL_H + WINDOW_HEAD_Y) / 2, pz, sx: WINDOW_TRIM_W, sy: openingH, sz: trimDepth },
+          { px: x1 - WINDOW_TRIM_W / 2, py: (WINDOW_SILL_H + WINDOW_HEAD_Y) / 2, pz, sx: WINDOW_TRIM_W, sy: openingH, sz: trimDepth },
+          { px, py: (WINDOW_SILL_H + WINDOW_HEAD_Y) / 2, pz, sx: WINDOW_TRIM_W, sy: openingH, sz: trimDepth },
+          { px, py: WINDOW_SILL_H, pz, sx: CELL, sy: WINDOW_TRIM_W, sz: trimDepth },
+          { px, py: WINDOW_HEAD_Y, pz, sx: CELL, sy: WINDOW_TRIM_W, sz: trimDepth }
+        )
+      }
+      return
+    }
+    if (feature === WALL_RAIL) {
+      inst.push({ px, py: BRIDGE_GUARD_H / 2, pz, sx, sy: BRIDGE_GUARD_H, sz })
+      featureFrameInst.push({
+        px,
+        py: BRIDGE_GUARD_H,
+        pz,
+        sx: vertical ? FRAME_DEPTH : CELL,
+        sy: BRIDGE_GUARD_CAP_H,
+        sz: vertical ? CELL : FRAME_DEPTH,
+      })
+      return
+    }
+    inst.push({ px, py: wallY, pz, sx, sy: WALL_H, sz })
+  }
   // Vertical wall lines (lx in [0..CHUNK-1]): slab at world x = lx*CELL,
   // spanning the depth of cell row z.
   for (let z = 0; z < CHUNK; z++) {
     for (let lx = 0; lx < CHUNK; lx++) {
       if (data.wallV[vIdx(lx, z)] !== 1) continue
-      inst.push({
-        px: lx * CELL,
-        py: wallY,
-        pz: (z + 0.5) * CELL,
-        sx: THICK,
-        sy: WALL_H,
-        sz: CELL,
-      })
+      addFeatureWall('v', lx, z, data.wallFeatureV[vIdx(lx, z)] ?? WALL_PLAIN)
     }
   }
   // Horizontal wall lines (lz in [0..CHUNK-1]): slab at world z = lz*CELL,
@@ -184,14 +261,7 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
   for (let lz = 0; lz < CHUNK; lz++) {
     for (let x = 0; x < CHUNK; x++) {
       if (data.wallH[hIdx(x, lz)] !== 1) continue
-      inst.push({
-        px: (x + 0.5) * CELL,
-        py: wallY,
-        pz: lz * CELL,
-        sx: CELL,
-        sy: WALL_H,
-        sz: THICK,
-      })
+      addFeatureWall('h', lz, x, data.wallFeatureH[hIdx(x, lz)] ?? WALL_PLAIN)
     }
   }
   // Freestanding columns at cell centres.
@@ -237,6 +307,32 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
     }
   }
 
+  // Two longitudinal drop beams make the long one-cell bridge read as a
+  // supported structural span, not a paper-thin strip floating over the hall.
+  // They belong to the lower/slab-owner chunk and sit below the retained bridge
+  // underside, well above player head height.
+  if (data.multilevelUp) {
+    const room = data.multilevelUp
+    const { x0, z0, x1, z1 } = room.bounds
+    const alongX = room.bridgeAxis === 'x'
+    const alongCenter = alongX
+      ? ((x0 + x1 + 1) / 2) * CELL
+      : ((z0 + z1 + 1) / 2) * CELL
+    const alongLength = (alongX ? x1 - x0 + 1 : z1 - z0 + 1) * CELL
+    const crossCenter = (room.bridgeLine + 0.5) * CELL
+    const beamOffset = CELL / 2 - BRIDGE_BEAM_W
+    for (const side of [-1, 1]) {
+      inst.push({
+        px: alongX ? alongCenter : crossCenter + side * beamOffset,
+        py: WALL_H - BRIDGE_BEAM_H / 2,
+        pz: alongX ? crossCenter + side * beamOffset : alongCenter,
+        sx: alongX ? alongLength : BRIDGE_BEAM_W,
+        sy: BRIDGE_BEAM_H,
+        sz: alongX ? BRIDGE_BEAM_W : alongLength,
+      })
+    }
+  }
+
   let walls = null
   if (inst.length) {
     walls = new THREE.InstancedMesh(geom.wallUnit, materials.wallpaper, inst.length)
@@ -261,7 +357,7 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
   const DOOR_H = WALL_H - HEADER_H
   const JAMB_OFF = CELL / 2 - FRAME_W / 2 // jamb centre offset from the gap centre
   const leafFaceOff = THICK / 2 + DOOR_LEAF_THICK / 2 // panel sits just off the wall face
-  const frameInst = [] // {px,py,pz, sx,sy,sz}
+  const frameInst = featureFrameInst.slice() // {px,py,pz, sx,sy,sz}
   const leafInst = []
   for (const d of collectDoorways(data, DOOR_LEAF_FRACTION)) {
     if (d.axis === 'v') {

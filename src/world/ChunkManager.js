@@ -22,26 +22,30 @@ import {
 } from './constants.js'
 import { DEFAULT_WORLD_CONFIG } from './config.js'
 import { slabContract } from './slab.js'
+import { multilevelContract } from './multilevel.js'
 import { Chunk } from './Chunk.js'
+import { wallFeatureSeesThrough } from './mapTypes.js'
 
 const HUB = (CHUNK / 2) | 0
 
 // Streaming priority is intentionally a tuple rather than relying on loop /
 // stable-sort insertion order. Close chunks build first; at equal effective
 // distance the player's floor wins, followed by an adjacent floor that is
-// actually connected through this chunk column. Unconnected off-floor chunks
-// retain the historical +2 penalty.
+// actually visible/reachable through this chunk column (stair or multilevel
+// opening). Unconnected off-floor chunks retain the historical +2 penalty.
 function prioritizeRequest(request, seed, config, pcx, pcy, pcz) {
   const dx = Math.abs(request.cx - pcx)
   const dz = Math.abs(request.cz - pcz)
   const dy = Math.abs(request.cy - pcy)
   const xzDistance = Math.max(dx, dz)
-  const connected =
-    dy === 1 &&
-    slabContract(seed, request.cx, request.cz, Math.min(request.cy, pcy), config).hasStair
+  const lowerCy = Math.min(request.cy, pcy)
+  const verticalOpening = dy === 1 && (
+    slabContract(seed, request.cx, request.cz, lowerCy, config).hasStair ||
+    multilevelContract(seed, request.cx, request.cz, lowerCy, config).hasRoom
+  )
 
-  request.d = xzDistance + (dy !== 0 && !connected ? 2 : 0)
-  request.floorPriority = dy === 0 ? 0 : connected ? 1 : 2
+  request.d = xzDistance + (dy !== 0 && !verticalOpening ? 2 : 0)
+  request.floorPriority = dy === 0 ? 0 : verticalOpening ? 1 : 2
   request.xzTie = dx + dz
   return request
 }
@@ -72,9 +76,9 @@ export class ChunkManager {
     // Forced-open clearings applied at generation. The spawn cell (chunk 0,0
     // layer 0 hub) is always cleared so the player never spawns boxed in.
     this.clearings = [{ cx: 0, cy: 0, cz: 0, lx: HUB, lz: HUB, r: 1 }]
-    // Stair apertures of loaded chunks: "cx,cz,lowerCy" -> {cx, cz, centerX,
-    // centerZ, lowerCy}. Feeds the cross-floor lamp spill filter and the
-    // aperture-gated visibility.
+    // Vertical openings of loaded chunks (stairs and multilevel rooms). Keys
+    // include feature identity so one column/slab can never overwrite another.
+    // Bounds feed cross-floor light/sight; chunk coords feed visibility gating.
     this.apertures = new Map()
     // Last visibility inputs (re-applied to newly built chunks).
     this._visCy = 0
@@ -141,7 +145,7 @@ export class ChunkManager {
 
     // Queue missing chunks within the load box (nearest first; the player's
     // own floor first — off-floor chunks only jump the penalty queue when a
-    // stair aperture connects them to the player's floor, because those are
+    // vertical opening connects them to the player's floor, because those are
     // the only ones that can be SEEN through the slab).
     for (let dcy = -LOAD_RADIUS_Y; dcy <= LOAD_RADIUS_Y; dcy++) {
       const cy = pcy + dcy
@@ -172,7 +176,7 @@ export class ChunkManager {
         Math.abs(c.cy - pcy) > UNLOAD_RADIUS_Y
       ) {
         for (const a of c.apertures) {
-          this.apertures.delete(`${c.cx},${c.cz},${a.lowerCy}`)
+          this.apertures.delete(a.key)
           aperturesChanged = true
         }
         c.dispose()
@@ -210,7 +214,9 @@ export class ChunkManager {
     this.root.add(chunk.group)
     this.chunks.set(key, chunk)
     for (const a of chunk.apertures) {
-      this.apertures.set(`${cx},${cz},${a.lowerCy}`, { cx, cz, ...a })
+      const key = `${cx},${cz},${a.lowerCy},${a.kind},${a.id}`
+      a.key = key
+      this.apertures.set(key, { cx, cz, ...a })
     }
     this._applyVisibility(chunk)
     // A NEW aperture can make already-loaded off-floor neighbours visible
@@ -228,7 +234,7 @@ export class ChunkManager {
   }
 
   // --- Cross-floor visibility (v8) ---
-  // Floors are mutually invisible except through stair apertures, so chunks on
+  // Floors are mutually invisible except through registered vertical openings, so chunks on
   // other floors render only when they could actually be seen: within a small
   // ring of an aperture column connecting to the player's floor — plus the
   // whole adjacent floor while the player is inside a stair footprint (the
@@ -286,6 +292,25 @@ export class ChunkManager {
     return c.data.hAt(gx - c.cx * CHUNK, gz - c.cz * CHUNK) === 1
   }
 
+  // Sight opacity is intentionally separate from collision. Observation
+  // windows and bridge guards keep wall=1 (movement/pathfinding cannot cross)
+  // while their edge feature lets the LOS DDA see into the multilevel room.
+  opaqueVAt(gx, gz, cy = 0) {
+    const c = this._chunkAt(gx, gz, cy)
+    if (!c) return false
+    const lx = gx - c.cx * CHUNK
+    const lz = gz - c.cz * CHUNK
+    return c.data.vAt(lx, lz) === 1 && !wallFeatureSeesThrough(c.data.wallFeatureVAt(lx, lz))
+  }
+
+  opaqueHAt(gx, gz, cy = 0) {
+    const c = this._chunkAt(gx, gz, cy)
+    if (!c) return false
+    const lx = gx - c.cx * CHUNK
+    const lz = gz - c.cz * CHUNK
+    return c.data.hAt(lx, lz) === 1 && !wallFeatureSeesThrough(c.data.wallFeatureHAt(lx, lz))
+  }
+
   columnAt(gx, gz, cy = 0) {
     const c = this._chunkAt(gx, gz, cy)
     if (!c) return false
@@ -299,8 +324,8 @@ export class ChunkManager {
     return c.stairCells.get(cIdx(gx - c.cx * CHUNK, gz - c.cz * CHUNK)) || null
   }
 
-  // Is this floor slab holed at the cell (no ground on layer cy — the walk
-  // surface there is the ramp on cy-1)?
+  // Is this floor slab holed at the cell? A stair hole exposes the ramp from
+  // cy-1; a multilevel void exposes the lower atrium hall and is not walkable.
   floorHoleAt(gx, gz, cy = 0) {
     const c = this._chunkAt(gx, gz, cy)
     if (!c) return false
@@ -338,7 +363,7 @@ export class ChunkManager {
   //
   // `pcy` (null = legacy unfiltered) applies the v8 cross-floor policy: lamps
   // on the player's floor always qualify; lamps exactly one floor away qualify
-  // only within LIGHT_SPILL_R of a stair aperture between the two floors (the
+  // only within LIGHT_SPILL_R of a stair or multilevel opening between the floors (the
   // slab physically blocks everything else — lamps are shadowless, so this
   // assignment filter is what stops light bleeding through floors); lamps two
   // or more floors away never qualify.
@@ -377,9 +402,14 @@ export class ChunkManager {
     const r2 = LIGHT_SPILL_R * LIGHT_SPILL_R
     for (const a of this.apertures.values()) {
       if (a.lowerCy !== lowerCy) continue
-      const dx = v.x - a.centerX
-      const dz = v.z - a.centerZ
-      if (dx * dx + dz * dz <= r2) return true
+      const regions = a.regions || [a]
+      for (const region of regions) {
+        const nearestX = Math.max(region.minX ?? a.centerX, Math.min(region.maxX ?? a.centerX, v.x))
+        const nearestZ = Math.max(region.minZ ?? a.centerZ, Math.min(region.maxZ ?? a.centerZ, v.z))
+        const dx = v.x - nearestX
+        const dz = v.z - nearestZ
+        if (dx * dx + dz * dz <= r2) return true
+      }
     }
     return false
   }

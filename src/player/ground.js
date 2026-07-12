@@ -15,8 +15,13 @@ import { CELL, LAYER_H, layerY, worldToCell } from '../world/constants.js'
 // (t=1, flush with the upper floor), so walking stairs is continuous — no step
 // pops; the rendered step boxes are visual detail over this surface.
 export function groundHeightAt(cm, wx, wz, cy) {
-  const s = cm.stairAt(worldToCell(wx), worldToCell(wz), cy)
-  if (!s) return layerY(cy)
+  const gx = worldToCell(wx)
+  const gz = worldToCell(wz)
+  const s = cm.stairAt(gx, gz, cy)
+  // A guarded atrium void normally cannot be entered. If debug teleportation
+  // or malformed external state puts a body there, expose the real lower hall
+  // rather than inventing an invisible flat floor at the upper layer.
+  if (!s) return cm.floorHoleAt?.(gx, gz, cy) ? layerY(cy - 1) : layerY(cy)
   if (s.part === 'landing') return layerY(s.baseCy)
   if (s.part === 'exit') return layerY(s.baseCy + 1)
   const along = s.axis === 'x' ? wx : wz

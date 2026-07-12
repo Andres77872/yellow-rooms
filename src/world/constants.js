@@ -312,9 +312,9 @@ export const OUTLINE_FADE_FAR = 0.95
 
 // --- Thin-wall model (refactor) ---------------------------------------
 // World-gen version: bump whenever the algorithm changes the bytes a seed
-// produces. Guards the golden determinism test. v9: plan-aware stair lobbies,
-// normalized slab tuning, and column-stable stair-layout transforms.
-export const WORLD_GEN_VERSION = 9
+// produces. Guards the golden determinism test. v10: shared two-floor atrium
+// contracts, structural bridge decks, and multilevel-only observation windows.
+export const WORLD_GEN_VERSION = 10
 
 // Interior zones, selected by the low-frequency region field. The registry in
 // zones/index.js maps these ids to generator modules.
@@ -338,6 +338,17 @@ export const HEADER_H = 0.5 // doorway lintel header height
 // across chunk reloads.
 export const FRAME_W = 0.14 // jamb casing width along the wall (world units)
 export const FRAME_DEPTH = 0.22 // how proud the casing stands from the wall face (> THICK)
+// Observation windows exist only on multi-level room galleries. They are
+// open-pane apertures in the opaque deferred renderer: a collision-solid sill,
+// lintel and trim communicate the barrier while the eye-height opening reveals
+// the atrium. Bridge guards use a low parapet plus a contrasting cap.
+export const WINDOW_SILL_H = 0.9
+export const WINDOW_HEAD_Y = 2.55
+export const WINDOW_TRIM_W = 0.12
+export const BRIDGE_GUARD_H = 1.05
+export const BRIDGE_GUARD_CAP_H = 0.1
+export const BRIDGE_BEAM_H = 0.45
+export const BRIDGE_BEAM_W = 0.24
 export const DOOR_LEAF_THICK = 0.06 // open door panel thickness
 export const DOOR_LEAF_FRACTION = 0.5 // fraction of doorways that show an open leaf
 export const DOOR_SALT = 0x0d00 | 0 // fixed hash salt for the per-door leaf/hinge choice

@@ -1,6 +1,6 @@
 import { CHUNK, fmod } from './constants.js'
 import { hash2i } from './core/hash.js'
-import { CELL_CORRIDOR, CELL_LOBBY } from './mapTypes.js'
+import { CELL_BRIDGE, CELL_CORRIDOR, CELL_LOBBY } from './mapTypes.js'
 
 // Fluorescent ceiling lamps on a GLOBAL module grid (every `step` cells in world
 // space), so the grid is perfectly regular AND continuous across chunk seams
@@ -34,7 +34,8 @@ export function placeLights(data, ctx) {
       const gx = cx * CHUNK + x
       const gz = cz * CHUNK + z
       const cellKind = data.cellKind[z * CHUNK + x]
-      const circulation = cellKind === CELL_CORRIDOR || cellKind === CELL_LOBBY
+      const circulation =
+        cellKind === CELL_CORRIDOR || cellKind === CELL_LOBBY || cellKind === CELL_BRIDGE
       let fixtureSalt = salt
       let fixtureChance = chance
       if (circulation) {
@@ -46,7 +47,7 @@ export function placeLights(data, ctx) {
         continue
       }
       if (data.colAt(x, z)) continue // no lamp inside a column
-      if (data.hasCeilHole(x, z)) continue // no ceiling to mount on (stair hole)
+      if (data.hasCeilHole(x, z)) continue // no ceiling to mount on (stair/atrium hole)
       const h = hash2i((seed ^ fixtureSalt) | 0, gx, gz)
       if (h / 4294967296 >= fixtureChance) continue
       // A separately salted coordinate hash keeps fixture presence and failure

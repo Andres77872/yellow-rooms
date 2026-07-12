@@ -1,5 +1,6 @@
 import { CELL, CHUNK, FOV, COL_HALF, chunkKey3 } from '../world/constants.js'
 import { STAIR_DX, STAIR_DZ } from '../world/slab.js'
+import { CELL_BRIDGE, WALL_RAIL, WALL_WINDOW } from '../world/mapTypes.js'
 
 // Player-explored HUD minimap — a small circular "locator" disc, north-up and
 // player-centric, that draws ONLY the fog-of-war cells the player has seen (fed
@@ -21,7 +22,10 @@ const SCALE = 4.0 // px per world unit (~±6 cells visible, near MAP_REVEAL_R)
 const C = {
   fog: 'rgba(13,11,6,.92)', // opaque warm-dark unexplored base
   seen: 'rgba(244,233,200,.07)', // --paper at low alpha
+  bridge: 'rgba(159,208,192,.22)',
   wall: '#8a7a3f', // --gold-dim
+  window: '#9fd0c0',
+  rail: '#c0a95a',
   column: '#5c5128',
   lamp: '#e8cf7a', // --gold
   lampGlow: 'rgba(232,207,122,.9)',
@@ -103,6 +107,16 @@ export class Minimap {
     for (let gz = gz0; gz <= gz1; gz++) {
       for (let gx = gx0; gx <= gx1; gx++) {
         if (!store.isRevealed(gx, gz, floor)) continue
+        if (store.floorHoleAt?.(gx, gz, floor)) continue
+        ctx.fillRect(this._sx(gx * CELL, px), this._sy(gz * CELL, pz), tile, tile)
+      }
+    }
+    // Retained bridge decks read distinctly against the unfilled atrium void.
+    ctx.fillStyle = C.bridge
+    for (let gz = gz0; gz <= gz1; gz++) {
+      for (let gx = gx0; gx <= gx1; gx++) {
+        if (!store.isRevealed(gx, gz, floor)) continue
+        if (store.cellKindAt?.(gx, gz, floor) !== CELL_BRIDGE) continue
         ctx.fillRect(this._sx(gx * CELL, px), this._sy(gz * CELL, pz), tile, tile)
       }
     }
@@ -139,6 +153,39 @@ export class Minimap {
     }
     ctx.stroke()
 
+    // Observation windows and bridge rails are still physical walls, but a
+    // second colored pass prevents the map from presenting them as opaque
+    // ordinary partitions.
+    const drawFeatures = (wanted, color) => {
+      ctx.strokeStyle = color
+      ctx.lineWidth = wanted === WALL_WINDOW ? 1.8 : 1.4
+      ctx.beginPath()
+      for (let gz = gz0; gz <= gz1; gz++) {
+        for (let gx = gx0; gx <= gx1; gx++) {
+          if (!store.isRevealed(gx, gz, floor)) continue
+          const xL = this._sx(gx * CELL, px)
+          const xR = this._sx((gx + 1) * CELL, px)
+          const yT = this._sy(gz * CELL, pz)
+          const yB = this._sy((gz + 1) * CELL, pz)
+          if (store.wallFeatureVAt?.(gx, gz, floor) === wanted) {
+            ctx.moveTo(xL, yT); ctx.lineTo(xL, yB)
+          }
+          if (store.wallFeatureVAt?.(gx + 1, gz, floor) === wanted) {
+            ctx.moveTo(xR, yT); ctx.lineTo(xR, yB)
+          }
+          if (store.wallFeatureHAt?.(gx, gz, floor) === wanted) {
+            ctx.moveTo(xL, yT); ctx.lineTo(xR, yT)
+          }
+          if (store.wallFeatureHAt?.(gx, gz + 1, floor) === wanted) {
+            ctx.moveTo(xL, yB); ctx.lineTo(xR, yB)
+          }
+        }
+      }
+      ctx.stroke()
+    }
+    drawFeatures(WALL_WINDOW, C.window)
+    drawFeatures(WALL_RAIL, C.rail)
+
     // 3) Columns (revealed cells only).
     ctx.fillStyle = C.column
     const csz = Math.max(2, COL_HALF * 2 * SCALE)
@@ -161,7 +208,7 @@ export class Minimap {
     this._drawLamps(store, floor, px, pz, gx0, gx1, gz0, gz1)
 
     // 6) Exit — only once its cell has actually been discovered, and only on
-    // its own floor (the exit lives on layer 0).
+    // its own floor.
     if (exitRevealed && exit && (exit.cy ?? 0) === floor) this._drawExit(exit, px, pz)
 
     // 7) Player wedge + dot at the disc centre.

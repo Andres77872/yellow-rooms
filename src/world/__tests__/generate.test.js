@@ -4,7 +4,13 @@ import { vBorder, hBorder, vBorderContract, hBorderContract } from '../border.js
 import { DEFAULT_WORLD_CONFIG as CFG } from '../config.js'
 import { CHUNK, ZONE_OFFICE, ZONE_PILLARS, WORLD_GEN_VERSION } from '../constants.js'
 import { fmix32, hash2i } from '../core/hash.js'
-import { CELL_CORRIDOR, CELL_LOBBY, PASSAGE_OPEN, PASSAGE_WIDE } from '../mapTypes.js'
+import {
+  CELL_BRIDGE,
+  CELL_CORRIDOR,
+  CELL_LOBBY,
+  PASSAGE_OPEN,
+  PASSAGE_WIDE,
+} from '../mapTypes.js'
 import { countChunkComponents } from '../topology.js'
 import { layerSeed } from '../pipeline.js'
 
@@ -25,6 +31,8 @@ function digest(d) {
     d.wallH,
     d.passageV,
     d.passageH,
+    d.wallFeatureV,
+    d.wallFeatureH,
     d.cols,
     d.cellKind,
     d.spaceId,
@@ -59,6 +67,28 @@ function digest(d) {
   }
   foldStair(d.stairUp)
   foldStair(d.stairDown)
+  const foldMultilevel = (room) => {
+    if (!room) {
+      fold(0)
+      return
+    }
+    fold(1)
+    fold(room.id)
+    fold(room.baseCy)
+    fold(room.zone)
+    fold(room.bridgeAxis === 'x' ? 1 : 2)
+    fold(room.bridgeLine)
+    for (const key of ['x0', 'z0', 'x1', 'z1']) fold(room.bounds[key])
+    for (const cells of [room.voidCells, room.bridgeCells]) {
+      fold(cells.length)
+      for (const c of cells) {
+        fold(c.lx)
+        fold(c.lz)
+      }
+    }
+  }
+  foldMultilevel(d.multilevelUp)
+  foldMultilevel(d.multilevelDown)
   return (h >>> 0).toString(16).padStart(8, '0')
 }
 
@@ -66,13 +96,15 @@ function digest(d) {
 // zones AND multiple layers; the digest includes semantic passages, spaces,
 // repair metadata and the v9 plan-aware stair descriptors.
 const GOLDEN = {
-  '0,0,0': '38f03ba4',
-  '3,0,-2': 'a5bf286e',
-  '12,0,12': '720c1bdd',
-  '-10,0,10': '757ffc5a',
-  '0,1,0': '3e85d4fc',
-  '3,-1,-2': '43bf452a',
-  '12,2,12': 'd826a31b',
+  '0,0,0': 'd17aff84',
+  '3,0,-2': '49bf340b',
+  '12,0,12': '9d9ab7b7',
+  '-10,0,10': 'ad60f5e3',
+  '0,1,0': 'e7ecc1c0',
+  '3,-1,-2': '5a061e3e',
+  '12,2,12': '4a0cba0a',
+  '3,-2,-12': '3f090bb1',
+  '3,-1,-12': '8da5215c',
 }
 
 const SEEDS = [1, 42, 0xbeef, 1234567, 0x5a5a5a]
@@ -97,6 +129,8 @@ describe('determinism', () => {
         expect(Array.from(a.wallH)).toEqual(Array.from(b.wallH))
         expect(Array.from(a.passageV)).toEqual(Array.from(b.passageV))
         expect(Array.from(a.passageH)).toEqual(Array.from(b.passageH))
+        expect(Array.from(a.wallFeatureV)).toEqual(Array.from(b.wallFeatureV))
+        expect(Array.from(a.wallFeatureH)).toEqual(Array.from(b.wallFeatureH))
         expect(Array.from(a.cols)).toEqual(Array.from(b.cols))
         expect(Array.from(a.cellKind)).toEqual(Array.from(b.cellKind))
         expect(Array.from(a.spaceId)).toEqual(Array.from(b.spaceId))
@@ -104,6 +138,8 @@ describe('determinism', () => {
         expect(a.repairs).toEqual(b.repairs)
         expect(a.stairUp).toEqual(b.stairUp)
         expect(a.stairDown).toEqual(b.stairDown)
+        expect(a.multilevelUp).toEqual(b.multilevelUp)
+        expect(a.multilevelDown).toEqual(b.multilevelDown)
       }
     }
   })
@@ -176,6 +212,8 @@ describe('bounds & shape', () => {
         expect(d.wallH.length).toBe(CHUNK * CHUNK)
         expect(d.passageV.length).toBe(CHUNK * CHUNK)
         expect(d.passageH.length).toBe(CHUNK * CHUNK)
+        expect(d.wallFeatureV.length).toBe(CHUNK * CHUNK)
+        expect(d.wallFeatureH.length).toBe(CHUNK * CHUNK)
         expect(d.cols.length).toBe(CHUNK * CHUNK)
         expect(d.cellKind.length).toBe(CHUNK * CHUNK)
         expect(d.spaceId.length).toBe(CHUNK * CHUNK)
@@ -204,7 +242,7 @@ describe('lamp regularity', () => {
           const gx = cx * CHUNK + l.lx
           const gz = cz * CHUNK + l.lz
           const kind = d.cellKind[l.lz * CHUNK + l.lx]
-          if (kind === CELL_CORRIDOR || kind === CELL_LOBBY) {
+          if (kind === CELL_CORRIDOR || kind === CELL_LOBBY || kind === CELL_BRIDGE) {
             const corridorPhase =
               hash2i((ls ^ CFG.lamps.corridorSalt) | 0, 0x43, 0) % CFG.lamps.corridorStep
             expect(

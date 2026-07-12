@@ -4,7 +4,23 @@ import {
   PASSAGE_OPEN,
   PASSAGE_WALL,
   PASSAGE_WIDE,
+  WALL_PLAIN,
 } from './mapTypes.js'
+
+function stairHoleAt(stair, lx, lz) {
+  return !!stair?.run?.some((cell) => cell.lx === lx && cell.lz === lz)
+}
+
+// Multilevel rooms retain one straight bridge deck inside their rectangular
+// footprint. Every other footprint cell is open slab. This is deliberately
+// derived from the canonical descriptor rather than copied into another mask,
+// so independently generated floor halves cannot drift.
+function multilevelHoleAt(room, lx, lz) {
+  if (!room?.hasRoom) return false
+  const { x0, z0, x1, z1 } = room.bounds
+  if (lx < x0 || lx > x1 || lz < z0 || lz > z1) return false
+  return room.bridgeAxis === 'x' ? lz !== room.bridgeLine : lx !== room.bridgeLine
+}
 
 // Plain, serializable chunk state — the thin-wall model. No THREE here, so the
 // whole generation graph runs headless under Vitest. Meshing (mesh.js) reads
@@ -34,6 +50,10 @@ export class ChunkData {
     // transition mouth without inspecting neighbouring raster cells.
     this.passageV = new Uint8Array(CHUNK * CHUNK).fill(PASSAGE_OPEN)
     this.passageH = new Uint8Array(CHUNK * CHUNK).fill(PASSAGE_OPEN)
+    // Visual/sight refinement for CLOSED edges. WALL_PLAIN is the default;
+    // windows and bridge rails remain wall=1 + PASSAGE_WALL for collision.
+    this.wallFeatureV = new Uint8Array(CHUNK * CHUNK).fill(WALL_PLAIN)
+    this.wallFeatureH = new Uint8Array(CHUNK * CHUNK).fill(WALL_PLAIN)
     this.cols = new Uint8Array(CHUNK * CHUNK) // 1 = freestanding column at cell centre
     this.cellKind = new Uint8Array(CHUNK * CHUNK).fill(CELL_OPEN)
     this.spaceId = new Uint32Array(CHUNK * CHUNK)
@@ -45,6 +65,11 @@ export class ChunkData {
     // (slab cy-1). Shape: {dir, landing:{lx,lz}, run:[{..},{..}], exit:{lx,lz}}.
     this.stairUp = null
     this.stairDown = null
+    // Canonical two-floor room halves. `multilevelUp` belongs to this layer's
+    // ceiling (the wide lower hall); `multilevelDown` belongs to this layer's
+    // floor (the void, bridge and observation gallery over the hall).
+    this.multilevelUp = null
+    this.multilevelDown = null
     // Edges the stair stamp owns (guard walls AND mouths). Transient — not
     // serialized, not digested — carves check these so a later exit/spawn
     // clearing can never re-open a guard wall or re-wall a stair mouth.
@@ -67,15 +92,23 @@ export class ChunkData {
   passageHAt(x, lz) {
     return this.passageH[hIdx(x, lz)]
   }
-  setV(lx, z, v, passage = v ? PASSAGE_WALL : PASSAGE_OPEN) {
+  wallFeatureVAt(lx, z) {
+    return this.wallFeatureV[vIdx(lx, z)]
+  }
+  wallFeatureHAt(x, lz) {
+    return this.wallFeatureH[hIdx(x, lz)]
+  }
+  setV(lx, z, v, passage = v ? PASSAGE_WALL : PASSAGE_OPEN, feature = WALL_PLAIN) {
     const i = vIdx(lx, z)
     this.wallV[i] = v
     this.passageV[i] = passage
+    this.wallFeatureV[i] = v ? feature : WALL_PLAIN
   }
-  setH(x, lz, v, passage = v ? PASSAGE_WALL : PASSAGE_OPEN) {
+  setH(x, lz, v, passage = v ? PASSAGE_WALL : PASSAGE_OPEN, feature = WALL_PLAIN) {
     const i = hIdx(x, lz)
     this.wallH[i] = v
     this.passageH[i] = passage
+    this.wallFeatureH[i] = v ? feature : WALL_PLAIN
   }
   setPassageV(lx, z, passage) {
     this.setV(lx, z, passage === PASSAGE_WALL ? 1 : 0, passage)
@@ -93,21 +126,11 @@ export class ChunkData {
   // seen from below and above).
 
   hasCeilHole(lx, lz) {
-    const s = this.stairUp
-    if (!s) return false
-    return (
-      (s.run[0].lx === lx && s.run[0].lz === lz) ||
-      (s.run[1].lx === lx && s.run[1].lz === lz)
-    )
+    return stairHoleAt(this.stairUp, lx, lz) || multilevelHoleAt(this.multilevelUp, lx, lz)
   }
 
   hasFloorHole(lx, lz) {
-    const s = this.stairDown
-    if (!s) return false
-    return (
-      (s.run[0].lx === lx && s.run[0].lz === lz) ||
-      (s.run[1].lx === lx && s.run[1].lz === lz)
-    )
+    return stairHoleAt(this.stairDown, lx, lz) || multilevelHoleAt(this.multilevelDown, lx, lz)
   }
 
   // --- Protected edges (stair stamp ownership) ---

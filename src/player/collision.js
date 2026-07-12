@@ -217,11 +217,13 @@ export function hasLineOfSight(cm, x0, z0, x1, z1, cy = 0) {
   let guard = 0
   while ((gx !== gxe || gz !== gze) && guard++ < 4096) {
     if (tMaxX < tMaxZ) {
-      if (cm.wallVAt(sx > 0 ? gx + 1 : gx, gz, cy)) return false
+      const line = sx > 0 ? gx + 1 : gx
+      if (cm.opaqueVAt ? cm.opaqueVAt(line, gz, cy) : cm.wallVAt(line, gz, cy)) return false
       gx += sx
       tMaxX += tDeltaX
     } else {
-      if (cm.wallHAt(gx, sz > 0 ? gz + 1 : gz, cy)) return false
+      const line = sz > 0 ? gz + 1 : gz
+      if (cm.opaqueHAt ? cm.opaqueHAt(gx, line, cy) : cm.wallHAt(gx, line, cy)) return false
       gz += sz
       tMaxZ += tDeltaZ
     }

@@ -7,7 +7,6 @@ import {
   EYE_H,
   CHUNK,
   CELL,
-  CHUNK_WORLD,
   PROXIMITY_SLOW_RADIUS,
   PROXIMITY_SLOW_MAX,
   STARE_LIMIT_BASE,
@@ -36,8 +35,7 @@ import { TouchControls } from '../ui/TouchControls.js'
 import { Minimap } from '../ui/Minimap.js'
 import { ExploredMap } from '../world/ExploredMap.js'
 import { hashStr } from '../world/core/hash.js'
-import { RNG } from '../world/core/rng.js'
-import { chunkStairs, stairStrip } from '../world/slab.js'
+import { createExitPlacement, evaluateExit } from './exitPlacement.js'
 
 // Make color management explicit (it defaults to true in three r0.185). With it
 // on, `new THREE.Color(hex)` already converts the sRGB hex into the linear
@@ -47,7 +45,6 @@ THREE.ColorManagement.enabled = true
 
 const HUBC = (CHUNK / 2) | 0
 const SPAWN = (HUBC + 0.5) * CELL
-const norm = (a) => Math.atan2(Math.sin(a), Math.cos(a))
 
 export class Engine {
   constructor(app) {
@@ -222,48 +219,11 @@ export class Engine {
     const lvl = state.level
     cm.setSeed(hashStr(`${state.seedText}#${lvl}`))
 
-    // Exit: a reproducible spot several chunks from spawn.
-    const r = RNG.fromString(`${state.seedText}#${lvl}#exit`)
-    const dist = r.int(6, 11)
-    const ang = r.next() * Math.PI * 2
-    let ecx = Math.round(Math.cos(ang) * dist)
-    let ecz = Math.round(Math.sin(ang) * dist)
-    if (Math.abs(ecx) < 2 && Math.abs(ecz) < 2) ecx += 5
-    let elx = r.int(3, CHUNK - 4)
-    let elz = r.int(3, CHUNK - 4)
-    // Keep the exit clearing off the host chunk's stair strips (v8): displace
-    // it deterministically to the next free cell of the interior box. The
-    // stamp's protected edges make a miss topology-safe; this is about the
-    // exit not sitting inside a stairwell mouth. Margin 2 preferred, 1 always
-    // satisfiable (the two strips + halos can't cover the whole box at 1).
-    {
-      const { up, down } = chunkStairs(cm.seed, ecx, ecz, 0, cm.config)
-      const strips = []
-      if (up.hasStair) strips.push(...stairStrip(up))
-      if (down.hasStair) strips.push(...stairStrip(down))
-      const clearOf = (lx, lz, m) =>
-        strips.every((c) => Math.max(Math.abs(c.lx - lx), Math.abs(c.lz - lz)) > m)
-      const span = CHUNK - 6 // interior box [3..CHUNK-4]
-      search: for (const margin of [2, 1]) {
-        const start = (elz - 3) * span + (elx - 3)
-        for (let i = 0; i < span * span; i++) {
-          const j = (start + i) % (span * span)
-          const lx = 3 + (j % span)
-          const lz = 3 + ((j / span) | 0)
-          if (clearOf(lx, lz, margin)) {
-            elx = lx
-            elz = lz
-            break search
-          }
-        }
-      }
-    }
-    cm.setExit(ecx, 0, ecz, elx, elz)
-    this.exitTarget.set(
-      ecx * CHUNK_WORLD + (elx + 0.5) * CELL,
-      1.35,
-      ecz * CHUNK_WORLD + (elz + 0.5) * CELL
-    )
+    // Exit: reproducible XZ several chunks away, on a random non-zero floor
+    // within five layers of the floor-0 spawn.
+    const exit = createExitPlacement(state.seedText, lvl, cm.seed, cm.config)
+    cm.setExit(exit.cx, exit.cy, exit.cz, exit.lx, exit.lz)
+    this.exitTarget.set(exit.x, exit.y, exit.z)
 
     cm.reset()
     // Belt-and-braces with cm.reset()'s visibility reset: the transit cache
@@ -497,16 +457,11 @@ export class Engine {
   }
 
   _updateExit() {
-    const p = this.controller.pos
-    const dx = this.exitTarget.x - p.x
-    const dz = this.exitTarget.z - p.z
-    const dist = Math.hypot(dx, dz)
-    const fAng = Math.atan2(-Math.sin(this.controller.yaw), -Math.cos(this.controller.yaw))
-    const eAng = Math.atan2(dx, dz)
-    this.exitInfo = { dist, relAngle: norm(eAng - fAng), floorDelta: 0 - this.controller.floor }
-    // The exit lives on layer 0; the floor gate stops a player one slab above
-    // the exit's XZ from completing the level through the ceiling.
-    if (dist < 1.8 && this.controller.floor === 0) this._levelComplete()
+    const exitFloor = this.cm.exit?.cy ?? 0
+    const { info, reached } = evaluateExit(this.exitTarget, exitFloor, this.controller)
+    this.exitInfo = info
+    // Exact floor matching prevents completion through a ceiling/floor slab.
+    if (reached) this._levelComplete()
   }
 
   _applyFX() {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildChunk } from '../pipeline.js'
+import { buildChunk, layerSeed } from '../pipeline.js'
 import { DEFAULT_WORLD_CONFIG as CFG } from '../config.js'
 import {
   CHUNK,
@@ -119,13 +119,16 @@ describe('multi-chunk office district plan', () => {
         if (isCirculation(plan.cellKind[i])) cells.push(i)
       }
       expect(plan.metrics.corridorCoverage).toBeGreaterThanOrEqual(0.1)
-      expect(plan.metrics.corridorCoverage).toBeLessThanOrEqual(0.32)
+      // A reserved two-floor atrium may contribute its wide lower hall or
+      // gallery ring to circulation before room allocation.
+      expect(plan.metrics.corridorCoverage).toBeLessThanOrEqual(0.38)
       expect(plan.metrics.wallFraction).toBeGreaterThanOrEqual(0.15)
       expect(plan.metrics.wallFraction).toBeLessThanOrEqual(0.27)
       expect(plan.metrics.rooms).toBeGreaterThan(30)
       expect(plan.metrics.maxRoomDepth).toBeLessThanOrEqual(cfg.office.corridors.maxRoomDepth)
       expect(plan.metrics.portalMisses).toBe(0)
       expect(plan.metrics.unroutedStairs).toBe(0)
+      expect(plan.metrics.unroutedMultilevel).toBe(0)
       expect(plan.metrics.unsupportedDoors).toBe(0)
       expect(plan.metrics.invalidRooms).toBe(0)
       expect(plan.metrics.seamRatio).toBeLessThanOrEqual(cfg.office.corridors.maxSeamRatio)
@@ -271,12 +274,12 @@ describe('multi-chunk office district plan', () => {
     expect(buildOfficeDistrictPlan(seed, 0, 0, nonFinite).size).toBe(3 * CHUNK)
   })
 
-  // Byte-exactness needs physical stair stamps off: the plan reserves their
-  // lobbies, while guard walls/holes remain a post-slice realization covered
-  // by the plan-aware lobby test below plus stairs.test.js.
+  // Byte-exactness needs physical vertical stamps off: plans reserve their
+  // circulation, while guard walls/holes remain post-slice realizations.
   it('slices chunks from the district while preserving internal seam bytes', () => {
     const cfgNS = structuredClone(cfg)
     cfgNS.stairs.enabled = false
+    cfgNS.multilevel.enabled = false
     const plan = buildOfficeDistrictPlan(seed, 0, 0, cfgNS)
     const chunks = new Map()
     for (let cz = 0; cz < cfgNS.office.districtChunks; cz++) {
@@ -364,6 +367,34 @@ describe('multi-chunk office district plan', () => {
         const local = (z % CHUNK) * CHUNK + (x % CHUNK)
         expect([CELL_LOBBY, CELL_STAIR]).toContain(stamped.cellKind[local])
       }
+    }
+  })
+
+  it('reserves both atrium floors and routes the opposite bridge banks before rooms', () => {
+    const rootSeed = 1337
+    const host = { cx: -2, cz: -9 }
+    const district = officeDistrictCoords(host.cx, host.cz, cfg)
+    for (const cy of [0, 1]) {
+      const seedForLayer = layerSeed(rootSeed, cy)
+      const plan = buildOfficeDistrictPlan(seedForLayer, district.dx, district.dz, cfg, {
+        rootSeed,
+        layerSeed: seedForLayer,
+        cy,
+      })
+      const lobby = plan.multilevelLobbies.find(
+        (candidate) => candidate.cx === host.cx && candidate.cz === host.cz
+      )
+      expect(lobby).toBeTruthy()
+      expect(lobby.kind).toBe(cy === 0 ? 'up' : 'down')
+      expect(plan.metrics.unroutedMultilevel).toBe(0)
+      expect(plan.metrics.multilevelLobbies).toBe(plan.multilevelLobbies.length)
+      for (const mouth of lobby.mouths) {
+        expect(isCirculation(plan.cellKind[mouth.z * plan.size + mouth.x])).toBe(true)
+      }
+      for (const cell of lobby.cells) expect(plan.cellKind[cell]).toBe(CELL_LOBBY)
+
+      const stamped = buildChunk(rootSeed, host.cx, cy, host.cz, cfg)
+      expect(stamped[cy === 0 ? 'multilevelUp' : 'multilevelDown']).toEqual(lobby.room)
     }
   })
 
@@ -553,6 +584,7 @@ describe('global warehouse structure', () => {
     cfg.warehouse.fragments.chance = 0
     cfg.warehouse.columns.chance = 1
     cfg.stairs.enabled = false // stair halos delete columns; the bay grid is asserted exactly
+    cfg.multilevel.enabled = false // atrium halls likewise clear structural columns
     const { spacing, phaseSalt } = cfg.warehouse.columns
     const seed = 0x51a7
     const px = hash2i((seed ^ phaseSalt) | 0, 0x58, 0) % spacing

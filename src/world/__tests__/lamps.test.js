@@ -2,11 +2,14 @@ import { describe, it, expect } from 'vitest'
 import { buildChunk } from '../pipeline.js'
 import { DEFAULT_WORLD_CONFIG as CFG } from '../config.js'
 import { CHUNK, ZONE_OFFICE, ZONE_PILLARS, ZONE_WAREHOUSE } from '../constants.js'
-import { CELL_CORRIDOR, CELL_LOBBY } from '../mapTypes.js'
+import { CELL_BRIDGE, CELL_CORRIDOR, CELL_LOBBY } from '../mapTypes.js'
 
 function forcedZone(zone) {
   const cfg = structuredClone(CFG)
   cfg.zoneBands = [{ id: zone, max: 1.01 }]
+  // These tests isolate the fixture/dead-state streams over 4,800 chunks;
+  // multilevel ceiling-hole behavior has its own structural integration suite.
+  cfg.multilevel.enabled = false
   return cfg
 }
 
@@ -16,8 +19,11 @@ describe('feature-keyed lamp randomness', () => {
       const cfg = forcedZone(zone)
       let fixtures = 0
       let dead = 0
-      for (let cz = -20; cz < 20; cz++) {
-        for (let cx = -20; cx < 20; cx++) {
+      // 900 chunks per zone still yields several thousand fixtures, enough for
+      // a stable conditional-rate bound without competing with the structural
+      // property suites for Vitest's five-second worker budget.
+      for (let cz = -15; cz < 15; cz++) {
+        for (let cx = -15; cx < 15; cx++) {
           const data = buildChunk(0x71a9, cx, 0, cz, cfg)
           fixtures += data.lamps.length
           for (const lamp of data.lamps) dead += lamp.lit ? 0 : 1
@@ -50,7 +56,7 @@ describe('feature-keyed lamp randomness', () => {
           const data = buildChunk(seed, cx, 0, cz, cfg)
           for (const lamp of data.lamps) {
             const kind = data.cellKind[lamp.lz * CHUNK + lamp.lx]
-            if (kind !== CELL_CORRIDOR && kind !== CELL_LOBBY) continue
+            if (kind !== CELL_CORRIDOR && kind !== CELL_LOBBY && kind !== CELL_BRIDGE) continue
             fixtures++
             if (lamp.lit) lit++
           }

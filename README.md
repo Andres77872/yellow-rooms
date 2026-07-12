@@ -24,7 +24,16 @@ The world is generated reproducibly from a text seed. The headless generation
 pipeline produces thin-wall `ChunkData`; rendering, collision, AI, minimap, and
 debug tools all consume that same topology.
 
-World-gen version 9 adds:
+World-gen version 10 adds:
+
+- canonical root-seeded two-floor atrium contracts with matching slab masks;
+- wide lower halls, connected upper galleries, retained narrow bridge decks,
+  protected bridge guards, and structural drop beams;
+- observation windows generated only on gallery edges that look into their
+  owning multilevel room, with movement and sight modeled independently;
+- plan-aware atrium/bridge approaches reserved before office room allocation;
+- arbitrary-mask slab fascia meshing, multilevel visibility/light apertures,
+  void-aware navigation, minimaps, and layered integrity audits;
 
 - deterministic stacked floors with shared slab contracts and walkable stairs;
 - plan-aware office stair lobbies reserved before rooms and routed into the
@@ -54,6 +63,8 @@ are documented in [docs/map-generation-research.md](docs/map-generation-research
 - `src/world/topology.js` — wall and column-aware safety repair for open zones
 - `src/world/slab.js` — canonical vertical contracts and fallback stair election
 - `src/world/stairStamp.js` — lobby, aperture, guard-wall, and stair realization
+- `src/world/multilevel.js` — canonical atrium/bridge contracts and host election
+- `src/world/multilevelStamp.js` — hall, void, gallery, window, rail, and bridge realization
 - `src/world/audit.js` — 2D seam and canonical layered-connectivity validation
 - `src/world/mapTypes.js` — semantic cell and passage vocabulary
 - `src/world/pipeline.js` — pure public generation pipeline

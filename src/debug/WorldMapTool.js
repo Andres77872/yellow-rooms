@@ -15,6 +15,7 @@ import { hashStr } from '../world/core/hash.js'
 import { floodReachable } from '../world/connectivity.js'
 import { auditLayeredPatch, auditPatch } from '../world/audit.js'
 import { section, slider, toggle, button, segmented, readout, buttonRow } from './widgets.js'
+import { CELL_BRIDGE, WALL_RAIL, WALL_WINDOW } from '../world/mapTypes.js'
 
 const LOGW = 322
 const LOGH = 322
@@ -279,7 +280,9 @@ export class WorldMapTool {
     if (!d) return true
     return d.hAt(gx - cx * CHUNK, gz - cz * CHUNK) === 1
   }
-  // Is this cell a stair run (ramp) or hole (open slab) on the drawn floor?
+  // Is this cell unavailable as an ordinary planar navigation node? Upper
+  // atrium voids are floor holes; lower atrium halls intentionally remain
+  // walkable even though their ceiling is open.
   // Mirrors pathfind's cellBlocked stair term with the tool's own data access
   // (EXPLORE mode has no ChunkManager to query).
   _stairBlocked(gx, gz) {
@@ -289,7 +292,8 @@ export class WorldMapTool {
     if (!d) return false
     const lx = gx - cx * CHUNK
     const lz = gz - cz * CHUNK
-    return d.hasCeilHole(lx, lz) || d.hasFloorHole(lx, lz)
+    const stairRun = !!d.stairUp?.run?.some((cell) => cell.lx === lx && cell.lz === lz)
+    return d.hasFloorHole(lx, lz) || stairRun
   }
 
   onShow() {}
@@ -337,12 +341,27 @@ export class WorldMapTool {
         ctx.fillStyle = ZONE_TINT[d.zone] || 'rgba(120,110,60,.05)'
         ctx.fillRect(this._sx(ox), this._sy(oz), CHUNK_WORLD * scale, CHUNK_WORLD * scale)
 
+        // Actual current-floor surface: void cells remain dark; the retained
+        // narrow bridge is highlighted so a malformed/floating deck is obvious.
+        for (let lz = 0; lz < CHUNK; lz++) {
+          for (let lx = 0; lx < CHUNK; lx++) {
+            if (d.hasFloorHole(lx, lz)) {
+              ctx.fillStyle = 'rgba(4,4,3,.72)'
+              ctx.fillRect(this._sx(ox + lx * CELL), this._sy(oz + lz * CELL), CELL * scale, CELL * scale)
+            } else if (d.cellKind[lz * CHUNK + lx] === CELL_BRIDGE) {
+              ctx.fillStyle = 'rgba(120,210,190,.28)'
+              ctx.fillRect(this._sx(ox + lx * CELL), this._sy(oz + lz * CELL), CELL * scale, CELL * scale)
+            }
+          }
+        }
+
         // Sealed-pocket overlay (cells unreached by the validator; stair
         // run/hole cells are non-nodes and get the hatch glyph instead).
         if (reached) {
           for (let lz = 0; lz < CHUNK; lz++) {
             for (let lx = 0; lx < CHUNK; lx++) {
-              if (d.hasCeilHole(lx, lz) || d.hasFloorHole(lx, lz)) continue
+              const stairRun = !!d.stairUp?.run?.some((cell) => cell.lx === lx && cell.lz === lz)
+              if (d.hasFloorHole(lx, lz) || stairRun) continue
               const gx = ccx * CHUNK + lx
               const gz = ccz * CHUNK + lz
               if (!reached.has(gx + ',' + gz)) {
@@ -376,6 +395,29 @@ export class WorldMapTool {
           }
         }
         ctx.stroke()
+
+        const featureStroke = (wanted, color) => {
+          ctx.strokeStyle = color
+          ctx.lineWidth = Math.max(1.5, wallW * 1.4)
+          ctx.beginPath()
+          for (let z = 0; z < CHUNK; z++) {
+            for (let line = 0; line < CHUNK; line++) {
+              if (d.wallFeatureVAt(line, z) === wanted) {
+                const x = this._sx(ox + line * CELL)
+                ctx.moveTo(x, this._sy(oz + z * CELL))
+                ctx.lineTo(x, this._sy(oz + (z + 1) * CELL))
+              }
+              if (d.wallFeatureHAt(z, line) === wanted) {
+                const y = this._sy(oz + line * CELL)
+                ctx.moveTo(this._sx(ox + z * CELL), y)
+                ctx.lineTo(this._sx(ox + (z + 1) * CELL), y)
+              }
+            }
+          }
+          ctx.stroke()
+        }
+        featureStroke(WALL_WINDOW, '#8fd0c0')
+        featureStroke(WALL_RAIL, '#d0aa58')
 
         // Columns.
         ctx.fillStyle = '#6e6230'

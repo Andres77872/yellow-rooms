@@ -60,6 +60,7 @@ export function edgeOpen(cm, gx, gz, cy, dir) {
 // rule shared by the expansion, the retarget, steering and the debug flood.
 export function cellBlocked(cm, gx, gz, cy) {
   if (cm.columnAt(gx, gz, cy)) return true
+  if (cm.floorHoleAt?.(gx, gz, cy)) return true
   const s = cm.stairAt(gx, gz, cy)
   return !!s && (s.part === 'run' || s.part === 'hole')
 }

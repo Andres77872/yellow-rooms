@@ -1,6 +1,15 @@
-import { CHUNK } from './constants.js'
+import { CHUNK, cIdx } from './constants.js'
 import { STAIR_DX, STAIR_DZ } from './slab.js'
 import { PASSAGE_WALL, PASSAGE_WIDE } from './mapTypes.js'
+import {
+  CELL_ATRIUM,
+  CELL_BRIDGE,
+  CELL_LOBBY,
+  CELL_VOID,
+  WALL_PLAIN,
+  WALL_RAIL,
+  WALL_WINDOW,
+} from './mapTypes.js'
 import { chunksShareOfficeDistrict } from './zones/officePlan.js'
 
 // Continuity / "isolation" audit for the thin-wall generator. THREE-free and
@@ -185,6 +194,10 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
     holeMismatches: [],
     orphanedHalves: [],
     invalidCanonicalLinks: [],
+    mismatchedMultilevelDescriptors: [],
+    orphanedMultilevelHalves: [],
+    invalidMultilevelRooms: [],
+    strayWallFeatures: [],
   }
   const audit = {
     chunks: chunks.size,
@@ -197,6 +210,12 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
     orphanedHalves: 0,
     canonicalLinks: 0,
     invalidCanonicalLinks: 0,
+    multilevelRooms: 0,
+    multilevelPairs: 0,
+    mismatchedMultilevelDescriptors: 0,
+    orphanedMultilevelHalves: 0,
+    invalidMultilevelRooms: 0,
+    strayWallFeatures: 0,
     walkableCells: 0,
     components: 0,
     componentSizes: [],
@@ -211,6 +230,7 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
   // nodes have been materialized. Bad/mismatched/orphaned halves never create
   // a synthetic vertical connection that could hide a real disconnection.
   const pendingLinks = []
+  const pairedUpperRooms = new Set()
   for (let cy = Y0; cy < Y0 + NY - 1; cy++) {
     for (let cz = Z0; cz < Z0 + NZ; cz++) {
       for (let cx = X0; cx < X0 + NX; cx++) {
@@ -246,11 +266,37 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
           }
         }
 
+        const roomUp = lower.multilevelUp
+        const roomDown = upper.multilevelDown
+        if (roomUp || roomDown) audit.multilevelRooms++
+        if (!!roomUp !== !!roomDown) {
+          audit.orphanedMultilevelHalves++
+          details.orphanedMultilevelHalves.push({
+            cx,
+            cy,
+            cz,
+            half: roomUp ? 'lower.multilevelUp' : 'upper.multilevelDown',
+          })
+        } else if (roomUp && roomDown) {
+          pairedUpperRooms.add(key3(cx, cy + 1, cz))
+          audit.multilevelPairs++
+          if (!sameMultilevelDescriptor(roomUp, roomDown)) {
+            audit.mismatchedMultilevelDescriptors++
+            details.mismatchedMultilevelDescriptors.push({ cx, cy, cz })
+          } else {
+            const reasons = multilevelRoomErrors(lower, upper, roomUp)
+            if (reasons.length > 0) {
+              audit.invalidMultilevelRooms++
+              details.invalidMultilevelRooms.push({ cx, cy, cz, id: roomUp.id, reasons })
+            }
+          }
+        }
+
         let slabMismatch = false
         for (let lz = 0; lz < CHUNK; lz++) {
           for (let lx = 0; lx < CHUNK; lx++) {
-            const ceiling = stairHoleAt(lower.stairUp, lx, lz)
-            const floor = stairHoleAt(upper.stairDown, lx, lz)
+            const ceiling = lower.hasCeilHole(lx, lz)
+            const floor = upper.hasFloorHole(lx, lz)
             if (ceiling === floor) continue
             slabMismatch = true
             audit.holeMismatches++
@@ -260,6 +306,39 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
         if (slabMismatch) audit.holeMismatchSlabs++
       }
     }
+  }
+
+  // A window/rail without an upper multilevel descriptor is categorically
+  // invalid: ordinary walls and lower atrium halls may never acquire these
+  // see-through collision features. Paired upper rooms receive the stricter
+  // exact-edge validation in multilevelRoomErrors above.
+  for (const [key, data] of chunks) {
+    if (data.multilevelDown) {
+      if (pairedUpperRooms.has(key)) continue
+      const reasons = multilevelUpperBoundaryErrors(data, data.multilevelDown)
+      if (reasons.length > 0) {
+        const [cx, , cz] = key.split(',').map(Number)
+        audit.invalidMultilevelRooms++
+        details.invalidMultilevelRooms.push({
+          cx,
+          cy: data.multilevelDown.baseCy,
+          cz,
+          id: data.multilevelDown.id,
+          reasons,
+          boundaryHalf: 'upper.multilevelDown',
+        })
+      }
+      continue
+    }
+    let count = 0
+    for (let i = 0; i < data.wallFeatureV.length; i++) {
+      if (data.wallFeatureV[i] !== WALL_PLAIN) count++
+      if (data.wallFeatureH[i] !== WALL_PLAIN) count++
+    }
+    if (!count) continue
+    const [cx, cy, cz] = key.split(',').map(Number)
+    audit.strayWallFeatures += count
+    details.strayWallFeatures.push({ cx, cy, cz, count })
   }
 
   const nodes = new Map()
@@ -362,6 +441,10 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
     audit.holeMismatches === 0 &&
     audit.orphanedHalves === 0 &&
     audit.invalidCanonicalLinks === 0 &&
+    audit.mismatchedMultilevelDescriptors === 0 &&
+    audit.orphanedMultilevelHalves === 0 &&
+    audit.invalidMultilevelRooms === 0 &&
+    audit.strayWallFeatures === 0 &&
     audit.connected
   return audit
 }
@@ -379,6 +462,10 @@ function sameStairDescriptor(a, b) {
     sameCell(a.run?.[1], b.run?.[1]) &&
     sameCell(a.exit, b.exit)
   )
+}
+
+function sameMultilevelDescriptor(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b)
 }
 
 function validCell(cell) {
@@ -399,9 +486,213 @@ function stairHoleAt(stair, lx, lz) {
 function cellWalkable(data, lx, lz) {
   return (
     data.colAt(lx, lz) === 0 &&
+    !data.hasFloorHole(lx, lz) &&
     !stairHoleAt(data.stairUp, lx, lz) &&
     !stairHoleAt(data.stairDown, lx, lz)
   )
+}
+
+function multilevelRoomErrors(lower, upper, room) {
+  const reasons = []
+  const { x0, z0, x1, z1 } = room.bounds || {}
+  if (
+    !Number.isInteger(room.id) || room.id <= 0 || room.id > 0xffffffff ||
+    room.baseCy !== lower.cy ||
+    !Number.isInteger(x0) ||
+    !Number.isInteger(z0) ||
+    !Number.isInteger(x1) ||
+    !Number.isInteger(z1) ||
+    x0 < 1 || z0 < 1 || x1 >= CHUNK - 1 || z1 >= CHUNK - 1 ||
+    x0 > x1 || z0 > z1
+  ) {
+    return ['invalid room identity or bounds']
+  }
+  if (room.bridgeAxis !== 'x' && room.bridgeAxis !== 'z') {
+    return ['invalid bridge axis']
+  }
+
+  const expectedWindows = new Set()
+  const expectedRails = new Set()
+  const expectedMouths = new Set()
+  const edgeKey = (axis, line, cell) => `${axis}:${line},${cell}`
+  const state = (data, axis, line, cell) => axis === 'v'
+    ? {
+        wall: data.vAt(line, cell),
+        passage: data.passageVAt(line, cell),
+        feature: data.wallFeatureVAt(line, cell),
+      }
+    : {
+        wall: data.hAt(cell, line),
+        passage: data.passageHAt(cell, line),
+        feature: data.wallFeatureHAt(cell, line),
+      }
+
+  for (let z = z0; z <= z1; z++) {
+    const ends = room.bridgeAxis === 'x' && z === room.bridgeLine
+    for (const line of [x0, x1 + 1]) {
+      ;(ends ? expectedMouths : expectedWindows).add(edgeKey('v', line, z))
+    }
+  }
+  for (let x = x0; x <= x1; x++) {
+    const ends = room.bridgeAxis === 'z' && x === room.bridgeLine
+    for (const line of [z0, z1 + 1]) {
+      ;(ends ? expectedMouths : expectedWindows).add(edgeKey('h', line, x))
+    }
+  }
+  if (room.bridgeAxis === 'x') {
+    for (let x = x0; x <= x1; x++) {
+      expectedRails.add(edgeKey('h', room.bridgeLine, x))
+      expectedRails.add(edgeKey('h', room.bridgeLine + 1, x))
+    }
+  } else {
+    for (let z = z0; z <= z1; z++) {
+      expectedRails.add(edgeKey('v', room.bridgeLine, z))
+      expectedRails.add(edgeKey('v', room.bridgeLine + 1, z))
+    }
+  }
+
+  const actualVoid = new Set(room.voidCells?.map((c) => `${c.lx},${c.lz}`) || [])
+  const actualBridge = new Set(room.bridgeCells?.map((c) => `${c.lx},${c.lz}`) || [])
+  const footprint = (x1 - x0 + 1) * (z1 - z0 + 1)
+  for (let z = z0; z <= z1; z++) {
+    for (let x = x0; x <= x1; x++) {
+      const key = `${x},${z}`
+      const bridge = room.bridgeAxis === 'x' ? z === room.bridgeLine : x === room.bridgeLine
+      if (bridge !== actualBridge.has(key) || bridge === actualVoid.has(key)) {
+        reasons.push('descriptor does not partition footprint into void and bridge')
+      }
+      if (lower.colAt(x, z) || upper.colAt(x, z)) reasons.push('column inside room volume')
+      if (bridge) {
+        if (lower.hasCeilHole(x, z) || upper.hasFloorHole(x, z)) {
+          reasons.push('bridge deck is not a retained slab cell')
+        }
+        if (upper.cellKind[cIdx(x, z)] !== CELL_BRIDGE) reasons.push('bridge semantic missing')
+      } else {
+        if (!lower.hasCeilHole(x, z) || !upper.hasFloorHole(x, z)) {
+          reasons.push('void slab mask is incomplete')
+        }
+        if (upper.cellKind[cIdx(x, z)] !== CELL_VOID) reasons.push('void semantic missing')
+      }
+      if (lower.cellKind[cIdx(x, z)] !== CELL_ATRIUM) reasons.push('lower atrium semantic missing')
+      if (lower.spaceId[cIdx(x, z)] !== room.id || upper.spaceId[cIdx(x, z)] !== room.id) {
+        reasons.push('room identity missing from footprint')
+      }
+    }
+  }
+  if (actualVoid.size + actualBridge.size !== footprint) {
+    reasons.push('descriptor footprint area mismatch')
+  }
+
+  const bridgeCells = room.bridgeCells || []
+  const expectedLength = room.bridgeAxis === 'x' ? x1 - x0 + 1 : z1 - z0 + 1
+  if (bridgeCells.length !== expectedLength) reasons.push('invalid bridge length')
+  for (let i = 1; i < bridgeCells.length; i++) {
+    const a = bridgeCells[i - 1]
+    const b = bridgeCells[i]
+    const canonical = room.bridgeAxis === 'x'
+      ? b.lx === a.lx + 1 && b.lz === a.lz
+      : b.lz === a.lz + 1 && b.lx === a.lx
+    if (!canonical) {
+      reasons.push('non-canonical bridge deck')
+      break
+    }
+    const axis = room.bridgeAxis === 'x' ? 'v' : 'h'
+    const line = room.bridgeAxis === 'x' ? b.lx : b.lz
+    const cell = room.bridgeAxis === 'x' ? a.lz : a.lx
+    if (state(upper, axis, line, cell).wall !== 0) {
+      reasons.push('blocked bridge deck')
+      break
+    }
+  }
+  const banks = room.bridgeAxis === 'x'
+    ? [
+        { lx: x0 - 1, lz: room.bridgeLine },
+        { lx: x1 + 1, lz: room.bridgeLine },
+      ]
+    : [
+        { lx: room.bridgeLine, lz: z0 - 1 },
+        { lx: room.bridgeLine, lz: z1 + 1 },
+      ]
+  for (const bank of banks) {
+    if (
+      upper.hasFloorHole(bank.lx, bank.lz) ||
+      upper.colAt(bank.lx, bank.lz) ||
+      upper.cellKind[cIdx(bank.lx, bank.lz)] !== CELL_LOBBY
+    ) {
+      reasons.push('invalid bridge bank')
+      break
+    }
+  }
+
+  for (const key of expectedWindows) {
+    const [axis, coords] = key.split(':')
+    const [line, cell] = coords.split(',').map(Number)
+    const s = state(upper, axis, line, cell)
+    if (s.wall !== 1 || s.passage !== PASSAGE_WALL || s.feature !== WALL_WINDOW) {
+      reasons.push('invalid observation window')
+      break
+    }
+  }
+  for (const key of expectedRails) {
+    const [axis, coords] = key.split(':')
+    const [line, cell] = coords.split(',').map(Number)
+    const s = state(upper, axis, line, cell)
+    if (s.wall !== 1 || s.passage !== PASSAGE_WALL || s.feature !== WALL_RAIL) {
+      reasons.push('invalid bridge guard')
+      break
+    }
+  }
+  for (const key of expectedMouths) {
+    const [axis, coords] = key.split(':')
+    const [line, cell] = coords.split(',').map(Number)
+    const s = state(upper, axis, line, cell)
+    if (s.wall !== 0 || s.passage !== PASSAGE_WIDE || s.feature !== WALL_PLAIN) {
+      reasons.push('invalid bridge approach')
+      break
+    }
+  }
+
+  // No feature-marked edge may exist outside the room-derived sets. This is
+  // the audit-level proof that ordinary partitions never become windows.
+  for (let cell = 0; cell < CHUNK; cell++) {
+    for (let line = 0; line < CHUNK; line++) {
+      const vf = upper.wallFeatureVAt(line, cell)
+      const hf = upper.wallFeatureHAt(cell, line)
+      if (vf !== WALL_PLAIN) {
+        const key = edgeKey('v', line, cell)
+        if (
+          (vf !== WALL_WINDOW || !expectedWindows.has(key)) &&
+          (vf !== WALL_RAIL || !expectedRails.has(key))
+        ) reasons.push('window or rail outside its multilevel room')
+      }
+      if (hf !== WALL_PLAIN) {
+        const key = edgeKey('h', line, cell)
+        if (
+          (hf !== WALL_WINDOW || !expectedWindows.has(key)) &&
+          (hf !== WALL_RAIL || !expectedRails.has(key))
+        ) reasons.push('window or rail outside its multilevel room')
+      }
+    }
+  }
+  return [...new Set(reasons)]
+}
+
+// A bounded live/debug patch may begin on an upper atrium floor and omit the
+// lower owner by design. Validate every upper-local invariant anyway by
+// supplying a canonical lower semantic view derived from the descriptor; only
+// cross-slab pairing/connectivity remains outside the patch's authority.
+function multilevelUpperBoundaryErrors(upper, room) {
+  const voidCells = new Set(room?.voidCells?.map((cell) => `${cell.lx},${cell.lz}`) || [])
+  const cellKind = new Uint8Array(CHUNK * CHUNK).fill(CELL_ATRIUM)
+  const spaceId = new Uint32Array(CHUNK * CHUNK).fill(room?.id || 0)
+  const lower = {
+    cy: room?.baseCy,
+    cellKind,
+    spaceId,
+    colAt: () => 0,
+    hasCeilHole: (lx, lz) => voidCells.has(`${lx},${lz}`),
+  }
+  return multilevelRoomErrors(lower, upper, room)
 }
 
 function canonicalLinkErrors(lower, upper, stair) {

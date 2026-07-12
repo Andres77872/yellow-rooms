@@ -62,6 +62,20 @@ describe('sightGate floor gating', () => {
     expect(sightGate(far, cam, ent, 1, player, 0, 60)).toBe(false)
   })
 
+  it('uses a multilevel room lobe instead of reducing the wide void to one point', () => {
+    const ent = feet(20, 1, 0)
+    const cam = cameraAt({ x: 0, y: 1.7, z: 0 }, { x: 20, y: LAYER_H, z: 0 })
+    const room = makeCM([{
+      centerX: 12,
+      centerZ: 0,
+      lowerCy: 0,
+      regions: [{ minX: 0, maxX: 24, minZ: -3, maxZ: 3 }],
+    }])
+    // Both parties are inside the same open lobe although each is farther than
+    // STAIR_SIGHT_R from the descriptor center.
+    expect(sightGate(room, cam, ent, 1, player, 0, 60)).toBe(true)
+  })
+
   it('mid-transit: a player on the connecting stair still observes the lower floor', () => {
     // Feet just past the handoff (hysteresis floor = 1) but standing on the
     // stair's lower-layer strip: the entity at the stair base is plainly on

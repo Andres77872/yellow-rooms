@@ -9,6 +9,7 @@ import {
 import { hasLineOfSight } from '../player/collision.js'
 import { generateChunk } from './generate.js'
 import { buildStairCells } from './stairCells.js'
+import { wallFeatureSeesThrough } from './mapTypes.js'
 
 // Player-explored fog-of-war state for the HUD minimap. Pure data/logic (no
 // THREE), so it stays unit-testable like ChunkData / collision.
@@ -101,6 +102,42 @@ export class ExploredMap {
     const d = this.dataAt(cx, cy, cz)
     if (!d) return false
     return d.hAt(gx - cx * CHUNK, gz - cz * CHUNK) === 1
+  }
+
+  wallFeatureVAt(gx, gz, cy = 0) {
+    const cx = Math.floor(gx / CHUNK)
+    const cz = Math.floor(gz / CHUNK)
+    const d = this.dataAt(cx, cy, cz)
+    return d ? d.wallFeatureVAt(gx - cx * CHUNK, gz - cz * CHUNK) : 0
+  }
+
+  wallFeatureHAt(gx, gz, cy = 0) {
+    const cx = Math.floor(gx / CHUNK)
+    const cz = Math.floor(gz / CHUNK)
+    const d = this.dataAt(cx, cy, cz)
+    return d ? d.wallFeatureHAt(gx - cx * CHUNK, gz - cz * CHUNK) : 0
+  }
+
+  opaqueVAt(gx, gz, cy = 0) {
+    return this.wallVAt(gx, gz, cy) && !wallFeatureSeesThrough(this.wallFeatureVAt(gx, gz, cy))
+  }
+
+  opaqueHAt(gx, gz, cy = 0) {
+    return this.wallHAt(gx, gz, cy) && !wallFeatureSeesThrough(this.wallFeatureHAt(gx, gz, cy))
+  }
+
+  floorHoleAt(gx, gz, cy = 0) {
+    const cx = Math.floor(gx / CHUNK)
+    const cz = Math.floor(gz / CHUNK)
+    const d = this.dataAt(cx, cy, cz)
+    return !!d?.hasFloorHole(gx - cx * CHUNK, gz - cz * CHUNK)
+  }
+
+  cellKindAt(gx, gz, cy = 0) {
+    const cx = Math.floor(gx / CHUNK)
+    const cz = Math.floor(gz / CHUNK)
+    const d = this.dataAt(cx, cy, cz)
+    return d ? d.cellKind[cIdx(gx - cx * CHUNK, gz - cz * CHUNK)] : 0
   }
 
   columnAt(gx, gz, cy = 0) {

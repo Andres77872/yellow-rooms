@@ -28,16 +28,55 @@ export class Chunk {
     this._mesh = mesh
     this.stairCells = buildStairCells(this.data, cx, cy, cz)
 
-    // Stair apertures through this chunk's CEILING (slab cy): the world-space
-    // centre of the two hole cells. Feeds the light-spill filter and the
-    // aperture-gated visibility in ChunkManager.
+    // Vertical openings through this chunk's CEILING (slab cy). Stairs expose
+    // a point-like centre; multilevel rooms expose the exact two void lobes on
+    // either side of their bridge. Feeds light, sight and visibility gating.
     this.apertures = []
     const up = this.data.stairUp
     if (up) {
+      const centerX = cx * CHUNK_WORLD + ((up.run[0].lx + up.run[1].lx) / 2 + 0.5) * CELL
+      const centerZ = cz * CHUNK_WORLD + ((up.run[0].lz + up.run[1].lz) / 2 + 0.5) * CELL
       this.apertures.push({
-        centerX: cx * CHUNK_WORLD + ((up.run[0].lx + up.run[1].lx) / 2 + 0.5) * CELL,
-        centerZ: cz * CHUNK_WORLD + ((up.run[0].lz + up.run[1].lz) / 2 + 0.5) * CELL,
+        kind: 'stair',
+        id: `stair:${cx},${cy},${cz}`,
+        centerX,
+        centerZ,
+        minX: centerX,
+        maxX: centerX,
+        minZ: centerZ,
+        maxZ: centerZ,
+        regions: [{ minX: centerX, maxX: centerX, minZ: centerZ, maxZ: centerZ }],
         lowerCy: cy,
+      })
+    }
+    const room = this.data.multilevelUp
+    if (room) {
+      const { x0, z0, x1, z1 } = room.bounds
+      const minX = cx * CHUNK_WORLD + x0 * CELL
+      const maxX = cx * CHUNK_WORLD + (x1 + 1) * CELL
+      const minZ = cz * CHUNK_WORLD + z0 * CELL
+      const maxZ = cz * CHUNK_WORLD + (z1 + 1) * CELL
+      const split = room.bridgeLine
+      const regions = room.bridgeAxis === 'x'
+        ? [
+            { minX, maxX, minZ, maxZ: cz * CHUNK_WORLD + split * CELL },
+            { minX, maxX, minZ: cz * CHUNK_WORLD + (split + 1) * CELL, maxZ },
+          ]
+        : [
+            { minX, maxX: cx * CHUNK_WORLD + split * CELL, minZ, maxZ },
+            { minX: cx * CHUNK_WORLD + (split + 1) * CELL, maxX, minZ, maxZ },
+          ]
+      this.apertures.push({
+        kind: 'multilevel',
+        id: room.id,
+        centerX: (minX + maxX) / 2,
+        centerZ: (minZ + maxZ) / 2,
+        minX,
+        maxX,
+        minZ,
+        maxZ,
+        regions,
+        lowerCy: room.baseCy,
       })
     }
   }

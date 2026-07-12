@@ -31,13 +31,22 @@ function apertureSight(cm, ax, az, acy, bx, bz, bcy) {
   const r2 = STAIR_SIGHT_R * STAIR_SIGHT_R
   for (const ap of cm.apertures.values()) {
     if (ap.lowerCy !== lower) continue
-    const d1 = (ax - ap.centerX) ** 2 + (az - ap.centerZ) ** 2
-    if (d1 > r2) continue
-    const d2 = (bx - ap.centerX) ** 2 + (bz - ap.centerZ) ** 2
-    if (d2 > r2) continue
-    if (!hasLineOfSight(cm, ax, az, ap.centerX, ap.centerZ, acy)) continue
-    if (!hasLineOfSight(cm, bx, bz, ap.centerX, ap.centerZ, bcy)) continue
-    return true
+    for (const region of ap.regions || [ap]) {
+      const minX = region.minX ?? ap.centerX
+      const maxX = region.maxX ?? ap.centerX
+      const minZ = region.minZ ?? ap.centerZ
+      const maxZ = region.maxZ ?? ap.centerZ
+      const adx = ax - Math.max(minX, Math.min(maxX, ax))
+      const adz = az - Math.max(minZ, Math.min(maxZ, az))
+      const bdx = bx - Math.max(minX, Math.min(maxX, bx))
+      const bdz = bz - Math.max(minZ, Math.min(maxZ, bz))
+      if (adx * adx + adz * adz > r2 || bdx * bdx + bdz * bdz > r2) continue
+      const targetX = (minX + maxX) / 2
+      const targetZ = (minZ + maxZ) / 2
+      if (!hasLineOfSight(cm, ax, az, targetX, targetZ, acy)) continue
+      if (!hasLineOfSight(cm, bx, bz, targetX, targetZ, bcy)) continue
+      return true
+    }
   }
   return false
 }

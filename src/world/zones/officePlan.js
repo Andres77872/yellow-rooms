@@ -13,6 +13,7 @@ import {
 } from '../mapTypes.js'
 import { selectZone } from '../regions.js'
 import { chunkStairs, stairStrip, STAIR_DX, STAIR_DZ } from '../slab.js'
+import { chunkMultilevelRooms } from '../multilevel.js'
 import { bsp } from './ZoneGenerator.js'
 
 // Office planning happens on a district grid above streaming chunks. Boundary
@@ -97,6 +98,7 @@ class OfficePlan {
     this.adjacency = []
     this.portals = []
     this.stairLobbies = []
+    this.multilevelLobbies = []
     this.metrics = {}
     this.score = Infinity
   }
@@ -303,6 +305,67 @@ function collectStairLobbies(plan, seed, config, context) {
   return out
 }
 
+// Reserve multilevel-room circulation before BSP allocation. The physical
+// stamp still owns slab holes/windows/guards, but both office floors now plan
+// their approaches around one shared vertical contract: the lower floor keeps
+// the wide hall open; the upper floor keeps its gallery ring and bridge deck
+// out of ordinary rooms. Opposite bridge banks become mandatory circulation
+// endpoints on both levels.
+function collectMultilevelLobbies(plan, seed, config, context) {
+  const ctx = layerContext(seed, context)
+  const n = officePlanConfig(config).districtChunks
+  const out = []
+  for (let localCz = 0; localCz < n; localCz++) {
+    for (let localCx = 0; localCx < n; localCx++) {
+      const chunkX0 = localCx * CHUNK
+      const chunkZ0 = localCz * CHUNK
+      if (!plan.active[idx(plan.size, chunkX0, chunkZ0)]) continue
+      const cx = plan.dx * n + localCx
+      const cz = plan.dz * n + localCz
+      const contracts = chunkMultilevelRooms(ctx.rootSeed, cx, cz, ctx.cy, config)
+      for (const kind of ['up', 'down']) {
+        const room = contracts[kind]
+        if (!room.hasRoom) continue
+        const { x0, z0, x1, z1 } = room.bounds
+        const cells = []
+        const add = (lx, lz) => {
+          if (lx < 0 || lx >= CHUNK || lz < 0 || lz >= CHUNK) return
+          const i = idx(plan.size, chunkX0 + lx, chunkZ0 + lz)
+          if (plan.active[i]) cells.push(i)
+        }
+        if (kind === 'up') {
+          for (let lz = z0 - 1; lz <= z1 + 1; lz++) {
+            for (let lx = x0 - 1; lx <= x1 + 1; lx++) add(lx, lz)
+          }
+        } else {
+          // Upper gallery: reserve the perimeter ring and bridge, never the
+          // non-walkable void cells themselves.
+          for (let lz = z0 - 1; lz <= z1 + 1; lz++) {
+            for (let lx = x0 - 1; lx <= x1 + 1; lx++) {
+              const ring = lx < x0 || lx > x1 || lz < z0 || lz > z1
+              const bridge = room.bridgeAxis === 'x'
+                ? lz === room.bridgeLine && lx >= x0 && lx <= x1
+                : lx === room.bridgeLine && lz >= z0 && lz <= z1
+              if (ring || bridge) add(lx, lz)
+            }
+          }
+        }
+        const mouths = room.bridgeAxis === 'x'
+          ? [
+              { x: chunkX0 + x0 - 1, z: chunkZ0 + room.bridgeLine },
+              { x: chunkX0 + x1 + 1, z: chunkZ0 + room.bridgeLine },
+            ]
+          : [
+              { x: chunkX0 + room.bridgeLine, z: chunkZ0 + z0 - 1 },
+              { x: chunkX0 + room.bridgeLine, z: chunkZ0 + z1 + 1 },
+            ]
+        out.push({ kind, cx, cy: ctx.cy, cz, cells: [...new Set(cells)], mouths, room })
+      }
+    }
+  }
+  return out
+}
+
 function labelMask(mask, size) {
   const labels = new Int16Array(mask.length).fill(-1)
   const cells = []
@@ -461,6 +524,15 @@ function planCirculation(plan, seed, config, candidate) {
       stair: true,
     })
     for (const cell of lobby.cells) corridor[cell] = CELL_LOBBY
+  }
+  for (const lobby of plan.multilevelLobbies) {
+    for (const cell of lobby.cells) corridor[cell] = CELL_LOBBY
+    for (const mouth of lobby.mouths) {
+      const i = idx(plan.size, mouth.x, mouth.z)
+      const component = components.labels[i]
+      if (component < 0) continue
+      endpointsByComponent[component].push({ ...mouth, i, multilevel: true })
+    }
   }
 
   for (let component = 0; component < components.cells.length; component++) {
@@ -1435,7 +1507,15 @@ function scorePlan(
     const kind = plan.cellKind[idx(plan.size, lobby.mouth.x, lobby.mouth.z)]
     return kind !== CELL_CORRIDOR && kind !== CELL_LOBBY
   }).length
+  const unroutedMultilevel = plan.multilevelLobbies.reduce((count, lobby) =>
+    count + lobby.mouths.filter((mouth) => {
+      const kind = plan.cellKind[idx(plan.size, mouth.x, mouth.z)]
+      return kind !== CELL_CORRIDOR && kind !== CELL_LOBBY
+    }).length, 0)
   const stairLobbyCells = new Set(plan.stairLobbies.flatMap((lobby) => lobby.cells)).size
+  const multilevelLobbyCells = new Set(
+    plan.multilevelLobbies.flatMap((lobby) => lobby.cells)
+  ).size
   let unsupported = 0
   for (let z = 0; z < plan.size; z++) {
     for (let x = 0; x < plan.size; x++) {
@@ -1460,6 +1540,9 @@ function scorePlan(
     stairLobbies: plan.stairLobbies.length,
     stairLobbyCells,
     unroutedStairs,
+    multilevelLobbies: plan.multilevelLobbies.length,
+    multilevelLobbyCells,
+    unroutedMultilevel,
     unsupportedDoors: unsupported,
     seamRatio,
     sliceRepairs,
@@ -1474,6 +1557,7 @@ function scorePlan(
   plan.score =
     portalMisses * 100 +
     unroutedStairs * 1000 +
+    unroutedMultilevel * 1000 +
     unsupported * 5 +
     invalidRooms * 100 +
     Math.max(0, maxDepth - cfg.maxRoomDepth) * 100 +
@@ -1496,6 +1580,7 @@ function buildCandidate(seed, dx, dz, config, candidate, context) {
   const plan = new OfficePlan(size, dx, dz)
   markActiveChunks(plan, seed, config)
   plan.stairLobbies = collectStairLobbies(plan, seed, config, context)
+  plan.multilevelLobbies = collectMultilevelLobbies(plan, seed, config, context)
   const circulation = planCirculation(plan, seed, config, candidate)
   const localSpace = allocateSpaces(
     plan,
@@ -1533,6 +1618,9 @@ function generateOfficeDistrictPlan(seed, dx, dz, config, context) {
   if (best.metrics.unroutedStairs > 0) {
     throw new Error('office planner could not route every stair lobby')
   }
+  if (best.metrics.unroutedMultilevel > 0) {
+    throw new Error('office planner could not route every multilevel-room approach')
+  }
   return best
 }
 
@@ -1542,6 +1630,7 @@ function configSignature(config) {
     config.region,
     config.zoneBands,
     config.stairs,
+    config.multilevel,
   ])
 }
 
@@ -1591,6 +1680,17 @@ function clonePlan(source) {
       landing: { ...lobby.contract.landing },
       run: lobby.contract.run.map((cell) => ({ ...cell })),
       exit: { ...lobby.contract.exit },
+    },
+  }))
+  plan.multilevelLobbies = source.multilevelLobbies.map((lobby) => ({
+    ...lobby,
+    cells: lobby.cells.slice(),
+    mouths: lobby.mouths.map((mouth) => ({ ...mouth })),
+    room: {
+      ...lobby.room,
+      bounds: { ...lobby.room.bounds },
+      voidCells: lobby.room.voidCells.map((cell) => ({ ...cell })),
+      bridgeCells: lobby.room.bridgeCells.map((cell) => ({ ...cell })),
     },
   }))
   plan.metrics = { ...source.metrics }

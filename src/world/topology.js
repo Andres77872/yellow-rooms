@@ -10,13 +10,18 @@ function labelComponents(data, respectColumns) {
   for (let z0 = 0; z0 < CHUNK; z0++) {
     for (let x0 = 0; x0 < CHUNK; x0++) {
       const start = index(x0, z0)
-      if (labels[start] !== -1 || (respectColumns && data.colAt(x0, z0))) continue
+      if (
+        labels[start] !== -1 ||
+        data.hasFloorHole(x0, z0) ||
+        (respectColumns && data.colAt(x0, z0))
+      ) continue
       labels[start] = count
       stack.push([x0, z0])
       while (stack.length) {
         const [x, z] = stack.pop()
         const visit = (nx, nz, wall) => {
           if (wall || nx < 0 || nx >= CHUNK || nz < 0 || nz >= CHUNK) return
+          if (data.hasFloorHole(nx, nz)) return
           if (respectColumns && data.colAt(nx, nz)) return
           const ni = index(nx, nz)
           if (labels[ni] !== -1) return
@@ -46,6 +51,7 @@ function candidateWalls(data, labels, respectColumns) {
   for (let z = 0; z < CHUNK; z++) {
     for (let x = 1; x < CHUNK; x++) {
       if (!data.vAt(x, z)) continue
+      if (data.hasFloorHole(x - 1, z) || data.hasFloorHole(x, z)) continue
       if (respectColumns && (data.colAt(x - 1, z) || data.colAt(x, z))) continue
       add(labels[index(x - 1, z)], labels[index(x, z)], { axis: 'v', line: x, cell: z })
     }
@@ -53,6 +59,7 @@ function candidateWalls(data, labels, respectColumns) {
   for (let z = 1; z < CHUNK; z++) {
     for (let x = 0; x < CHUNK; x++) {
       if (!data.hAt(x, z)) continue
+      if (data.hasFloorHole(x, z - 1) || data.hasFloorHole(x, z)) continue
       if (respectColumns && (data.colAt(x, z - 1) || data.colAt(x, z))) continue
       add(labels[index(x, z - 1)], labels[index(x, z)], { axis: 'h', line: z, cell: x })
     }

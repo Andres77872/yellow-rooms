@@ -2,13 +2,18 @@ import { describe, it, expect } from 'vitest'
 import { moveAndCollide, hasLineOfSight } from '../../player/collision.js'
 import { ChunkData } from '../ChunkData.js'
 import { CELL, CHUNK, PLAYER_R, WALL_COL_HALF } from '../constants.js'
+import { PASSAGE_WALL, WALL_RAIL, WALL_WINDOW, wallFeatureSeesThrough } from '../mapTypes.js'
 
 // Mock ChunkManager backed by a single chunk at the origin.
 function mockCM(data) {
   const inRange = (gx, gz) => gx >= 0 && gx < CHUNK && gz >= 0 && gz < CHUNK
+  const wallVAt = (gx, gz) => inRange(gx, gz) && data.vAt(gx, gz) === 1
+  const wallHAt = (gx, gz) => inRange(gx, gz) && data.hAt(gx, gz) === 1
   return {
-    wallVAt: (gx, gz) => inRange(gx, gz) && data.vAt(gx, gz) === 1,
-    wallHAt: (gx, gz) => inRange(gx, gz) && data.hAt(gx, gz) === 1,
+    wallVAt,
+    wallHAt,
+    opaqueVAt: (gx, gz) => wallVAt(gx, gz) && !wallFeatureSeesThrough(data.wallFeatureVAt(gx, gz)),
+    opaqueHAt: (gx, gz) => wallHAt(gx, gz) && !wallFeatureSeesThrough(data.wallFeatureHAt(gx, gz)),
     columnAt: (gx, gz) => inRange(gx, gz) && data.colAt(gx, gz) === 1,
   }
 }
@@ -82,6 +87,23 @@ describe('collision: line of sight', () => {
   it('is clear in fully open space', () => {
     const cm = mockCM(new ChunkData(0, 0, 0, 0))
     expect(hasLineOfSight(cm, 3, 3, 30, 12)).toBe(true)
+  })
+
+  it('windows and bridge rails block movement but not sight', () => {
+    for (const feature of [WALL_WINDOW, WALL_RAIL]) {
+      const data = new ChunkData(0, 0, 0, 0)
+      data.setV(5, 7, 1, PASSAGE_WALL, feature)
+      const cm = mockCM(data)
+      const z = 7.5 * CELL
+      const pos = { x: 5 * CELL - 1, z }
+      expect(moveAndCollide(cm, pos, 2, 0).x).toBe(true)
+      expect(hasLineOfSight(cm, 2.5 * CELL, z, 8.5 * CELL, z)).toBe(true)
+
+      // Transparency applies only to the marked barrier; an ordinary wall
+      // behind it still occludes the same ray.
+      data.setV(7, 7, 1)
+      expect(hasLineOfSight(cm, 2.5 * CELL, z, 8.5 * CELL, z)).toBe(false)
+    }
   })
 })
 

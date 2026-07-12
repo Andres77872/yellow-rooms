@@ -151,6 +151,12 @@ function generatedFallbackPatch(seed = 7331) {
       const entry = chunks.get(key(cx, cy, cz))
       return !entry || entry.data.colAt(local(gx, cx), local(gz, cz)) === 1
     },
+    floorHoleAt(gx, gz, cy) {
+      const cx = Math.floor(gx / CHUNK)
+      const cz = Math.floor(gz / CHUNK)
+      const entry = chunks.get(key(cx, cy, cz))
+      return !entry || entry.data.hasFloorHole(local(gx, cx), local(gz, cz))
+    },
     stairAt(gx, gz, cy) {
       const entry = entryAt(gx, gz, cy)
       if (!entry) return null

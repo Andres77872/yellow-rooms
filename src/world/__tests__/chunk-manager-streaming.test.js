@@ -10,6 +10,7 @@ import {
 } from '../constants.js'
 import { DEFAULT_WORLD_CONFIG } from '../config.js'
 import { slabContract } from '../slab.js'
+import { multilevelContract } from '../multilevel.js'
 
 const LOAD_COUNT = (LOAD_RADIUS * 2 + 1) ** 2 * (LOAD_RADIUS_Y * 2 + 1)
 
@@ -129,6 +130,23 @@ describe('ChunkManager streaming queue', () => {
     )
     expect(order.indexOf(chunkKey3(0, unconnectedCy, 0))).toBeGreaterThan(
       order.indexOf(chunkKey3(1, 0, 0))
+    )
+  })
+
+  it('prioritizes the slab-owner below/above a visible multilevel room', () => {
+    const seed = 1337
+    const cx = 2
+    const cz = -7
+    expect(multilevelContract(seed, cx, cz, 0, DEFAULT_WORLD_CONFIG).hasRoom).toBe(true)
+    const { cm, built } = makeManager(seed)
+    cm.update(cx * CHUNK_WORLD, cz * CHUNK_WORLD, 0)
+    const order = scheduledKeys(cm, built)
+    expect(order[0]).toBe(chunkKey3(cx, 0, cz))
+    expect(order.indexOf(chunkKey3(cx, 1, cz))).toBeLessThan(
+      order.indexOf(chunkKey3(cx + 1, 0, cz))
+    )
+    expect(order.indexOf(chunkKey3(cx, -1, cz))).toBeGreaterThan(
+      order.indexOf(chunkKey3(cx + 1, 0, cz))
     )
   })
 })

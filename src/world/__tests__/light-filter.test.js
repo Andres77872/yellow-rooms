@@ -12,6 +12,7 @@ import {
   LAYER_H,
   WALL_H,
   CELL,
+  CHUNK,
 } from '../constants.js'
 
 // The v8 cross-floor lamp policy, tested on the REAL ChunkManager (headless
@@ -65,6 +66,28 @@ describe('cross-floor lamp filter', () => {
     const above = lampAt(21, 1, 21)
     const cm = makeCM({ 1: [above] }, [])
     expect(cm.collectLampsNear(21, 21, [], 0)).toHaveLength(0)
+  })
+
+  it('uses the full multilevel void bounds instead of a stair-sized center point', () => {
+    const room = {
+      centerX: 21,
+      centerZ: 21,
+      lowerCy: 0,
+      minX: 9,
+      maxX: 33,
+      minZ: 12,
+      maxZ: 30,
+      regions: [
+        { minX: 9, maxX: 33, minZ: 12, maxZ: 19.5 },
+        { minX: 9, maxX: 33, minZ: 22.5, maxZ: 30 },
+      ],
+    }
+    const edgeLamp = lampAt(32, 1, 16)
+    // More than LIGHT_SPILL_R from the center, but directly above the open
+    // lobe of the atrium: its light must reach the lower room.
+    expect(Math.hypot(edgeLamp.x - room.centerX, edgeLamp.z - room.centerZ)).toBeGreaterThan(LIGHT_SPILL_R)
+    const cm = makeCM({ 1: [edgeLamp] }, [room])
+    expect(cm.collectLampsNear(21, 21, [], 0)).toContain(edgeLamp)
   })
 
   it('legacy unfiltered form (pcy null) keeps every lamp in radius', () => {
@@ -128,6 +151,36 @@ describe('isBlocked fails closed on stair geometry', () => {
     expect(cm.isBlocked(...w(c.exit), 1)).toBe(false)
     // Unloaded chunks fail closed.
     expect(cm.isBlocked(9999, 9999, 0)).toBe(true)
+  })
+})
+
+describe('isBlocked understands multilevel surfaces', () => {
+  it('blocks atrium void cells but accepts the retained bridge deck', () => {
+    const seed = 1337
+    const cx = 2
+    const cz = -7
+    const cy = 1
+    const data = buildChunk(seed, cx, cy, cz, DEFAULT_WORLD_CONFIG)
+    const room = data.multilevelDown
+    expect(room).not.toBeNull()
+    const cm = new ChunkManager(new THREE.Scene(), seed, null, null)
+    cm.chunks.set(`${cx},${cy},${cz}`, {
+      cx,
+      cy,
+      cz,
+      data,
+      stairCells: buildStairCells(data, cx, cy, cz),
+      lamps: [],
+      apertures: [],
+    })
+    const world = ({ lx, lz }) => [
+      (cx * CHUNK + lx + 0.5) * CELL,
+      (cz * CHUNK + lz + 0.5) * CELL,
+    ]
+    const [vx, vz] = world(room.voidCells[0])
+    const [bx, bz] = world(room.bridgeCells[0])
+    expect(cm.isBlocked(vx, vz, cy)).toBe(true)
+    expect(cm.isBlocked(bx, bz, cy)).toBe(false)
   })
 })
 

@@ -1,19 +1,19 @@
 import { CHUNK, ZONE_OFFICE } from './constants.js'
 import { ChunkData } from './ChunkData.js'
 import { RNG } from './core/rng.js'
-import { hash2i } from './core/hash.js'
 import { ZONES } from './zones/index.js'
 import { selectZone } from './regions.js'
 import { vBorderContract, hBorderContract } from './border.js'
 import { placeLights } from './lamps.js'
 import { stampStairs } from './stairStamp.js'
+import { stampMultilevelRooms } from './multilevelStamp.js'
 import { DEFAULT_WORLD_CONFIG } from './config.js'
 import { PASSAGE_OPEN } from './mapTypes.js'
 import { repairChunkTopology } from './topology.js'
 import { normalizeDoorPassages } from './doors.js'
+import { layerSeed } from './layerSeed.js'
 
 const TOPOLOGY_SALT = 0x74a1
-const SALT_LAYER = 0x4c59
 
 // Per-layer seed (v8): every 2D stage below is keyed by this instead of the
 // root seed, so each floor gets its own zone geography, office district plans,
@@ -21,8 +21,7 @@ const SALT_LAYER = 0x4c59
 // to those stages. Identity at cy=0 keeps layer 0 byte-compatible with v7
 // (except where stair stamps land). Slab contracts (stairStamp/slab.js) use
 // the ROOT seed: they belong to the slab BETWEEN two layers, not to either.
-export const layerSeed = (seed, cy) =>
-  cy === 0 ? seed >>> 0 : hash2i((seed ^ SALT_LAYER) | 0, cy, 0)
+export { layerSeed } from './layerSeed.js'
 
 // The layered generation pipeline. Pure function of (seed, cx, cy, cz, config)
 // -> ChunkData. No THREE: runs headless and is tested directly.
@@ -92,6 +91,12 @@ export function buildChunk(seed, cx, cy, cz, config = DEFAULT_WORLD_CONFIG, exit
   // repair so nothing re-walls the halo, before lamps so fixtures see holes,
   // and before L6 so anomaly carves respect protected guard edges.
   stampStairs(data, seed, cx, cy, cz, config)
+
+  // L4.6 — shared multilevel-room stamp (v10). Contracts are derived from the
+  // root seed and reserve the exact same void/bridge slab mask on both floors.
+  // The stamp's monotone gallery carve and protected void barriers preserve
+  // connectivity; lamps below see the generalized ceiling holes.
+  stampMultilevelRooms(data, seed, cx, cy, cz, config)
 
   // L5 — lights (independent stream, global module grid).
   placeLights(data, { seed: lseed, cx, cz, zone, config })
