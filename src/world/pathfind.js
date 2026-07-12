@@ -1,5 +1,7 @@
 import {
   CELL,
+  CHUNK,
+  UNLOAD_RADIUS,
   worldToCell,
   PATH_VLEASH,
   STAIR_LAYER_COST,
@@ -19,7 +21,7 @@ import { groundHeightAt } from '../player/ground.js'
 // the destination holds no freestanding column — the SAME rule the collision DDA
 // and the connectivity flood-fill use, so a path is always physically walkable.
 //
-// v8: nodes are (gx, gz, cy) — the world is a stack of floors and STAIRS are the
+// v9: nodes are (gx, gz, cy) — the world is a stack of floors and STAIRS are the
 // only vertical edges: a stair's landing (lower layer) connects to its exit cell
 // (upper layer) at cost runLen + STAIR_LAYER_COST, appended as a fifth
 // fixed-order expansion. Run/hole cells are NOT walkable graph nodes (the ramp
@@ -27,11 +29,10 @@ import { groundHeightAt } from '../player/ground.js'
 // can never route across the open slab.
 //
 // Design goals: (1) zero per-call allocation — it runs for several enemies at a
-// few Hz; (2) bounded cost — a `leash` clamps the search window (plus a vertical
-// leash) and `maxNodes` hard-caps expansions, so an open `warehouse` zone can't
-// make it flood; (3) deterministic — fixed neighbour order + a total-order heap
-// key, no Math.random. On any failure (unreachable / over budget / beyond leash)
-// it returns null and the caller falls back to its native behaviour.
+// few Hz; (2) bounded cost — `leash` rejects remote targets, the streamed-area
+// envelope caps detours, and `maxNodes` hard-caps expansions; (3) deterministic
+// — fixed neighbour order + a total-order heap key, no Math.random. On failure
+// (unreachable / over budget / beyond leash) it returns null.
 
 // --- 4-neighbour offsets: E, W, S, N (fixed order => deterministic) ---
 export const DX = [1, -1, 0, 0]
@@ -79,10 +80,15 @@ export function makeCanPass(cm, cy = 0) {
 // strides let a local index `li` be reused across calls: any value written on a
 // previous call (different window) reads as "unseen" because its generation
 // stamp is stale, so nothing needs clearing between calls.
-const WIN_MAX = 64
 const LAYERS = 2 * PATH_VLEASH + 1 // vertical extent of the search box
+// Cross-floor routes may have to visit the fallback stair at the opposite edge
+// of the streamed region. ChunkManager keeps a one-chunk hysteresis ring, so
+// size the reusable scratch for that full bounded footprint plus the normal
+// six-cell routing margin on both sides. The node budget, not this capacity,
+// remains the per-call work limit.
+const WIN_MAX = (2 * UNLOAD_RADIUS + 1) * CHUNK + 12
 const LAYER_STRIDE = WIN_MAX * WIN_MAX
-const N = LAYER_STRIDE * LAYERS // 20,480 nodes (~1MB of Int32 scratch, one-time)
+const N = LAYER_STRIDE * LAYERS
 const INF = 0x3fffffff
 
 const gScore = new Int32Array(N)
@@ -141,17 +147,186 @@ function heapPop() {
   return top
 }
 
-// f-then-h composite so equal-f ties expand toward the goal (lower h). h stays
-// well under 256 because the leash caps |dx|+|dz| (and the vertical leash caps
-// the |dcy|*STAIR_LAYER_COST term), so this is a strict ordering.
-const keyOf = (g, h) => (g + h) * 256 + h
+// f-then-h composite so equal-f ties expand toward the goal (lower h). The
+// portal envelope is wider than the old direct leash window, so reserve enough
+// low bits for every relaxed route inside the bounded streamed footprint.
+const KEY_SCALE = 4096
+const keyOf = (g, h) => (g + h) * KEY_SCALE + h
 
-// Consistent 3D heuristic: lateral Manhattan + the minimum vertical cost. A
-// lateral edge (cost 1) changes it by <=1; a stair edge (cost runLen +
-// STAIR_LAYER_COST) changes the lateral term by <=runLen and the vertical term
-// by <=STAIR_LAYER_COST — consistent, so closed nodes never need reopening.
-const heur = (ax, az, acy, bx, bz, bcy) =>
+// Baseline consistent 3D heuristic. It is used for flat searches and for test
+// doubles without ChunkManager's loaded-aperture registry.
+const directHeur = (ax, az, acy, bx, bz, bcy) =>
   Math.abs(ax - bx) + Math.abs(az - bz) + Math.abs(acy - bcy) * STAIR_LAYER_COST
+
+// --- Loaded stair portal graph ----------------------------------------------
+// The direct Manhattan heuristic cannot see that changing floors requires a
+// potentially long detour to a stair. Build a tiny, obstacle-free graph from
+// the loaded aperture registry: endpoints on one floor have Manhattan edges;
+// each validated stair has exactly one landing<->exit edge. Shortest distances
+// in that relaxed graph are admissible for the real wall graph and consistent
+// across both lateral and canonical stair edges.
+//
+// Arrays are fixed scratch, like the A* arrays above. A streamed chunk column
+// contributes at most one aperture per slab; LAYERS-1 relevant slabs can be in
+// the vertical search box.
+const STREAM_DIAMETER = 2 * UNLOAD_RADIUS + 1
+const MAX_PORTALS = STREAM_DIAMETER * STREAM_DIAMETER * (LAYERS - 1)
+const portalCy = new Int32Array(MAX_PORTALS)
+const portalLX = new Int32Array(MAX_PORTALS)
+const portalLZ = new Int32Array(MAX_PORTALS)
+const portalEX = new Int32Array(MAX_PORTALS)
+const portalEZ = new Int32Array(MAX_PORTALS)
+const portalCost = new Int32Array(MAX_PORTALS)
+const portalDist = new Int32Array(MAX_PORTALS * 2)
+const portalDone = new Uint8Array(MAX_PORTALS * 2)
+let portalCount = 0
+let usePortalHeur = false
+let goalGX = 0
+let goalGZ = 0
+let goalCy = 0
+
+const samePoint = (a, b) =>
+  !!a && !!b && a.gx === b.gx && a.gz === b.gz
+
+const validPoint = (p) =>
+  !!p && Number.isInteger(p.gx) && Number.isInteger(p.gz)
+
+const sameStair = (a, b) =>
+  !!a && !!b &&
+  a.baseCy === b.baseCy &&
+  a.runLen === b.runLen &&
+  samePoint(a.landing, b.landing) &&
+  samePoint(a.exit, b.exit)
+
+// Return the canonical landing descriptor only when BOTH loaded halves agree.
+// This prevents an aperture whose upper chunk has not streamed yet (or a
+// malformed/orphan descriptor) from becoming an edge into open unloaded space.
+function canonicalStair(cm, raw) {
+  if (
+    !raw || !Number.isInteger(raw.baseCy) ||
+    !Number.isInteger(raw.runLen) || raw.runLen <= 0 ||
+    !validPoint(raw.landing) || !validPoint(raw.exit) ||
+    Math.abs(raw.landing.gx - raw.exit.gx) + Math.abs(raw.landing.gz - raw.exit.gz) !== raw.runLen
+  ) return null
+  const landing = cm.stairAt(raw.landing.gx, raw.landing.gz, raw.baseCy)
+  const exit = cm.stairAt(raw.exit.gx, raw.exit.gz, raw.baseCy + 1)
+  if (
+    !landing || landing.part !== 'landing' ||
+    !exit || exit.part !== 'exit' ||
+    !sameStair(raw, landing) || !sameStair(landing, exit)
+  ) return null
+  return landing
+}
+
+function portalCmp(cy, lx, lz, ex, ez, i) {
+  return (
+    cy - portalCy[i] || lx - portalLX[i] || lz - portalLZ[i] ||
+    ex - portalEX[i] || ez - portalEZ[i]
+  )
+}
+
+// Insert in canonical coordinate order so Map insertion/build order cannot
+// affect bounds, heuristic ties, or the emitted path. Returns false on the
+// impossible-in-production overflow rather than silently dropping a portal.
+function insertPortal(st) {
+  const cy = st.baseCy
+  const lx = st.landing.gx
+  const lz = st.landing.gz
+  const ex = st.exit.gx
+  const ez = st.exit.gz
+  let at = 0
+  while (at < portalCount && portalCmp(cy, lx, lz, ex, ez, at) > 0) at++
+  if (at < portalCount && portalCmp(cy, lx, lz, ex, ez, at) === 0) return true
+  if (portalCount >= MAX_PORTALS) return false
+  for (let i = portalCount; i > at; i--) {
+    portalCy[i] = portalCy[i - 1]
+    portalLX[i] = portalLX[i - 1]
+    portalLZ[i] = portalLZ[i - 1]
+    portalEX[i] = portalEX[i - 1]
+    portalEZ[i] = portalEZ[i - 1]
+    portalCost[i] = portalCost[i - 1]
+  }
+  portalCy[at] = cy
+  portalLX[at] = lx
+  portalLZ[at] = lz
+  portalEX[at] = ex
+  portalEZ[at] = ez
+  portalCost[at] = st.runLen + STAIR_LAYER_COST
+  portalCount++
+  return true
+}
+
+const endpointCy = (i) => portalCy[i >> 1] + (i & 1)
+const endpointGX = (i) => (i & 1) ? portalEX[i >> 1] : portalLX[i >> 1]
+const endpointGZ = (i) => (i & 1) ? portalEZ[i >> 1] : portalLZ[i >> 1]
+
+// Reverse Dijkstra on the relaxed portal graph, seeded by direct horizontal
+// distance from every endpoint on the target floor.
+function preparePortalHeuristic(tgx, tgz, tcy) {
+  goalGX = tgx
+  goalGZ = tgz
+  goalCy = tcy
+  const n = portalCount * 2
+  for (let i = 0; i < n; i++) {
+    portalDone[i] = 0
+    portalDist[i] = endpointCy(i) === tcy
+      ? Math.abs(endpointGX(i) - tgx) + Math.abs(endpointGZ(i) - tgz)
+      : INF
+  }
+  for (let step = 0; step < n; step++) {
+    let cur = -1
+    let best = INF
+    for (let i = 0; i < n; i++) {
+      if (!portalDone[i] && portalDist[i] < best) {
+        best = portalDist[i]
+        cur = i
+      }
+    }
+    if (cur < 0) break
+    portalDone[cur] = 1
+    const pair = cur ^ 1
+    const vertical = best + portalCost[cur >> 1]
+    if (vertical < portalDist[pair]) portalDist[pair] = vertical
+    const cy = endpointCy(cur)
+    const gx = endpointGX(cur)
+    const gz = endpointGZ(cur)
+    for (let i = 0; i < n; i++) {
+      if (portalDone[i] || endpointCy(i) !== cy) continue
+      const d = best + Math.abs(endpointGX(i) - gx) + Math.abs(endpointGZ(i) - gz)
+      if (d < portalDist[i]) portalDist[i] = d
+    }
+  }
+}
+
+function portalHeur(gx, gz, cy) {
+  if (cy === goalCy) return Math.abs(gx - goalGX) + Math.abs(gz - goalGZ)
+  let best = INF
+  for (let i = 0, n = portalCount * 2; i < n; i++) {
+    if (endpointCy(i) !== cy || portalDist[i] === INF) continue
+    const d = Math.abs(gx - endpointGX(i)) + Math.abs(gz - endpointGZ(i)) + portalDist[i]
+    if (d < best) best = d
+  }
+  return best
+}
+
+function heur(gx, gz, cy) {
+  if (usePortalHeur) {
+    const h = portalHeur(gx, gz, cy)
+    if (h !== INF) return h
+  }
+  return directHeur(gx, gz, cy, goalGX, goalGZ, goalCy)
+}
+
+function registeredPortal(st) {
+  for (let i = 0; i < portalCount; i++) {
+    if (
+      portalCy[i] === st.baseCy &&
+      portalLX[i] === st.landing.gx && portalLZ[i] === st.landing.gz &&
+      portalEX[i] === st.exit.gx && portalEZ[i] === st.exit.gz
+    ) return true
+  }
+  return false
+}
 
 // A* from world (sx,sz) on floor scy to world (tx,tz) on floor tcy.
 // opts: { maxNodes=1200, leash=22, vleash=PATH_VLEASH, margin=6, collapse=true, out=null }
@@ -204,51 +379,51 @@ export function findPath(cm, sx, sz, scy, tx, tz, tcy, opts = {}) {
   let bz0 = Math.min(sgz, tgz)
   let bx1 = Math.max(sgx, tgx)
   let bz1 = Math.max(sgz, tgz)
+  _ocy = Math.min(scy, tcy) - 1
+  const cyMax = _ocy + LAYERS // exclusive
+  portalCount = 0
+  usePortalHeur = false
   // Cross-floor: stairs are the ONLY vertical edges and their placement is
-  // independent of the start-target corridor — a bare bbox window would only
-  // contain one by luck, degenerating vertical pursuit to its fallbacks. Grow
-  // the window to include the nearest loaded stair through each slab between
-  // the floors (the aperture registry lists them; entities only path through
-  // loaded space anyway). If the strip overflows WIN_MAX the guard below still
-  // returns null — no worse than not looking.
-  if (scy !== tcy && cm.apertures) {
-    const lo = Math.min(scy, tcy)
-    const hi = Math.max(scy, tcy)
-    for (let cy = lo; cy < hi; cy++) {
-      let best = null
-      let bd = Infinity
-      for (const a of cm.apertures.values()) {
-        if (a.lowerCy !== cy) continue
-        const d = Math.max(
-          Math.abs(worldToCell(a.centerX) - sgx),
-          Math.abs(worldToCell(a.centerZ) - sgz)
-        )
-        if (d < bd) {
-          bd = d
-          best = a
-        }
-      }
-      if (!best || bd > leash) continue
-      const st = cm.stairAt(worldToCell(best.centerX), worldToCell(best.centerZ), cy)
-      if (!st) continue
-      bx0 = Math.min(bx0, st.landing.gx, st.exit.gx)
-      bx1 = Math.max(bx1, st.landing.gx, st.exit.gx)
-      bz0 = Math.min(bz0, st.landing.gz, st.exit.gz)
-      bz1 = Math.max(bz1, st.landing.gz, st.exit.gz)
+  // independent of the actor-target corridor. Include every canonical loaded
+  // portal in the bounded vertical search box, even when the fallback stair is
+  // farther from the actor than `leash` (the leash governs the target only).
+  if (scy !== tcy && cm.apertures?.values) {
+    for (const a of cm.apertures.values()) {
+      if (
+        !a || !Number.isInteger(a.lowerCy) ||
+        !Number.isFinite(a.centerX) || !Number.isFinite(a.centerZ) ||
+        a.lowerCy < _ocy || a.lowerCy + 1 >= cyMax
+      ) continue
+      const raw = cm.stairAt(worldToCell(a.centerX), worldToCell(a.centerZ), a.lowerCy)
+      const st = canonicalStair(cm, raw)
+      if (!st || st.baseCy !== a.lowerCy) continue
+      if (!insertPortal(st)) return null
+    }
+    for (let i = 0; i < portalCount; i++) {
+      bx0 = Math.min(bx0, portalLX[i], portalEX[i])
+      bx1 = Math.max(bx1, portalLX[i], portalEX[i])
+      bz0 = Math.min(bz0, portalLZ[i], portalEZ[i])
+      bz1 = Math.max(bz1, portalLZ[i], portalEZ[i])
     }
   }
   _ox = bx0 - margin
   _oz = bz0 - margin
-  _ocy = Math.min(scy, tcy) - 1
   const w = bx1 + margin - _ox + 1
   const h = bz1 + margin - _oz + 1
-  if (w > WIN_MAX || h > WIN_MAX) return null // (leash keeps us here in practice)
+  if (w > WIN_MAX || h > WIN_MAX) return null
   const exMax = _ox + w
   const ezMax = _oz + h
-  const cyMax = _ocy + LAYERS // exclusive
 
-  // Cross-floor searches get a bigger node budget: the heuristic can't see
-  // where the stairs are, so the frontier may flood the start floor first.
+  goalGX = tgx
+  goalGZ = tgz
+  goalCy = tcy
+  if (scy !== tcy && portalCount > 0) {
+    preparePortalHeuristic(tgx, tgz, tcy)
+    usePortalHeur = portalHeur(sgx, sgz, scy) !== INF
+  }
+
+  // Cross-floor searches retain the larger budget for wall detours around the
+  // selected portal route; maxNodes remains the caller-controlled hard cap.
   const budget = scy === tcy ? maxNodes : maxNodes * CROSS_FLOOR_NODE_MULT
 
   gen++
@@ -265,12 +440,18 @@ export function findPath(cm, sx, sz, scy, tx, tz, tcy, opts = {}) {
     seenGen[s] = gen
     gScore[s] = g0
     came[s] = -1
-    heapPush(s, keyOf(g0, heur(gx, gz, cy, tgx, tgz, tcy)))
+    heapPush(s, keyOf(g0, heur(gx, gz, cy)))
   }
   const ss = cm.stairAt(sgx, sgz, scy)
   if (ss && (ss.part === 'run' || ss.part === 'hole')) {
-    seed(ss.landing.gx, ss.landing.gz, ss.baseCy, 1)
-    seed(ss.exit.gx, ss.exit.gz, ss.baseCy + 1, 1)
+    const st = canonicalStair(cm, ss)
+    if (st) {
+      seed(st.landing.gx, st.landing.gz, st.baseCy, 1)
+      seed(st.exit.gx, st.exit.gz, st.baseCy + 1, 1)
+    } else {
+      const end = ss.part === 'run' ? ss.landing : ss.exit
+      seed(end.gx, end.gz, scy, 1)
+    }
   } else {
     seed(sgx, sgz, scy, 0)
   }
@@ -285,7 +466,7 @@ export function findPath(cm, sx, sz, scy, tx, tz, tcy, opts = {}) {
     if (g1 < gScore[ni]) {
       gScore[ni] = g1
       came[ni] = _cur
-      heapPush(ni, keyOf(g1, heur(ngx, ngz, ncy, tgx, tgz, tcy)))
+      heapPush(ni, keyOf(g1, heur(ngx, ngz, ncy)))
     }
   }
   let _cur = -1
@@ -314,12 +495,14 @@ export function findPath(cm, sx, sz, scy, tx, tz, tcy, opts = {}) {
       relax(li(ngx, ngz, ccy), g1, ngx, ngz, ccy)
     }
     // Fifth fixed-order expansion: the stair edge (landing <-> exit).
-    const st = cm.stairAt(cgx, cgz, ccy)
-    if (st && (st.part === 'landing' || st.part === 'exit')) {
-      const up = st.part === 'landing'
-      const ncy = up ? st.baseCy + 1 : st.baseCy
-      const nc = up ? st.exit : st.landing
+    const raw = cm.stairAt(cgx, cgz, ccy)
+    if (raw && (raw.part === 'landing' || raw.part === 'exit')) {
+      const st = canonicalStair(cm, raw)
+      const up = raw.part === 'landing'
+      const ncy = st ? (up ? st.baseCy + 1 : st.baseCy) : ccy
+      const nc = st ? (up ? st.exit : st.landing) : null
       if (
+        st && (!usePortalHeur || registeredPortal(st)) &&
         ncy >= _ocy && ncy < cyMax &&
         nc.gx >= _ox && nc.gx < exMax &&
         nc.gz >= _oz && nc.gz < ezMax

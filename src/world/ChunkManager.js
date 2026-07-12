@@ -26,6 +26,37 @@ import { Chunk } from './Chunk.js'
 
 const HUB = (CHUNK / 2) | 0
 
+// Streaming priority is intentionally a tuple rather than relying on loop /
+// stable-sort insertion order. Close chunks build first; at equal effective
+// distance the player's floor wins, followed by an adjacent floor that is
+// actually connected through this chunk column. Unconnected off-floor chunks
+// retain the historical +2 penalty.
+function prioritizeRequest(request, seed, config, pcx, pcy, pcz) {
+  const dx = Math.abs(request.cx - pcx)
+  const dz = Math.abs(request.cz - pcz)
+  const dy = Math.abs(request.cy - pcy)
+  const xzDistance = Math.max(dx, dz)
+  const connected =
+    dy === 1 &&
+    slabContract(seed, request.cx, request.cz, Math.min(request.cy, pcy), config).hasStair
+
+  request.d = xzDistance + (dy !== 0 && !connected ? 2 : 0)
+  request.floorPriority = dy === 0 ? 0 : connected ? 1 : 2
+  request.xzTie = dx + dz
+  return request
+}
+
+function compareRequests(a, b) {
+  return (
+    a.d - b.d ||
+    a.floorPriority - b.floorPriority ||
+    a.xzTie - b.xzTie ||
+    a.cy - b.cy ||
+    a.cz - b.cz ||
+    a.cx - b.cx
+  )
+}
+
 export class ChunkManager {
   constructor(scene, seed, materials, geom) {
     this.root = new THREE.Group()
@@ -85,6 +116,29 @@ export class ChunkManager {
     const pcx = worldToChunk(px)
     const pcz = worldToChunk(pz)
 
+    // A request may wait across many frames. Reconcile the queue with the
+    // CURRENT load box before adding work: teleports and floor handoffs must
+    // not spend the build budget on the old location. Rebuilding `queued`
+    // from the retained array also repairs stale membership and defensively
+    // collapses duplicate requests.
+    const queue = []
+    const queued = new Set()
+    for (const request of this.queue) {
+      if (
+        Math.abs(request.cx - pcx) > LOAD_RADIUS ||
+        Math.abs(request.cz - pcz) > LOAD_RADIUS ||
+        Math.abs(request.cy - pcy) > LOAD_RADIUS_Y ||
+        this.chunks.has(request.key) ||
+        queued.has(request.key)
+      ) {
+        continue
+      }
+      queue.push(prioritizeRequest(request, this.seed, this.config, pcx, pcy, pcz))
+      queued.add(request.key)
+    }
+    this.queue = queue
+    this.queued = queued
+
     // Queue missing chunks within the load box (nearest first; the player's
     // own floor first — off-floor chunks only jump the penalty queue when a
     // stair aperture connects them to the player's floor, because those are
@@ -97,23 +151,14 @@ export class ChunkManager {
           const cz = pcz + dz
           const key = chunkKey3(cx, cy, cz)
           if (this.chunks.has(key) || this.queued.has(key)) continue
-          let d = Math.max(Math.abs(dx), Math.abs(dz))
-          if (dcy !== 0) {
-            const connected = slabContract(
-              this.seed,
-              cx,
-              cz,
-              Math.min(cy, pcy),
-              this.config
-            ).hasStair
-            if (!connected) d += 2
-          }
-          this.queue.push({ cx, cy, cz, key, d })
+          this.queue.push(
+            prioritizeRequest({ cx, cy, cz, key }, this.seed, this.config, pcx, pcy, pcz)
+          )
           this.queued.add(key)
         }
       }
     }
-    this.queue.sort((a, b) => a.d - b.d)
+    this.queue.sort(compareRequests)
 
     // Build a few per frame.
     for (let i = 0; i < MAX_BUILDS_PER_FRAME && this.queue.length; i++) this._buildNext()

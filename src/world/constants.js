@@ -312,9 +312,9 @@ export const OUTLINE_FADE_FAR = 0.95
 
 // --- Thin-wall model (refactor) ---------------------------------------
 // World-gen version: bump whenever the algorithm changes the bytes a seed
-// produces. Guards the golden determinism test. v8: stacked floors — per-layer
-// seeds, slab contracts, stair stamps.
-export const WORLD_GEN_VERSION = 8
+// produces. Guards the golden determinism test. v9: plan-aware stair lobbies,
+// normalized slab tuning, and column-stable stair-layout transforms.
+export const WORLD_GEN_VERSION = 9
 
 // Interior zones, selected by the low-frequency region field. The registry in
 // zones/index.js maps these ids to generator modules.

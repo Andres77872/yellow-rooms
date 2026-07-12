@@ -1,8 +1,8 @@
 import { cIdx, CHUNK } from './constants.js'
-import { PASSAGE_WALL, PASSAGE_WIDE, CELL_STAIR } from './mapTypes.js'
+import { PASSAGE_WALL, PASSAGE_WIDE, CELL_LOBBY, CELL_STAIR } from './mapTypes.js'
 import { chunkStairs, stairStrip, STAIR_DX, STAIR_DZ, STAIR_E, STAIR_W } from './slab.js'
 
-// Stair stamps (v8) — pipeline stage L4.5, after topology repair, before lamps.
+// Stair stamps (v9) — pipeline stage L4.5, after topology repair, before lamps.
 //
 // The HALO STAMP is connectivity-safe by construction, in every zone: first
 // monotone-carve a fully-open 1-cell halo pocket around each stair strip (the
@@ -10,9 +10,9 @@ import { chunkStairs, stairStrip, STAIR_DX, STAIR_DZ, STAIR_E, STAIR_W } from '.
 // the guard walls are about to cut, because any path that previously crossed
 // the strip re-routes around it through the halo), THEN place the guard walls
 // on the strip boundary, leaving the mouth open into the (connected) halo. No
-// re-repair is needed afterwards, and office district plans stay unmutated
-// pre-slice — this is the same class of post-slice edit as the accepted exit
-// and spawn clearings; it reads in-game as a stair lobby.
+// re-repair is needed afterwards. In v9 office district plans reserve and route
+// this same halo before room allocation; the carve is therefore idempotent for
+// office topology and remains the open-zone realization path.
 //
 // Both contracts (slab above = stairUp, slab below = stairDown) are carved
 // FIRST and walled SECOND, so one stamp's carve can never erase the other's
@@ -69,6 +69,15 @@ function carveHalo(data, contract) {
     z1 = Math.max(z1, c.lz)
   }
   data.carveRect(x0 - 1, z0 - 1, x1 + 1, z1 + 1)
+  // Office plans reserve this exact rect before room allocation. Open zones do
+  // not have a macro plan, so applying the same semantic label here keeps
+  // lighting/debug/gameplay consumers aligned with the carved geometry.
+  for (let z = z0 - 1; z <= z1 + 1; z++) {
+    for (let x = x0 - 1; x <= x1 + 1; x++) {
+      if (x < 0 || x >= CHUNK || z < 0 || z >= CHUNK) continue
+      data.cellKind[cIdx(x, z)] = CELL_LOBBY
+    }
+  }
 }
 
 // Lower half: landing + ramp under this chunk's ceiling holes.

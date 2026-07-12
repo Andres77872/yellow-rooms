@@ -13,7 +13,7 @@ import {
 import { generateChunk } from '../world/generate.js'
 import { hashStr } from '../world/core/hash.js'
 import { floodReachable } from '../world/connectivity.js'
-import { auditPatch } from '../world/audit.js'
+import { auditLayeredPatch, auditPatch } from '../world/audit.js'
 import { section, slider, toggle, button, segmented, readout, buttonRow } from './widgets.js'
 
 const LOGW = 322
@@ -27,7 +27,7 @@ const ZONE_TINT = {
   [ZONE_WAREHOUSE]: 'rgba(120,110,60,.06)',
 }
 
-// World-gen top-down map for the thin-wall model, one floor (v8 layer) at a
+// World-gen top-down map for the thin-wall model, one floor (v9 layer) at a
 // time. Draws wall edges, columns, border openings, lamps (lit/dead), stair
 // glyphs, the exit and live entities. LIVE reads loaded chunks; EXPLORE
 // regenerates any floor for an arbitrary seed (generation is a pure function
@@ -46,6 +46,7 @@ export class WorldMapTool {
     this.floor = 0 // cy of the drawn layer
     this.followFloor = true // track engine.controller.floor each update
     this._gen = new Map() // explore cache: `${seed}:cx,cy,cz` -> ChunkData
+    this._integrityCache = { key: '', value: null }
     this._hover = null // {wx,wz}
     this._build()
   }
@@ -154,6 +155,7 @@ export class WorldMapTool {
       lamps: readout('lamps'),
       zones: readout('zones'),
       conn: readout('connectivity'),
+      integrity: readout('3d integrity'),
       cont: readout('continuity'),
       seed: readout('seed'),
       cursor: readout('cursor'),
@@ -246,13 +248,17 @@ export class WorldMapTool {
   // Returns the ChunkData for a chunk on the drawn floor, or null if unknown
   // (LIVE & unloaded).
   _chunkData(cx, cz) {
+    return this._chunkDataAt(cx, this.floor, cz)
+  }
+
+  _chunkDataAt(cx, cy, cz) {
     if (this.source === 0) {
-      return this.engine.cm.chunks.get(chunkKey3(cx, this.floor, cz))?.data ?? null
+      return this.engine.cm.chunks.get(chunkKey3(cx, cy, cz))?.data ?? null
     }
-    const key = `${this.previewSeed}:${chunkKey3(cx, this.floor, cz)}`
+    const key = `${this.previewSeed}:${chunkKey3(cx, cy, cz)}`
     let g = this._gen.get(key)
     if (!g) {
-      g = generateChunk(this.previewSeed, cx, this.floor, cz)
+      g = generateChunk(this.previewSeed, cx, cy, cz)
       this._gen.set(key, g)
     }
     return g
@@ -422,6 +428,37 @@ export class WorldMapTool {
     // red = wall, with the wide transition mouths reading as long green runs).
     let cont = null
     if (this.seams) cont = this._drawSeams(c0x, c1x, c0z, c1z)
+    let integrity = null
+    if (this.validate) {
+      // The audit builds a full 3D graph. Cache it while the viewed chunk box,
+      // floor, seed/source, and live resident count stay unchanged; drawing
+      // still runs every frame without rebuilding thousands of graph nodes.
+      const integrityKey = [
+        this.source,
+        this.source === 0 ? this.engine.cm.seed : this.previewSeed,
+        this.floor,
+        c0x,
+        c1x,
+        c0z,
+        c1z,
+        this.source === 0 ? this.engine.cm.loadedCount : 0,
+      ].join(':')
+      if (this._integrityCache.key !== integrityKey) {
+        this._integrityCache = {
+          key: integrityKey,
+          value: auditLayeredPatch(
+            (cx, cy, cz) => this._chunkDataAt(cx, cy, cz),
+            c0x,
+            this.floor - 1,
+            c0z,
+            c1x - c0x + 1,
+            3,
+            c1z - c0z + 1
+          ),
+        }
+      }
+      integrity = this._integrityCache.value
+    }
 
     this._drawExit()
     this._drawEntities()
@@ -437,6 +474,11 @@ export class WorldMapTool {
     this._floorRead.set(`cy ${this.floor}`)
     this._stat.conn.set(
       this.validate ? `cy ${this.floor} · ${reached.size}/${openCount} open · ${sealed} sealed` : 'off'
+    )
+    this._stat.integrity.set(
+      integrity
+        ? `${integrity.ok ? 'ok' : 'FAIL'} · desc ${integrity.mismatchedDescriptors} · holes ${integrity.holeMismatches} · orphan ${integrity.orphanedHalves} · bad links ${integrity.invalidCanonicalLinks}/${integrity.canonicalLinks} · comp ${integrity.components}`
+        : 'off'
     )
     this._stat.cont.set(
       cont ? `score ${cont.score.toFixed(2)} · ${cont.sealed} unsafe · plan variety ${cont.planVariety.toFixed(2)}` : 'off'

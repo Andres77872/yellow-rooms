@@ -118,13 +118,17 @@ export const DEFAULT_WORLD_CONFIG = {
   // stairs; the fallback elects exactly one chunk per districtChunks² block per
   // slab so every floor ALWAYS has an up- and a down-stair within Chebyshev
   // 2*districtChunks-1 chunks (no stranded floors). Tests may set
-  // `enabled: false` to restore exact v7-style plan slices.
+  // `enabled: false` to generate plans without vertical reservations.
   stairs: {
     enabled: true,
     chance: 0.3,
     districtChunks: 4,
     salt: 0x51ab, // existence gate stream
     posSalt: 0x9d2f, // position/orientation stream
+    // One transform is selected per XZ chunk column and reused by every slab
+    // in that column. This varies the parity families without allowing the up
+    // and down stamps realized on one floor to overlap.
+    layoutSalt: 0x34d1,
     fallbackSalt: 0xfa11, // fallback-chunk election stream
   },
 

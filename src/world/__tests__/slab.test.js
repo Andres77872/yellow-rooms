@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { slabContract, stairStrip, chunkStairs, STAIR_E, STAIR_W, STAIR_N, STAIR_S, STAIR_DX, STAIR_DZ } from '../slab.js'
+import { slabContract, stairStrip, chunkStairs, stairConfig, STAIR_E, STAIR_W, STAIR_DX, STAIR_DZ } from '../slab.js'
 import { DEFAULT_WORLD_CONFIG } from '../config.js'
-import { fmod } from '../constants.js'
+import { LOAD_RADIUS } from '../constants.js'
 
 const CFG = DEFAULT_WORLD_CONFIG
 const SEEDS = [12345, 0xdeadbeef >>> 0, 7, 999999937]
@@ -24,7 +24,7 @@ describe('slab contracts', () => {
     }
   })
 
-  it('respects the parity bands and the [3..10]² strip box', () => {
+  it('keeps transformed parity families perpendicular and inside [3..10]²', () => {
     for (const seed of SEEDS) {
       for (const [cx, cz] of COORDS) {
         for (const cy of LAYERS) {
@@ -37,21 +37,52 @@ describe('slab contracts', () => {
             expect(lz).toBeGreaterThanOrEqual(3)
             expect(lz).toBeLessThanOrEqual(10)
           }
-          if (fmod(cy, 2) === 0) {
-            expect([STAIR_E, STAIR_W]).toContain(c.dir)
-            for (const { lz } of cells) expect(lz).toBeLessThanOrEqual(5)
-          } else {
-            expect([STAIR_N, STAIR_S]).toContain(c.dir)
-            for (const { lz } of cells) expect(lz).toBeGreaterThanOrEqual(7)
-          }
           // Strip cells step 1 apart along the ascent axis, landing -> exit.
           for (let i = 1; i < 4; i++) {
             expect(cells[i].lx - cells[i - 1].lx).toBe(STAIR_DX[c.dir])
             expect(cells[i].lz - cells[i - 1].lz).toBe(STAIR_DZ[c.dir])
           }
         }
+        const even = slabContract(seed, cx, cz, 0, { ...CFG, stairs: { ...CFG.stairs, chance: 1 } })
+        const odd = slabContract(seed, cx, cz, 1, { ...CFG, stairs: { ...CFG.stairs, chance: 1 } })
+        expect(even.dir % 2).not.toBe(odd.dir % 2)
       }
     }
+  })
+
+  it('normalizes malformed tuning without losing the fallback guarantee', () => {
+    for (const districtChunks of [0, -5, 1.9, NaN, Infinity, LOAD_RADIUS + 99]) {
+      const cfg = {
+        ...CFG,
+        stairs: { ...CFG.stairs, chance: -10, districtChunks },
+      }
+      let stairs = 0
+      for (let cz = -LOAD_RADIUS; cz <= LOAD_RADIUS; cz++) {
+        for (let cx = -LOAD_RADIUS; cx <= LOAD_RADIUS; cx++) {
+          if (slabContract(7, cx, cz, 0, cfg).hasStair) stairs++
+        }
+      }
+      expect(stairs).toBeGreaterThan(0)
+    }
+    const normalized = stairConfig({
+      stairs: {
+        enabled: 1,
+        chance: Infinity,
+        districtChunks: LOAD_RADIUS + 99,
+        salt: NaN,
+      },
+    })
+    expect(normalized.enabled).toBe(true)
+    expect(normalized.chance).toBe(0.3)
+    expect(normalized.districtChunks).toBe(LOAD_RADIUS + 1)
+    expect(normalized.salt).toBe(0x51ab)
+
+    const mutable = structuredClone(CFG)
+    const cached = stairConfig(mutable)
+    expect(stairConfig(mutable)).toBe(cached)
+    mutable.stairs.chance = 0
+    expect(stairConfig(mutable)).not.toBe(cached)
+    expect(stairConfig(mutable).chance).toBe(0)
   })
 
   it('never places a stair strip in the spawn-hub guard box of chunk (0,0)', () => {
@@ -64,6 +95,21 @@ describe('slab contracts', () => {
         }
       }
     }
+  })
+
+  it('varies the transformed stair family between XZ chunk columns', () => {
+    const cfg = { ...CFG, stairs: { ...CFG.stairs, chance: 1 } }
+    const directions = new Set()
+    const footprints = new Set()
+    for (let cz = -5; cz <= 5; cz++) {
+      for (let cx = -5; cx <= 5; cx++) {
+        const c = slabContract(12345, cx, cz, 0, cfg)
+        directions.add(c.dir)
+        footprints.add(stairStrip(c).map(({ lx, lz }) => `${lx},${lz}`).join('|'))
+      }
+    }
+    expect(directions.size).toBe(4)
+    expect(footprints.size).toBeGreaterThan(20)
   })
 
   it('guarantees an up-stair in every stair-district on every slab (fallback)', () => {
@@ -105,9 +151,27 @@ describe('slab contracts', () => {
   })
 
   it('up- and down-stamps in one layer never share cells or stamped edge lines', () => {
-    // Parity separation: even-slab strips live in rows 3-5 (H-lines 3..6),
-    // odd-slab strips in rows 7-10 (H-lines 7..11). Verify empirically across
-    // a coordinate sweep: the two contracts a layer realizes never overlap.
+    const horizontal = (dir) => dir === STAIR_E || dir === STAIR_W
+    const between = (a, b, horiz) => horiz
+      ? `v:${Math.max(a.lx, b.lx)},${a.lz}`
+      : `h:${a.lx},${Math.max(a.lz, b.lz)}`
+    const flanks = (cell, horiz) => horiz
+      ? [`h:${cell.lx},${cell.lz}`, `h:${cell.lx},${cell.lz + 1}`]
+      : [`v:${cell.lx},${cell.lz}`, `v:${cell.lx + 1},${cell.lz}`]
+    const stampEdges = (c, lower) => {
+      const horiz = horizontal(c.dir)
+      const cells = lower ? [c.landing, ...c.run] : c.run
+      const edges = new Set(cells.flatMap((cell) => flanks(cell, horiz)))
+      edges.add(between(lower ? c.run[1] : c.landing, lower ? c.exit : c.run[0], horiz))
+      const outer = {
+        lx: c.landing.lx - STAIR_DX[c.dir],
+        lz: c.landing.lz - STAIR_DZ[c.dir],
+      }
+      edges.add(between(lower ? outer : c.run[1], lower ? c.landing : c.exit, horiz))
+      return edges
+    }
+    // A column-stable D4 transform varies the bands, but transforms both
+    // parity families together. Verify the actual lower/upper stamp edges.
     for (const seed of SEEDS) {
       for (let cx = -4; cx <= 4; cx += 2) {
         for (let cz = -4; cz <= 4; cz += 2) {
@@ -118,10 +182,8 @@ describe('slab contracts', () => {
             for (const c of stairStrip(down)) {
               expect(cellsUp.has(`${c.lx},${c.lz}`)).toBe(false)
             }
-            const zsUp = stairStrip(up).map((c) => c.lz)
-            const zsDown = stairStrip(down).map((c) => c.lz)
-            // Row bands must not even touch: max of one band + 1 < min of other.
-            expect(Math.max(...zsUp) + 1 < Math.min(...zsDown) || Math.max(...zsDown) + 1 < Math.min(...zsUp)).toBe(true)
+            const upEdges = stampEdges(up, true)
+            for (const edge of stampEdges(down, false)) expect(upEdges.has(edge)).toBe(false)
           }
         }
       }

@@ -12,6 +12,7 @@ import {
   PASSAGE_WIDE,
 } from '../mapTypes.js'
 import { selectZone } from '../regions.js'
+import { chunkStairs, stairStrip, STAIR_DX, STAIR_DZ } from '../slab.js'
 import { bsp } from './ZoneGenerator.js'
 
 // Office planning happens on a district grid above streaming chunks. Boundary
@@ -95,6 +96,7 @@ class OfficePlan {
     this.spaces = []
     this.adjacency = []
     this.portals = []
+    this.stairLobbies = []
     this.metrics = {}
     this.score = Infinity
   }
@@ -224,6 +226,81 @@ function markActiveChunks(plan, seed, config) {
       }
     }
   }
+}
+
+function layerContext(seed, context = null) {
+  return {
+    rootSeed: (context?.rootSeed ?? seed) >>> 0,
+    layerSeed: (context?.layerSeed ?? seed) >>> 0,
+    cy: Number.isFinite(context?.cy) ? Math.floor(context.cy) : 0,
+  }
+}
+
+// Reserve both stair halves before circulation and room allocation. The
+// physical stamp still owns holes/guard walls later, but the district planner
+// now knows that the halo is circulation rather than discovering it as a
+// post-slice carve through already-labelled rooms.
+function collectStairLobbies(plan, seed, config, context) {
+  const ctx = layerContext(seed, context)
+  const n = officePlanConfig(config).districtChunks
+  const out = []
+  for (let localCz = 0; localCz < n; localCz++) {
+    for (let localCx = 0; localCx < n; localCx++) {
+      const chunkX0 = localCx * CHUNK
+      const chunkZ0 = localCz * CHUNK
+      if (!plan.active[idx(plan.size, chunkX0, chunkZ0)]) continue
+      const cx = plan.dx * n + localCx
+      const cz = plan.dz * n + localCz
+      const contracts = chunkStairs(ctx.rootSeed, cx, cz, ctx.cy, config)
+      for (const kind of ['up', 'down']) {
+        const contract = contracts[kind]
+        if (!contract.hasStair) continue
+        const strip = stairStrip(contract)
+        const xs = strip.map((cell) => cell.lx)
+        const zs = strip.map((cell) => cell.lz)
+        const x0 = Math.max(0, Math.min(...xs) - 1)
+        const z0 = Math.max(0, Math.min(...zs) - 1)
+        const x1 = Math.min(CHUNK - 1, Math.max(...xs) + 1)
+        const z1 = Math.min(CHUNK - 1, Math.max(...zs) + 1)
+        const cells = []
+        for (let lz = z0; lz <= z1; lz++) {
+          for (let lx = x0; lx <= x1; lx++) {
+            const x = chunkX0 + lx
+            const z = chunkZ0 + lz
+            const i = idx(plan.size, x, z)
+            if (plan.active[i]) cells.push(i)
+          }
+        }
+        // The lower half enters opposite the ascent direction; the upper half
+        // enters through the exit cell beyond the ramp top.
+        const mouthLocal = kind === 'up'
+          ? {
+              lx: contract.landing.lx - STAIR_DX[contract.dir],
+              lz: contract.landing.lz - STAIR_DZ[contract.dir],
+            }
+          : contract.exit
+        const mouth = {
+          x: chunkX0 + mouthLocal.lx,
+          z: chunkZ0 + mouthLocal.lz,
+        }
+        out.push({
+          kind,
+          cx,
+          cy: ctx.cy,
+          cz,
+          mouth,
+          cells,
+          contract: {
+            dir: contract.dir,
+            landing: { ...contract.landing },
+            run: contract.run.map((cell) => ({ ...cell })),
+            exit: { ...contract.exit },
+          },
+        })
+      }
+    }
+  }
+  return out
 }
 
 function labelMask(mask, size) {
@@ -372,6 +449,18 @@ function planCirculation(plan, seed, config, candidate) {
   for (const portal of plan.portals) {
     const i = idx(plan.size, portal.x, portal.z)
     endpointsByComponent[components.labels[i]].push({ ...portal, i, portal: true })
+  }
+  for (const lobby of plan.stairLobbies) {
+    const i = idx(plan.size, lobby.mouth.x, lobby.mouth.z)
+    const component = components.labels[i]
+    if (component < 0) continue
+    endpointsByComponent[component].push({
+      x: lobby.mouth.x,
+      z: lobby.mouth.z,
+      i,
+      stair: true,
+    })
+    for (const cell of lobby.cells) corridor[cell] = CELL_LOBBY
   }
 
   for (let component = 0; component < components.cells.length; component++) {
@@ -1342,6 +1431,11 @@ function scorePlan(
     const kind = plan.cellKind[idx(plan.size, portal.x, portal.z)]
     return kind !== CELL_CORRIDOR && kind !== CELL_LOBBY
   }).length
+  const unroutedStairs = plan.stairLobbies.filter((lobby) => {
+    const kind = plan.cellKind[idx(plan.size, lobby.mouth.x, lobby.mouth.z)]
+    return kind !== CELL_CORRIDOR && kind !== CELL_LOBBY
+  }).length
+  const stairLobbyCells = new Set(plan.stairLobbies.flatMap((lobby) => lobby.cells)).size
   let unsupported = 0
   for (let z = 0; z < plan.size; z++) {
     for (let x = 0; x < plan.size; x++) {
@@ -1363,6 +1457,9 @@ function scorePlan(
     rooms: rooms.length,
     maxRoomDepth: maxDepth,
     portalMisses,
+    stairLobbies: plan.stairLobbies.length,
+    stairLobbyCells,
+    unroutedStairs,
     unsupportedDoors: unsupported,
     seamRatio,
     sliceRepairs,
@@ -1376,6 +1473,7 @@ function scorePlan(
   const seamPenalty = Math.abs(Math.log(Math.max(0.05, seamRatio)))
   plan.score =
     portalMisses * 100 +
+    unroutedStairs * 1000 +
     unsupported * 5 +
     invalidRooms * 100 +
     Math.max(0, maxDepth - cfg.maxRoomDepth) * 100 +
@@ -1392,11 +1490,12 @@ function scorePlan(
   return plan.score
 }
 
-function buildCandidate(seed, dx, dz, config, candidate) {
+function buildCandidate(seed, dx, dz, config, candidate, context) {
   const cfg = officePlanConfig(config)
   const size = cfg.districtChunks * CHUNK
   const plan = new OfficePlan(size, dx, dz)
   markActiveChunks(plan, seed, config)
+  plan.stairLobbies = collectStairLobbies(plan, seed, config, context)
   const circulation = planCirculation(plan, seed, config, candidate)
   const localSpace = allocateSpaces(
     plan,
@@ -1421,15 +1520,18 @@ function buildCandidate(seed, dx, dz, config, candidate) {
   return plan
 }
 
-function generateOfficeDistrictPlan(seed, dx, dz, config) {
+function generateOfficeDistrictPlan(seed, dx, dz, config, context) {
   const cfg = officePlanConfig(config)
   let best = null
   for (let candidate = 0; candidate < cfg.candidates; candidate++) {
-    const plan = buildCandidate(seed, dx, dz, config, candidate)
+    const plan = buildCandidate(seed, dx, dz, config, candidate, context)
     if (!best || plan.score < best.score) best = plan
   }
   if (best.metrics.invalidRooms > 0) {
     throw new Error('office planner could not satisfy room-shape constraints')
+  }
+  if (best.metrics.unroutedStairs > 0) {
+    throw new Error('office planner could not route every stair lobby')
   }
   return best
 }
@@ -1439,24 +1541,28 @@ function configSignature(config) {
     config.office,
     config.region,
     config.zoneBands,
+    config.stairs,
   ])
 }
 
-function getOfficeDistrictPlan(seed, dx, dz, config) {
+function getOfficeDistrictPlan(seed, dx, dz, config, context = null) {
+  const ctx = layerContext(seed, context)
   const signature = configSignature(config)
   let cache = PLAN_CACHES.get(config)
   if (!cache || cache.signature !== signature) {
     cache = { signature, plans: new Map() }
     PLAN_CACHES.set(config, cache)
   }
-  const key = String(seed >>> 0) + ':' + String(dx) + ',' + String(dz)
+  const key =
+    String(seed >>> 0) + ':' + String(ctx.rootSeed) + ':' + String(ctx.cy) + ':' +
+    String(dx) + ',' + String(dz)
   const hit = cache.plans.get(key)
   if (hit) {
     cache.plans.delete(key)
     cache.plans.set(key, hit)
     return hit
   }
-  const plan = generateOfficeDistrictPlan(seed, dx, dz, config)
+  const plan = generateOfficeDistrictPlan(seed, dx, dz, config, ctx)
   cache.plans.set(key, plan)
   if (cache.plans.size > CACHE_LIMIT) cache.plans.delete(cache.plans.keys().next().value)
   return plan
@@ -1476,15 +1582,28 @@ function clonePlan(source) {
   plan.spaces = source.spaces.map((space) => ({ ...space }))
   plan.adjacency = source.adjacency.map((edge) => ({ ...edge }))
   plan.portals = source.portals.map((portal) => ({ ...portal }))
+  plan.stairLobbies = source.stairLobbies.map((lobby) => ({
+    ...lobby,
+    mouth: { ...lobby.mouth },
+    cells: lobby.cells.slice(),
+    contract: {
+      ...lobby.contract,
+      landing: { ...lobby.contract.landing },
+      run: lobby.contract.run.map((cell) => ({ ...cell })),
+      exit: { ...lobby.contract.exit },
+    },
+  }))
   plan.metrics = { ...source.metrics }
   plan.score = source.score
   return plan
 }
 
 // Public inspection API returns a defensive snapshot. Generation uses the
-// private cached plan so callers cannot mutate future chunk output.
-export function buildOfficeDistrictPlan(seed, dx, dz, config) {
-  return clonePlan(getOfficeDistrictPlan(seed, dx, dz, config))
+// private cached plan so callers cannot mutate future chunk output. Pass
+// `{rootSeed, layerSeed, cy}` when inspecting a non-zero layer; omission keeps
+// the convenient layer-0 convention (rootSeed === seed, cy === 0).
+export function buildOfficeDistrictPlan(seed, dx, dz, config, context = null) {
+  return clonePlan(getOfficeDistrictPlan(seed, dx, dz, config, context))
 }
 
 export function clearOfficePlanCache(config) {
@@ -1493,7 +1612,7 @@ export function clearOfficePlanCache(config) {
 
 export function applyOfficeDistrictPlan(data, ctx) {
   const district = officeDistrictCoords(ctx.cx, ctx.cz, ctx.config)
-  const plan = getOfficeDistrictPlan(ctx.seed, district.dx, district.dz, ctx.config)
+  const plan = getOfficeDistrictPlan(ctx.seed, district.dx, district.dz, ctx.config, ctx)
   const x0 = district.localCx * CHUNK
   const z0 = district.localCz * CHUNK
   for (let z = 0; z < CHUNK; z++) {
@@ -1516,9 +1635,9 @@ export function applyOfficeDistrictPlan(data, ctx) {
   }
 }
 
-export function officeInternalVContract(seed, kx, kz, config) {
+export function officeInternalVContract(seed, kx, kz, config, context = null) {
   const east = officeDistrictCoords(kx + 1, kz, config)
-  const plan = getOfficeDistrictPlan(seed, east.dx, east.dz, config)
+  const plan = getOfficeDistrictPlan(seed, east.dx, east.dz, config, context)
   const lineX = east.localCx * CHUNK
   const z0 = east.localCz * CHUNK
   const walls = new Uint8Array(CHUNK)
@@ -1530,9 +1649,9 @@ export function officeInternalVContract(seed, kx, kz, config) {
   return { kind: 'planned', walls, passages }
 }
 
-export function officeInternalHContract(seed, kx, kz, config) {
+export function officeInternalHContract(seed, kx, kz, config, context = null) {
   const south = officeDistrictCoords(kx, kz + 1, config)
-  const plan = getOfficeDistrictPlan(seed, south.dx, south.dz, config)
+  const plan = getOfficeDistrictPlan(seed, south.dx, south.dz, config, context)
   const x0 = south.localCx * CHUNK
   const lineZ = south.localCz * CHUNK
   const walls = new Uint8Array(CHUNK)

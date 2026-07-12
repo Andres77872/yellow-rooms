@@ -33,6 +33,7 @@ export const layerSeed = (seed, cy) =>
 //   clearings: [{lx, lz, r?}] | null — extra forced-open clearings (e.g. spawn)
 export function buildChunk(seed, cx, cy, cz, config = DEFAULT_WORLD_CONFIG, exitCell = null, clearings = null) {
   const lseed = layerSeed(seed, cy)
+  const layerCtx = { rootSeed: seed >>> 0, layerSeed: lseed, cy }
 
   // L1 — zone select
   const zone = selectZone(cx, cz, lseed, config)
@@ -40,8 +41,8 @@ export function buildChunk(seed, cx, cy, cz, config = DEFAULT_WORLD_CONFIG, exit
 
   // L2 — border contracts. This chunk OWNS its West line (lx=0) and North line
   // (lz=0); East/South borders are owned by the neighbours (their line 0).
-  const cW = vBorderContract(cx - 1, cz, lseed, config)
-  const cN = hBorderContract(cx, cz - 1, lseed, config)
+  const cW = vBorderContract(cx - 1, cz, lseed, config, layerCtx)
+  const cN = hBorderContract(cx, cz - 1, lseed, config, layerCtx)
   for (let z = 0; z < CHUNK; z++) data.setPassageV(0, z, cW.passages[z])
   for (let x = 0; x < CHUNK; x++) data.setPassageH(x, 0, cN.passages[x])
 
@@ -49,8 +50,8 @@ export function buildChunk(seed, cx, cy, cz, config = DEFAULT_WORLD_CONFIG, exit
   const borders = {
     wW: cW.walls,
     wN: cN.walls,
-    wE: vBorderContract(cx, cz, lseed, config).walls,
-    wS: hBorderContract(cx, cz, lseed, config).walls,
+    wE: vBorderContract(cx, cz, lseed, config, layerCtx).walls,
+    wS: hBorderContract(cx, cz, lseed, config, layerCtx).walls,
   }
   const borderZones = {
     w: selectZone(cx - 1, cz, lseed, config),
@@ -59,7 +60,19 @@ export function buildChunk(seed, cx, cy, cz, config = DEFAULT_WORLD_CONFIG, exit
     s: selectZone(cx, cz + 1, lseed, config),
   }
   const rng = RNG.fromHash(lseed, cx, cz)
-  ZONES[zone].generate(data, { seed: lseed, cx, cz, zone, rng, config, borders, borderZones })
+  ZONES[zone].generate(data, {
+    seed: lseed,
+    rootSeed: seed >>> 0,
+    layerSeed: lseed,
+    cx,
+    cy,
+    cz,
+    zone,
+    rng,
+    config,
+    borders,
+    borderZones,
+  })
 
   // L4 — open-zone safety repair. Office topology is validated and scored on
   // the authoritative district plan; mutating an office after slicing would
@@ -72,11 +85,12 @@ export function buildChunk(seed, cx, cy, cz, config = DEFAULT_WORLD_CONFIG, exit
     )
   }
 
-  // L4.5 — stair stamps (v8). Realize this layer's halves of the two slab
+  // L4.5 — stair stamps (v9). Realize this layer's halves of the two slab
   // contracts (halo carve, then guard walls; connectivity-safe by construction
-  // — see stairStamp.js). After repair so nothing re-walls the halo; before
-  // lamps so fixtures see the ceiling holes; before L6 so the anomaly carves
-  // respect the stamp's protected edges.
+  // — see stairStamp.js). Office districts already reserve these halos as
+  // routed lobbies; open zones receive the same semantic label here. Run after
+  // repair so nothing re-walls the halo, before lamps so fixtures see holes,
+  // and before L6 so anomaly carves respect protected guard edges.
   stampStairs(data, seed, cx, cy, cz, config)
 
   // L5 — lights (independent stream, global module grid).

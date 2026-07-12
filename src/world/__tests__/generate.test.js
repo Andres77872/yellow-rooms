@@ -64,15 +64,15 @@ function digest(d) {
 
 // Re-pinned whenever WORLD_GEN_VERSION changes. Coordinates cover all three
 // zones AND multiple layers; the digest includes semantic passages, spaces,
-// repair metadata and the v8 stair descriptors.
+// repair metadata and the v9 plan-aware stair descriptors.
 const GOLDEN = {
-  '0,0,0': '1474b067',
-  '3,0,-2': '3e21b9d6',
-  '12,0,12': '539ea588',
-  '-10,0,10': 'b93903c6',
-  '0,1,0': '8e1117b7',
-  '3,-1,-2': 'c86d22ca',
-  '12,2,12': '52a34797',
+  '0,0,0': '38f03ba4',
+  '3,0,-2': 'a5bf286e',
+  '12,0,12': '720c1bdd',
+  '-10,0,10': '757ffc5a',
+  '0,1,0': '3e85d4fc',
+  '3,-1,-2': '43bf452a',
+  '12,2,12': 'd826a31b',
 }
 
 const SEEDS = [1, 42, 0xbeef, 1234567, 0x5a5a5a]
@@ -135,14 +135,15 @@ describe('seam consistency', () => {
     for (const s of SEEDS) {
       for (const [cx, cy, cz] of COORDS) {
         const ls = layerSeed(s, cy)
+        const layerCtx = { rootSeed: s, layerSeed: ls, cy }
         // East seam of (cx,cz): the chunk to the east stores it as its West line 0.
         const east = buildChunk(s, cx + 1, cy, cz, CFG)
-        const vb = vBorder(cx, cz, ls, CFG)
+        const vb = vBorder(cx, cz, ls, CFG, layerCtx)
         for (let z = 0; z < CHUNK; z++) expect(east.vAt(0, z)).toBe(vb[z])
 
         // South seam of (cx,cz): the chunk to the south stores it as its North line 0.
         const south = buildChunk(s, cx, cy, cz + 1, CFG)
-        const hb = hBorder(cx, cz, ls, CFG)
+        const hb = hBorder(cx, cz, ls, CFG, layerCtx)
         for (let x = 0; x < CHUNK; x++) expect(south.hAt(x, 0)).toBe(hb[x])
       }
     }
@@ -319,7 +320,9 @@ describe('anomaly determinism', () => {
   })
 
   it('normalizes a door frame after transition carving removes its supports', () => {
-    const data = buildChunk(89, -10, 0, -6, CFG)
+    const cfg = structuredClone(CFG)
+    cfg.stairs.enabled = false
+    const data = buildChunk(89, -10, 0, -6, cfg)
     expect(data.zone).toBe(ZONE_OFFICE)
     expect(data.hAt(5, 12)).toBe(0)
     expect(data.hAt(7, 12)).toBe(0)

@@ -1,4 +1,6 @@
 import { CHUNK } from './constants.js'
+import { STAIR_DX, STAIR_DZ } from './slab.js'
+import { PASSAGE_WALL, PASSAGE_WIDE } from './mapTypes.js'
 import { chunksShareOfficeDistrict } from './zones/officePlan.js'
 
 // Continuity / "isolation" audit for the thin-wall generator. THREE-free and
@@ -149,4 +151,331 @@ export function auditPatch(dataAt, X0, Z0, NX, NZ, config) {
     s.portalCoverage * 0.1 +
     s.planVariety * 0.1
   return s
+}
+
+// Layered integrity audit for a rectangular NX x NY x NZ patch. `dataAt` is a
+// pure lookup `(cx, cy, cz) -> ChunkData | null`; absent chunks are simply not
+// part of the graph. Only slab pairs whose lower AND upper chunks are supplied
+// are checked, so a bounded/live patch never reports its outer floor boundary
+// as an orphan.
+//
+// The connectivity graph deliberately mirrors pathfind.js:
+//   - a column blocks its cell;
+//   - stair run cells on the lower layer and hole cells on the upper layer are
+//     not graph nodes;
+//   - planar edges use the thin-wall owner at the global grid line;
+//   - the sole vertical edge is lower landing <-> upper exit.
+//
+// The returned counters are intentionally flat for debug-HUD consumption;
+// `details` retains coordinates for tests and deeper diagnostics.
+export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
+  const chunks = new Map()
+  const key3 = (cx, cy, cz) => `${cx},${cy},${cz}`
+  for (let cy = Y0; cy < Y0 + NY; cy++) {
+    for (let cz = Z0; cz < Z0 + NZ; cz++) {
+      for (let cx = X0; cx < X0 + NX; cx++) {
+        const data = dataAt(cx, cy, cz)
+        if (data) chunks.set(key3(cx, cy, cz), data)
+      }
+    }
+  }
+
+  const details = {
+    mismatchedDescriptors: [],
+    holeMismatches: [],
+    orphanedHalves: [],
+    invalidCanonicalLinks: [],
+  }
+  const audit = {
+    chunks: chunks.size,
+    slabs: 0,
+    stairs: 0,
+    stairPairs: 0,
+    mismatchedDescriptors: 0,
+    holeMismatches: 0,
+    holeMismatchSlabs: 0,
+    orphanedHalves: 0,
+    canonicalLinks: 0,
+    invalidCanonicalLinks: 0,
+    walkableCells: 0,
+    components: 0,
+    componentSizes: [],
+    largestComponent: 0,
+    disconnectedCells: 0,
+    connected: true,
+    ok: true,
+    details,
+  }
+
+  // Valid canonical links are collected first, then installed after graph
+  // nodes have been materialized. Bad/mismatched/orphaned halves never create
+  // a synthetic vertical connection that could hide a real disconnection.
+  const pendingLinks = []
+  for (let cy = Y0; cy < Y0 + NY - 1; cy++) {
+    for (let cz = Z0; cz < Z0 + NZ; cz++) {
+      for (let cx = X0; cx < X0 + NX; cx++) {
+        const lower = chunks.get(key3(cx, cy, cz))
+        const upper = chunks.get(key3(cx, cy + 1, cz))
+        if (!lower || !upper) continue
+        audit.slabs++
+
+        const up = lower.stairUp
+        const down = upper.stairDown
+        if (up || down) audit.stairs++
+        if (!!up !== !!down) {
+          audit.orphanedHalves++
+          details.orphanedHalves.push({
+            cx,
+            cy,
+            cz,
+            half: up ? 'lower.stairUp' : 'upper.stairDown',
+          })
+        } else if (up && down) {
+          audit.stairPairs++
+          if (!sameStairDescriptor(up, down)) {
+            audit.mismatchedDescriptors++
+            details.mismatchedDescriptors.push({ cx, cy, cz })
+          } else {
+            const reasons = canonicalLinkErrors(lower, upper, up)
+            if (reasons.length > 0) {
+              audit.invalidCanonicalLinks++
+              details.invalidCanonicalLinks.push({ cx, cy, cz, reasons })
+            } else {
+              pendingLinks.push({ cx, cy, cz, stair: up })
+            }
+          }
+        }
+
+        let slabMismatch = false
+        for (let lz = 0; lz < CHUNK; lz++) {
+          for (let lx = 0; lx < CHUNK; lx++) {
+            const ceiling = stairHoleAt(lower.stairUp, lx, lz)
+            const floor = stairHoleAt(upper.stairDown, lx, lz)
+            if (ceiling === floor) continue
+            slabMismatch = true
+            audit.holeMismatches++
+            details.holeMismatches.push({ cx, cy, cz, lx, lz, ceiling, floor })
+          }
+        }
+        if (slabMismatch) audit.holeMismatchSlabs++
+      }
+    }
+  }
+
+  const nodes = new Map()
+  const nodeKey = (gx, gz, cy) => `${gx},${gz},${cy}`
+  for (const [key, data] of chunks) {
+    const [cx, cy, cz] = key.split(',').map(Number)
+    for (let lz = 0; lz < CHUNK; lz++) {
+      for (let lx = 0; lx < CHUNK; lx++) {
+        if (!cellWalkable(data, lx, lz)) continue
+        const gx = cx * CHUNK + lx
+        const gz = cz * CHUNK + lz
+        nodes.set(nodeKey(gx, gz, cy), { gx, gz, cy })
+      }
+    }
+  }
+  audit.walkableCells = nodes.size
+
+  const vertical = new Map()
+  const addVertical = (from, to) => {
+    let list = vertical.get(from)
+    if (!list) vertical.set(from, (list = []))
+    list.push(to)
+  }
+  for (const { cx, cy, cz, stair } of pendingLinks) {
+    const lowerKey = nodeKey(
+      cx * CHUNK + stair.landing.lx,
+      cz * CHUNK + stair.landing.lz,
+      cy
+    )
+    const upperKey = nodeKey(
+      cx * CHUNK + stair.exit.lx,
+      cz * CHUNK + stair.exit.lz,
+      cy + 1
+    )
+    // canonicalLinkErrors already guarantees both endpoints are walkable, but
+    // retain this guard so malformed non-ChunkData input cannot forge a link.
+    if (!nodes.has(lowerKey) || !nodes.has(upperKey)) {
+      audit.invalidCanonicalLinks++
+      details.invalidCanonicalLinks.push({ cx, cy, cz, reasons: ['missing graph endpoint'] })
+      continue
+    }
+    addVertical(lowerKey, upperKey)
+    addVertical(upperKey, lowerKey)
+    audit.canonicalLinks++
+  }
+
+  const wallV = (lineGX, gz, cy) => {
+    const cx = Math.floor(lineGX / CHUNK)
+    const cz = Math.floor(gz / CHUNK)
+    const data = chunks.get(key3(cx, cy, cz))
+    if (!data) return true
+    return data.vAt(lineGX - cx * CHUNK, gz - cz * CHUNK) === 1
+  }
+  const wallH = (gx, lineGZ, cy) => {
+    const cx = Math.floor(gx / CHUNK)
+    const cz = Math.floor(lineGZ / CHUNK)
+    const data = chunks.get(key3(cx, cy, cz))
+    if (!data) return true
+    return data.hAt(gx - cx * CHUNK, lineGZ - cz * CHUNK) === 1
+  }
+
+  const seen = new Set()
+  for (const [startKey, start] of nodes) {
+    if (seen.has(startKey)) continue
+    let size = 0
+    const stack = [start]
+    seen.add(startKey)
+    while (stack.length > 0) {
+      const cur = stack.pop()
+      size++
+      const visit = (gx, gz, cy, blocked) => {
+        if (blocked) return
+        const key = nodeKey(gx, gz, cy)
+        const next = nodes.get(key)
+        if (!next || seen.has(key)) return
+        seen.add(key)
+        stack.push(next)
+      }
+      visit(cur.gx + 1, cur.gz, cur.cy, wallV(cur.gx + 1, cur.gz, cur.cy))
+      visit(cur.gx - 1, cur.gz, cur.cy, wallV(cur.gx, cur.gz, cur.cy))
+      visit(cur.gx, cur.gz + 1, cur.cy, wallH(cur.gx, cur.gz + 1, cur.cy))
+      visit(cur.gx, cur.gz - 1, cur.cy, wallH(cur.gx, cur.gz, cur.cy))
+      for (const nextKey of vertical.get(nodeKey(cur.gx, cur.gz, cur.cy)) || []) {
+        const next = nodes.get(nextKey)
+        if (!next || seen.has(nextKey)) continue
+        seen.add(nextKey)
+        stack.push(next)
+      }
+    }
+    audit.componentSizes.push(size)
+  }
+
+  audit.componentSizes.sort((a, b) => b - a)
+  audit.components = audit.componentSizes.length
+  audit.largestComponent = audit.componentSizes[0] || 0
+  audit.disconnectedCells = audit.walkableCells - audit.largestComponent
+  audit.connected = audit.components <= 1
+  audit.ok =
+    audit.mismatchedDescriptors === 0 &&
+    audit.holeMismatches === 0 &&
+    audit.orphanedHalves === 0 &&
+    audit.invalidCanonicalLinks === 0 &&
+    audit.connected
+  return audit
+}
+
+function sameCell(a, b) {
+  if (!a || !b) return a === b
+  return a.lx === b.lx && a.lz === b.lz
+}
+
+function sameStairDescriptor(a, b) {
+  return (
+    a.dir === b.dir &&
+    sameCell(a.landing, b.landing) &&
+    sameCell(a.run?.[0], b.run?.[0]) &&
+    sameCell(a.run?.[1], b.run?.[1]) &&
+    sameCell(a.exit, b.exit)
+  )
+}
+
+function validCell(cell) {
+  return (
+    Number.isInteger(cell?.lx) &&
+    Number.isInteger(cell?.lz) &&
+    cell.lx >= 0 &&
+    cell.lx < CHUNK &&
+    cell.lz >= 0 &&
+    cell.lz < CHUNK
+  )
+}
+
+function stairHoleAt(stair, lx, lz) {
+  return !!stair?.run?.some((cell) => cell?.lx === lx && cell?.lz === lz)
+}
+
+function cellWalkable(data, lx, lz) {
+  return (
+    data.colAt(lx, lz) === 0 &&
+    !stairHoleAt(data.stairUp, lx, lz) &&
+    !stairHoleAt(data.stairDown, lx, lz)
+  )
+}
+
+function canonicalLinkErrors(lower, upper, stair) {
+  const reasons = []
+  if (!Number.isInteger(stair?.dir) || stair.dir < 0 || stair.dir >= STAIR_DX.length) {
+    reasons.push('invalid direction')
+  }
+  const strip = [stair?.landing, stair?.run?.[0], stair?.run?.[1], stair?.exit]
+  if (!strip.every(validCell)) {
+    reasons.push('invalid strip cell')
+  } else if (reasons.length === 0) {
+    for (let i = 1; i < strip.length; i++) {
+      if (
+        strip[i].lx !== strip[i - 1].lx + STAIR_DX[stair.dir] ||
+        strip[i].lz !== strip[i - 1].lz + STAIR_DZ[stair.dir]
+      ) {
+        reasons.push('non-canonical strip')
+        break
+      }
+    }
+  }
+  if (validCell(stair?.landing) && !cellWalkable(lower, stair.landing.lx, stair.landing.lz)) {
+    reasons.push('blocked lower landing')
+  }
+  if (validCell(stair?.exit) && !cellWalkable(upper, stair.exit.lx, stair.exit.lz)) {
+    reasons.push('blocked upper exit')
+  }
+  if (strip.every(validCell) && Number.isInteger(stair?.dir) && stair.dir >= 0 && stair.dir < 4) {
+    const horiz = stair.dir === 1 || stair.dir === 3
+    const edgeBetween = (a, b) => horiz
+      ? { v: true, line: Math.max(a.lx, b.lx), cell: a.lz }
+      : { v: false, line: Math.max(a.lz, b.lz), cell: a.lx }
+    const flanks = (cell) => horiz
+      ? [
+          { v: false, line: cell.lz, cell: cell.lx },
+          { v: false, line: cell.lz + 1, cell: cell.lx },
+        ]
+      : [
+          { v: true, line: cell.lx, cell: cell.lz },
+          { v: true, line: cell.lx + 1, cell: cell.lz },
+        ]
+    const state = (data, edge) => edge.v
+      ? { wall: data.vAt(edge.line, edge.cell), passage: data.passageVAt(edge.line, edge.cell) }
+      : { wall: data.hAt(edge.cell, edge.line), passage: data.passageHAt(edge.cell, edge.line) }
+    const guarded = (data, edges) => edges.every((edge) => {
+      const s = state(data, edge)
+      return s.wall === 1 && s.passage === PASSAGE_WALL
+    })
+    const wideOpen = (data, edge) => {
+      const s = state(data, edge)
+      return s.wall === 0 && s.passage === PASSAGE_WIDE
+    }
+    if (![stair.landing, ...stair.run].every((cell) => guarded(lower, flanks(cell)))) {
+      reasons.push('invalid lower guard wall')
+    }
+    if (!guarded(lower, [edgeBetween(stair.run[1], stair.exit)])) {
+      reasons.push('invalid lower far wall')
+    }
+    const outer = {
+      lx: stair.landing.lx - STAIR_DX[stair.dir],
+      lz: stair.landing.lz - STAIR_DZ[stair.dir],
+    }
+    if (!wideOpen(lower, edgeBetween(outer, stair.landing))) {
+      reasons.push('invalid lower mouth')
+    }
+    if (!stair.run.every((cell) => guarded(upper, flanks(cell)))) {
+      reasons.push('invalid upper guard wall')
+    }
+    if (!guarded(upper, [edgeBetween(stair.landing, stair.run[0])])) {
+      reasons.push('invalid upper back wall')
+    }
+    if (!wideOpen(upper, edgeBetween(stair.run[1], stair.exit))) {
+      reasons.push('invalid upper mouth')
+    }
+  }
+  return reasons
 }

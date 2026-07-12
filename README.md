@@ -24,8 +24,15 @@ The world is generated reproducibly from a text seed. The headless generation
 pipeline produces thin-wall `ChunkData`; rendering, collision, AI, minimap, and
 debug tools all consume that same topology.
 
-World-gen version 7 adds:
+World-gen version 9 adds:
 
+- deterministic stacked floors with shared slab contracts and walkable stairs;
+- plan-aware office stair lobbies reserved before rooms and routed into the
+  district circulation graph;
+- column-stable stair-layout transforms that add variety without allowing the
+  up/down stamps on one floor to overlap;
+- normalized stair tuning, exact layered integrity audits, and stale-safe 3D
+  streaming/navigation queues;
 - domain-warped macro regions with guaranteed pillars transitions between office
   and warehouse styles;
 - portal-first 3x3-chunk office districts with routed circulation, room
@@ -45,6 +52,9 @@ are documented in [docs/map-generation-research.md](docs/map-generation-research
   scoring, validation, and chunk compilation
 - `src/world/border.js` — canonical shared-edge ownership
 - `src/world/topology.js` — wall and column-aware safety repair for open zones
+- `src/world/slab.js` — canonical vertical contracts and fallback stair election
+- `src/world/stairStamp.js` — lobby, aperture, guard-wall, and stair realization
+- `src/world/audit.js` — 2D seam and canonical layered-connectivity validation
 - `src/world/mapTypes.js` — semantic cell and passage vocabulary
 - `src/world/pipeline.js` — pure public generation pipeline
 

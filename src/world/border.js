@@ -91,12 +91,14 @@ function makeContract(kind, walls) {
 
 // Vertical border between chunk (kx,kz)[east face] and (kx+1,kz)[west face].
 // Rows run along z; office seams are exact district-plan slices or macro portals.
-export function vBorderContract(kx, kz, seed, config) {
+// `layerContext` is {rootSeed, layerSeed, cy}; it keeps plan-aware stair
+// reservations identical between seam compilation and chunk slicing.
+export function vBorderContract(kx, kz, seed, config, layerContext = null) {
   const za = selectZone(kx, kz, seed, config)
   const zb = selectZone(kx + 1, kz, seed, config)
   if (za === ZONE_OFFICE && zb === ZONE_OFFICE) {
     if (chunksShareOfficeDistrict(kx, kz, kx + 1, kz, config)) {
-      return officeInternalVContract(seed, kx, kz, config)
+      return officeInternalVContract(seed, kx, kz, config, layerContext)
     }
     return officeDistrictVContract(seed, kx, kz, config)
   }
@@ -105,17 +107,19 @@ export function vBorderContract(kx, kz, seed, config) {
 
 // Horizontal border between chunk (kx,kz)[south face] and (kx,kz+1)[north face].
 // Columns run along x; office seams are exact district-plan slices or macro portals.
-export function hBorderContract(kx, kz, seed, config) {
+export function hBorderContract(kx, kz, seed, config, layerContext = null) {
   const za = selectZone(kx, kz, seed, config)
   const zb = selectZone(kx, kz + 1, seed, config)
   if (za === ZONE_OFFICE && zb === ZONE_OFFICE) {
     if (chunksShareOfficeDistrict(kx, kz, kx, kz + 1, config)) {
-      return officeInternalHContract(seed, kx, kz, config)
+      return officeInternalHContract(seed, kx, kz, config, layerContext)
     }
     return officeDistrictHContract(seed, kx, kz, config)
   }
   return reconcile(za, zb, kx, kz, seed, config.border.saltH, config)
 }
 
-export const vBorder = (kx, kz, seed, config) => vBorderContract(kx, kz, seed, config).walls
-export const hBorder = (kx, kz, seed, config) => hBorderContract(kx, kz, seed, config).walls
+export const vBorder = (kx, kz, seed, config, layerContext = null) =>
+  vBorderContract(kx, kz, seed, config, layerContext).walls
+export const hBorder = (kx, kz, seed, config, layerContext = null) =>
+  hBorderContract(kx, kz, seed, config, layerContext).walls

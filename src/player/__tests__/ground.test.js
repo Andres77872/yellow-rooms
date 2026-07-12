@@ -124,6 +124,7 @@ describe('stair transit (real generator bytes + real collider)', () => {
     [7, 3, -2, 1], // odd layer -> N/S stair
     [12345, -4, 6, 0],
     [99, 2, 2, -1],
+    [0, -2, -2, -1], // transformed family completes all four ascent directions
   ]
 
   for (const [seed, cx, cz, cy] of cases) {

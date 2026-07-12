@@ -12,6 +12,7 @@ import { hash2i } from '../core/hash.js'
 import {
   CELL_CORRIDOR,
   CELL_LOBBY,
+  CELL_STAIR,
   PASSAGE_DOOR,
   PASSAGE_OPEN,
   PASSAGE_WALL,
@@ -88,6 +89,28 @@ describe('multi-chunk office district plan', () => {
     expect(second.metrics).toEqual(first.metrics)
   })
 
+  it('keys cached stair reservations by root seed and floor context', () => {
+    const layer = 0xabc123
+    const a = buildOfficeDistrictPlan(layer, 0, 0, cfg, {
+      rootSeed: 7,
+      layerSeed: layer,
+      cy: 2,
+    })
+    const b = buildOfficeDistrictPlan(layer, 0, 0, cfg, {
+      rootSeed: 99,
+      layerSeed: layer,
+      cy: -1,
+    })
+    const again = buildOfficeDistrictPlan(layer, 0, 0, cfg, {
+      rootSeed: 7,
+      layerSeed: layer,
+      cy: 2,
+    })
+    expect(a.stairLobbies).not.toEqual(b.stairLobbies)
+    expect(again.stairLobbies).toEqual(a.stairLobbies)
+    expect(planBytes(again)).toEqual(planBytes(a))
+  })
+
   it('keeps one connected circulation hierarchy with bounded coverage', () => {
     for (const s of [1, 42, seed, 0xc0ffee]) {
       const plan = buildOfficeDistrictPlan(s, 0, 0, cfg)
@@ -96,12 +119,13 @@ describe('multi-chunk office district plan', () => {
         if (isCirculation(plan.cellKind[i])) cells.push(i)
       }
       expect(plan.metrics.corridorCoverage).toBeGreaterThanOrEqual(0.1)
-      expect(plan.metrics.corridorCoverage).toBeLessThanOrEqual(0.27)
+      expect(plan.metrics.corridorCoverage).toBeLessThanOrEqual(0.32)
       expect(plan.metrics.wallFraction).toBeGreaterThanOrEqual(0.15)
       expect(plan.metrics.wallFraction).toBeLessThanOrEqual(0.27)
       expect(plan.metrics.rooms).toBeGreaterThan(30)
       expect(plan.metrics.maxRoomDepth).toBeLessThanOrEqual(cfg.office.corridors.maxRoomDepth)
       expect(plan.metrics.portalMisses).toBe(0)
+      expect(plan.metrics.unroutedStairs).toBe(0)
       expect(plan.metrics.unsupportedDoors).toBe(0)
       expect(plan.metrics.invalidRooms).toBe(0)
       expect(plan.metrics.seamRatio).toBeLessThanOrEqual(cfg.office.corridors.maxSeamRatio)
@@ -217,11 +241,20 @@ describe('multi-chunk office district plan', () => {
   })
 
   it('returns defensive plan snapshots that cannot corrupt cached generation', () => {
-    const first = buildOfficeDistrictPlan(seed, 0, 0, cfg)
+    const dense = structuredClone(cfg)
+    dense.stairs.chance = 1
+    const first = buildOfficeDistrictPlan(seed, 0, 0, dense)
     const original = first.wallV[1]
+    const originalMouth = { ...first.stairLobbies[0].mouth }
     first.wallV[1] = original ? 0 : 1
-    const second = buildOfficeDistrictPlan(seed, 0, 0, cfg)
+    first.stairLobbies[0].mouth.x = -999
+    first.stairLobbies[0].cells.length = 0
+    first.stairLobbies[0].contract.run[0].lx = -999
+    const second = buildOfficeDistrictPlan(seed, 0, 0, dense)
     expect(second.wallV[1]).toBe(original)
+    expect(second.stairLobbies[0].mouth).toEqual(originalMouth)
+    expect(second.stairLobbies[0].cells.length).toBeGreaterThan(0)
+    expect(second.stairLobbies[0].contract.run[0].lx).toBeGreaterThanOrEqual(0)
   })
 
   it('normalizes non-integer and non-finite structural tuning values', () => {
@@ -238,9 +271,9 @@ describe('multi-chunk office district plan', () => {
     expect(buildOfficeDistrictPlan(seed, 0, 0, nonFinite).size).toBe(3 * CHUNK)
   })
 
-  // Byte-exactness needs the stair stamps off: they are post-slice edits (the
-  // same class as exit/spawn clearings) and are covered by the halo-diff test
-  // below plus stairs.test.js.
+  // Byte-exactness needs physical stair stamps off: the plan reserves their
+  // lobbies, while guard walls/holes remain a post-slice realization covered
+  // by the plan-aware lobby test below plus stairs.test.js.
   it('slices chunks from the district while preserving internal seam bytes', () => {
     const cfgNS = structuredClone(cfg)
     cfgNS.stairs.enabled = false
@@ -297,54 +330,39 @@ describe('multi-chunk office district plan', () => {
     }
   })
 
-  // With stairs on, a stamped office chunk may differ from its plan slice —
-  // but ONLY inside the stamp halo rects (strip bbox + 1 cell, expanded one
-  // more cell for passage bytes that door normalization may downgrade when the
-  // halo removes a frame's support). Repairs must stay zero: the stamp never
-  // triggers a post-slice topology pass.
-  it('stamps stairs into office chunks only inside the halo rects', () => {
+  it('reserves every office stair halo as routed lobby before room allocation', () => {
     const cfgStairs = structuredClone(cfg)
     cfgStairs.stairs.chance = 1
-    const cfgNS = structuredClone(cfg)
-    cfgNS.stairs.enabled = false
+    const plan = buildOfficeDistrictPlan(seed, 0, 0, cfgStairs, {
+      rootSeed: seed,
+      layerSeed: seed,
+      cy: 0,
+    })
+    expect(plan.stairLobbies.length).toBeGreaterThan(0)
+    expect(plan.metrics.stairLobbies).toBe(plan.stairLobbies.length)
+    expect(plan.metrics.unroutedStairs).toBe(0)
+
+    const chunks = new Map()
     const K = cfgStairs.office.districtChunks
     for (let cz = 0; cz < K; cz++) {
       for (let cx = 0; cx < K; cx++) {
-        const plain = buildChunk(seed, cx, 0, cz, cfgNS)
         const stamped = buildChunk(seed, cx, 0, cz, cfgStairs)
         expect(stamped.repairs).toEqual({ connectivity: 0, navigation: 0, columns: 0 })
-
-        // Allowed region: union of both contracts' strips grown by 2 cells.
-        const rects = []
-        for (const s of [stamped.stairUp, stamped.stairDown]) {
-          if (!s) continue
-          const cells = [s.landing, s.run[0], s.run[1], s.exit]
-          rects.push({
-            x0: Math.min(...cells.map((c) => c.lx)) - 2,
-            z0: Math.min(...cells.map((c) => c.lz)) - 2,
-            x1: Math.max(...cells.map((c) => c.lx)) + 2,
-            z1: Math.max(...cells.map((c) => c.lz)) + 2,
-          })
-        }
-        const inRects = (x, z) => rects.some((r) => x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1)
-
-        for (let z = 0; z < CHUNK; z++) {
-          for (let x = 0; x < CHUNK; x++) {
-            const i = z * CHUNK + x
-            const cellSame =
-              stamped.cellKind[i] === plain.cellKind[i] &&
-              stamped.cols[i] === plain.cols[i]
-            const vSame =
-              stamped.wallV[i] === plain.wallV[i] &&
-              stamped.passageV[i] === plain.passageV[i]
-            const hSame =
-              stamped.wallH[i] === plain.wallH[i] &&
-              stamped.passageH[i] === plain.passageH[i]
-            if (!cellSame || !vSame || !hSame) {
-              expect(inRects(x, z), `diff at (${x},${z}) of chunk (${cx},${cz})`).toBe(true)
-            }
-          }
-        }
+        chunks.set(`${cx},${cz}`, stamped)
+      }
+    }
+    for (const lobby of plan.stairLobbies) {
+      const stamped = chunks.get(`${lobby.cx},${lobby.cz}`)
+      expect(stamped[lobby.kind === 'up' ? 'stairUp' : 'stairDown']).toEqual(lobby.contract)
+      const mouthIdx = lobby.mouth.z * plan.size + lobby.mouth.x
+      expect(isCirculation(plan.cellKind[mouthIdx])).toBe(true)
+      for (const cell of lobby.cells) {
+        expect(plan.cellKind[cell]).toBe(CELL_LOBBY)
+        expect(plan.spaceId[cell]).not.toBe(0)
+        const x = cell % plan.size
+        const z = Math.floor(cell / plan.size)
+        const local = (z % CHUNK) * CHUNK + (x % CHUNK)
+        expect([CELL_LOBBY, CELL_STAIR]).toContain(stamped.cellKind[local])
       }
     }
   })
