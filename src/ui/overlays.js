@@ -1,5 +1,6 @@
 import { Phase } from '../core/GameState.js'
 import { IS_TOUCH } from '../core/device.js'
+import { SENS_DEFAULT, SENS_MAX, SENS_MIN } from '../core/Settings.js'
 import { MINIMAP_SIZE } from './Minimap.js'
 
 // ANIME + LIMINAL design language: the eerie warmth of empty backrooms drawn
@@ -113,14 +114,21 @@ const CSS = `
   max-width:min(540px,86vw); }
 #ui .chips .chip b { color:var(--gold); font-weight:700; }
 
-/* ── pause settings: label/control rows, hairline separators ───── */
-#ui .settings { display:flex; flex-direction:column; width:min(360px,86vw);
+/* ── pause settings: grouped label/control rows, hairline separators ── */
+#ui .settings { display:flex; flex-direction:column; width:min(400px,90vw);
   font-size:13px; text-align:left; letter-spacing:.14em; }
+#ui .settings .group { margin:16px 0 2px; font-size:10px; letter-spacing:.32em;
+  color:var(--gold-dim); text-transform:uppercase; }
+#ui .settings .group:first-child { margin-top:0; }
 #ui .settings label { display:flex; justify-content:space-between;
   align-items:center; gap:12px; padding:11px 2px;
   border-bottom:1px solid var(--line-weak); }
 #ui .settings label:last-child { border-bottom:none; }
-#ui input[type=range] { width:160px; accent-color:var(--gold); }
+/* slider + its readout travel together on the right edge of the row */
+#ui .settings .ctl { display:flex; align-items:center; gap:10px; flex:none; }
+#ui .settings .val { min-width:46px; text-align:right; color:var(--gold);
+  font-size:12px; letter-spacing:.06em; font-variant-numeric:tabular-nums; }
+#ui input[type=range] { width:150px; accent-color:var(--gold); }
 #ui input[type=checkbox] { width:16px; height:16px; accent-color:var(--gold); }
 
 /* ── death panel: red-shifted card ─────────────────────────────── */
@@ -233,7 +241,9 @@ const CSS = `
 #ui.touch .fl { display:none; }                 /* [F] LIGHT → replaced by the button */
 #ui.touch #hud .topbar { padding-left:max(76px, env(safe-area-inset-left)); } /* clear the pause btn */
 #ui.touch .panel button { min-height:48px; }
-#ui.touch input[type=range] { width:200px; height:32px; }
+/* fat thumb target, but the row must still fit the readout inside the card */
+#ui.touch input[type=range] { width:150px; height:32px; }
+#ui.touch input[type=checkbox] { width:22px; height:22px; }
 
 /* portrait blocker — opaque so the phase panel underneath can't bleed through */
 #ui #p-rotate { z-index:30; gap:14px; background:#0e0b06; }
@@ -259,6 +269,24 @@ const bar = (id, label, jp) => `
 
 const chip = (key, desc) => `<span class="chip"><b>${key}</b>&nbsp;${desc}</span>`
 
+// The control legend is the same on the title and pause cards — a paused player
+// looking for "how do I toggle the map again?" shouldn't have to quit to find it.
+const KEY_CHIPS =
+  chip('W A S D', 'MOVE') +
+  chip('MOUSE', 'LOOK') +
+  chip('SHIFT', 'SPRINT') +
+  chip('F', 'LIGHT') +
+  chip('M', 'MAP') +
+  chip('ESC', 'PAUSE')
+const TOUCH_CHIPS =
+  chip('STICK', 'MOVE') + chip('DRAG', 'LOOK') + chip('EDGE', 'SPRINT') + chip('⚡', 'LIGHT')
+const CONTROL_CHIPS = IS_TOUCH ? TOUCH_CHIPS : KEY_CHIPS
+
+// The sensitivity slider works in multiples of the default (×0.25 … ×3.00);
+// only the Settings store ever sees raw radians-per-pixel.
+const SENS_MULT_MIN = +(SENS_MIN / SENS_DEFAULT).toFixed(2)
+const SENS_MULT_MAX = +(SENS_MAX / SENS_DEFAULT).toFixed(2)
+
 export class UI {
   constructor(settings) {
     this.settings = settings
@@ -266,6 +294,7 @@ export class UI {
     this.onResume = null
     this.onRestart = null
     this.onSetting = null
+    this.onResetSettings = null
 
     const style = document.createElement('style')
     style.textContent = CSS
@@ -305,11 +334,7 @@ export class UI {
           <div class="row">
             <button id="btn-start" class="primary">ENTER ▸</button>
           </div>
-          <div class="chips">${
-            IS_TOUCH
-              ? chip('STICK', 'MOVE') + chip('DRAG', 'LOOK') + chip('EDGE', 'SPRINT') + chip('⚡', 'LIGHT')
-              : chip('W A S D', 'MOVE') + chip('MOUSE', 'LOOK') + chip('SHIFT', 'SPRINT') + chip('F', 'LIGHT') + chip('ESC', 'PAUSE')
-          }</div>
+          <div class="chips">${CONTROL_CHIPS}</div>
         </div>
         ${IS_TOUCH ? '<div class="touchnote">best with headphones · landscape only</div>' : ''}
       </div>
@@ -319,15 +344,29 @@ export class UI {
           <div class="jp-accent" aria-hidden="true">「小休止」</div>
           <h1 class="h-sm">PAUSED</h1>
           <div class="settings">
-            <label>SENSITIVITY <input type="range" id="set-sens" min="0.0008" max="0.005" step="0.0001"></label>
-            <label>VOLUME <input type="range" id="set-vol" min="0" max="1" step="0.02"></label>
+            <div class="group">LOOK</div>
+            <label>SENSITIVITY <span class="ctl">
+              <input type="range" id="set-sens" min="${SENS_MULT_MIN}" max="${SENS_MULT_MAX}" step="0.05"
+                aria-describedby="val-sens">
+              <output class="val" id="val-sens" for="set-sens"></output>
+            </span></label>
+            <label>INVERT Y <input type="checkbox" id="set-invy"></label>
+            <label>INVERT X <input type="checkbox" id="set-invx"></label>
+            <div class="group">AUDIO</div>
+            <label>VOLUME <span class="ctl">
+              <input type="range" id="set-vol" min="0" max="1" step="0.02" aria-describedby="val-vol">
+              <output class="val" id="val-vol" for="set-vol"></output>
+            </span></label>
+            <div class="group">DISPLAY</div>
             <label>HEAD BOB <input type="checkbox" id="set-bob"></label>
             <label>INK OUTLINE <input type="checkbox" id="set-out"></label>
             <label>MINIMAP <input type="checkbox" id="set-map"></label>
           </div>
+          <div class="chips">${CONTROL_CHIPS}</div>
           <div class="row">
             <button id="btn-resume" class="primary">RESUME</button>
             <button class="ghost" id="btn-restart-p">RESTART</button>
+            <button class="ghost" id="btn-defaults">DEFAULTS</button>
           </div>
         </div>
       </div>
@@ -360,7 +399,7 @@ export class UI {
     this.root = root
     this._cache()
     this._wire()
-    this._applySettingsToInputs()
+    this.refreshSettings()
   }
 
   _cache() {
@@ -389,7 +428,11 @@ export class UI {
       rotate: $('#p-rotate'),
       seedInput: $('#seed-input'),
       sens: $('#set-sens'),
+      sensVal: $('#val-sens'),
+      invY: $('#set-invy'),
+      invX: $('#set-invx'),
       vol: $('#set-vol'),
+      volVal: $('#val-vol'),
       bob: $('#set-bob'),
       out: $('#set-out'),
       map: $('#set-map'),
@@ -407,22 +450,37 @@ export class UI {
     this.root.querySelector('#btn-resume').addEventListener('click', () => this.onResume?.())
     this.root.querySelector('#btn-restart').addEventListener('click', () => this.onRestart?.())
     this.root.querySelector('#btn-restart-p').addEventListener('click', () => this.onRestart?.())
+    this.root.querySelector('#btn-defaults').addEventListener('click', () => this.onResetSettings?.())
 
-    this.el.sens.addEventListener('input', (e) =>
-      this.onSetting?.('sensitivity', parseFloat(e.target.value))
-    )
-    this.el.vol.addEventListener('input', (e) =>
-      this.onSetting?.('volume', parseFloat(e.target.value))
-    )
+    // The slider is in multiples of the default; the store keeps radians/px.
+    this.el.sens.addEventListener('input', (e) => {
+      const mult = parseFloat(e.target.value)
+      this.el.sensVal.value = `×${mult.toFixed(2)}`
+      this.onSetting?.('sensitivity', mult * SENS_DEFAULT)
+    })
+    this.el.vol.addEventListener('input', (e) => {
+      const v = parseFloat(e.target.value)
+      this.el.volVal.value = `${Math.round(v * 100)}%`
+      this.onSetting?.('volume', v)
+    })
+    this.el.invY.addEventListener('change', (e) => this.onSetting?.('invertY', e.target.checked))
+    this.el.invX.addEventListener('change', (e) => this.onSetting?.('invertX', e.target.checked))
     this.el.bob.addEventListener('change', (e) => this.onSetting?.('bob', e.target.checked))
     this.el.out.addEventListener('change', (e) => this.onSetting?.('outline', e.target.checked))
     this.el.map.addEventListener('change', (e) => this.onSetting?.('minimap', e.target.checked))
   }
 
-  _applySettingsToInputs() {
+  // Pull every control back from the store. Also the way anything that changes a
+  // setting outside this panel (the M key, DEFAULTS) re-syncs the widgets.
+  refreshSettings() {
     const s = this.settings
-    this.el.sens.value = s.get('sensitivity')
+    const mult = s.get('sensitivity') / SENS_DEFAULT
+    this.el.sens.value = mult
+    this.el.sensVal.value = `×${mult.toFixed(2)}`
     this.el.vol.value = s.get('volume')
+    this.el.volVal.value = `${Math.round(s.get('volume') * 100)}%`
+    this.el.invY.checked = s.get('invertY')
+    this.el.invX.checked = s.get('invertX')
     this.el.bob.checked = s.get('bob')
     this.el.out.checked = s.get('outline')
     this.el.map.checked = s.get('minimap')

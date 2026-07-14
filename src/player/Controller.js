@@ -57,7 +57,9 @@ export class Controller {
     this.pitch = 0
     this.speed = 0
     this.speedMul = 1 // external movement multiplier (Engine drives enemy-proximity drag)
-    this.sensitivity = 0.0022
+    this.sensitivity = 0.0022 // radians per pixel; Engine feeds this from Settings
+    this.invertY = false // flight-stick style: pull down to look up
+    this.invertX = false
     this.isLocked = false
     this.inputEnabled = true // debug mode parks the player by disabling this
     this.keys = new Set()
@@ -87,9 +89,8 @@ export class Controller {
       this.sprintTouch = false
     })
     document.addEventListener('mousemove', (e) => {
-      if (!this.isLocked) return
-      this.yaw -= e.movementX * this.sensitivity
-      this.pitch = clamp(this.pitch - e.movementY * this.sensitivity, -MAX_PITCH, MAX_PITCH)
+      if (!this.isLocked || !this.inputEnabled) return
+      this._look(e.movementX, e.movementY, this.sensitivity)
     })
     document.addEventListener('pointerlockchange', () => {
       this.isLocked = document.pointerLockElement === this.dom
@@ -109,13 +110,20 @@ export class Controller {
     document.exitPointerLock?.()
   }
 
-  // Touch look: same math as the mousemove handler, minus the pointer-lock
+  // Touch look: same integrator as the mousemove handler, minus the pointer-lock
   // gate (touch mode never locks). dx/dy are drag deltas in px.
   lookDelta(dx, dy) {
     if (!this.inputEnabled) return
-    const s = this.sensitivity * TOUCH_LOOK_MULT
-    this.yaw -= dx * s
-    this.pitch = clamp(this.pitch - dy * s, -MAX_PITCH, MAX_PITCH)
+    this._look(dx, dy, this.sensitivity * TOUCH_LOOK_MULT)
+  }
+
+  // The one place look input becomes rotation, so mouse and touch can't drift
+  // apart on invert/clamp behaviour. dx/dy are pointer deltas in px, scale is
+  // radians per px. Pitch stops just short of the poles so the view never flips.
+  _look(dx, dy, scale) {
+    this.yaw -= dx * scale * (this.invertX ? -1 : 1)
+    const dp = dy * scale * (this.invertY ? -1 : 1)
+    this.pitch = clamp(this.pitch - dp, -MAX_PITCH, MAX_PITCH)
   }
 
   // Touch move: analog vector (x strafe, z forward), caller-clamped to the

@@ -84,20 +84,16 @@ export class Engine {
     this.cm = new ChunkManager(scene, hashStr('lobby'), this.materials, this.geom)
     this.explored = new ExploredMap(this.cm) // player-seen fog state for the minimap
     this.controller = new Controller(camera, renderer.domElement, this.state)
-    this.controller.sensitivity = this.settings.get('sensitivity')
-    this.controller.setBobEnabled(this.settings.get('bob'))
     // Floor handoff re-gates cross-floor chunk visibility the same frame.
     this._transitStair = null
     this.controller.onFloorChange = (f) => this.cm.updateVisibility(f, this._transitStair)
     this.controller.flashlight = null // handled in the lighting pass, not a real light
 
     this.audio = new AudioBus(camera)
-    this.audio.setVolume(this.settings.get('volume'))
     this.stalker = new Stalker(scene, this.materials, this.geom, this.cm)
     this.pursuer = new Pursuer(scene, this.materials, this.geom, this.cm)
 
     this.deferred = new DeferredRenderer(renderer, scene, camera)
-    this.deferred.setOutline(this.settings.get('outline'))
     this.lightField = new LightField(
       this.deferred.lamps.uLampPos,
       this.deferred.lamps.uLampCount
@@ -130,14 +126,16 @@ export class Engine {
     }
 
     this.minimap = new Minimap(this.ui.el.minimap)
-    this.minimap.setVisible(this.settings.get('minimap'))
+    // Every consumer of a setting exists by now, so push the stored values in
+    // one pass instead of scattering `settings.get` calls through construction.
+    this._applyAllSettings()
+
     // M toggles the minimap in-game and stays in sync with the pause checkbox.
     addEventListener('keydown', (e) => {
       if (e.code !== 'KeyM' || this.state.phase !== Phase.PLAYING) return
       if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) return
-      const v = !this.settings.get('minimap')
-      this._applySetting('minimap', v)
-      this.ui.el.map.checked = v
+      this._applySetting('minimap', !this.settings.get('minimap'))
+      this.ui.refreshSettings()
     })
 
     this.debugMode = new DebugMode(this) // inert until F2; visualizes gen/lighting/AI
@@ -164,11 +162,27 @@ export class Engine {
     this.ui.onResume = () => this.resume()
     this.ui.onRestart = () => this.startRun(this.state.seedText)
     this.ui.onSetting = (k, v) => this._applySetting(k, v)
+    this.ui.onResetSettings = () => {
+      this.settings.reset()
+      this._applyAllSettings()
+      this.ui.refreshSettings()
+    }
   }
 
+  // Persist, then apply what the store actually kept — Settings clamps/coerces,
+  // so `v` is the request and the return value is the truth.
   _applySetting(k, v) {
-    this.settings.set(k, v)
+    this._runSetting(k, this.settings.set(k, v))
+  }
+
+  _applyAllSettings() {
+    for (const k of Object.keys(this.settings.data)) this._runSetting(k, this.settings.get(k))
+  }
+
+  _runSetting(k, v) {
     if (k === 'sensitivity') this.controller.sensitivity = v
+    else if (k === 'invertY') this.controller.invertY = v
+    else if (k === 'invertX') this.controller.invertX = v
     else if (k === 'volume') this.audio.setVolume(v)
     else if (k === 'bob') this.controller.setBobEnabled(v)
     else if (k === 'outline') this.deferred.setOutline(v)
