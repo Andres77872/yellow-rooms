@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { section, slider, colorPicker, toggle, button, segmented, buttonRow } from './widgets.js'
+import { formatTuning, copyText } from './tuningExport.js'
 import {
   PANEL_COLOR,
   AMBIENT_SKY,
@@ -11,7 +12,8 @@ import {
   ENTITY_RIM,
 } from '../world/constants.js'
 
-const CHANNELS = ['final', 'albedo', 'matID', 'normal', 'depth', 'AO', 'lit', 'vol', 'bloom', 'comp']
+// Names double as the status-line label (DebugMode) — keep them short.
+export const CHANNELS = ['final', 'albedo', 'matID', 'normal', 'depth', 'AO', 'lit', 'vol', 'bloom', 'comp']
 
 // Lighting / post-processing tuning panel. Every control binds live to a public
 // deferred uniform. Grade controls and the light room require the sim frozen
@@ -22,6 +24,7 @@ export class LightTool {
     this.dbg = dbg
     this.d = engine.deferred
     this._reset = [] // reset-to-default closures
+    this._export = [] // { label, get } pairs serialized by "copy values"
     this._build()
   }
 
@@ -35,14 +38,12 @@ export class LightTool {
     root.appendChild(top.el)
     this._chan = segmented({ labels: CHANNELS, value: 0, onPick: (i) => this.dbg.setChannel(i) })
     top.body.appendChild(this._chan.el)
-    top.body.appendChild(
-      toggle({
-        label: 'freeze sim (hold FX/lamps)',
-        value: this.dbg.freeze,
-        onChange: (v) => this.dbg.setFreeze(v),
-      }).el
-    )
-    this._freeze = top.body.lastChild
+    this._freeze = toggle({
+      label: 'freeze sim (hold FX/lamps)',
+      value: this.dbg.freeze,
+      onChange: (v) => this.dbg.setFreeze(v),
+    })
+    top.body.appendChild(this._freeze.el)
     top.body.appendChild(
       toggle({
         label: 'flashlight force-on',
@@ -53,8 +54,21 @@ export class LightTool {
         },
       }).el
     )
+    const copyBtn = button({
+      label: 'copy values',
+      onClick: async () => {
+        const ok = await copyText(
+          formatTuning(this._export.map((e) => ({ label: e.label, value: e.get() })))
+        )
+        copyBtn.el.textContent = ok ? 'copied ✓' : 'copy failed'
+        setTimeout(() => (copyBtn.el.textContent = 'copy values'), 1200)
+      },
+    })
     top.body.appendChild(
-      buttonRow('', [button({ label: 'reset all to defaults', onClick: () => this._resetAll() })]).el
+      buttonRow('', [
+        button({ label: 'reset all to defaults', onClick: () => this._resetAll() }),
+        copyBtn,
+      ]).el
     )
 
     // --- Light room -----------------------------------------------------
@@ -170,11 +184,14 @@ export class LightTool {
   }
 
   // --- binders --------------------------------------------------------
+  // Each binder also registers an export getter so "copy values" can dump the
+  // live tuning without a parallel hand-maintained list of uniforms.
   _f(sec, label, u, min, max, step, fmt = 2) {
     const def = u.value
     const w = slider({ label, min, max, step, value: def, fmt, onInput: (v) => (u.value = v) })
     sec.body.appendChild(w.el)
     this._reset.push(() => ((u.value = def), w.set(def)))
+    this._export.push({ label, get: () => u.value })
   }
 
   _fMulti(sec, label, us, min, max, step, fmt = 2) {
@@ -182,6 +199,7 @@ export class LightTool {
     const w = slider({ label, min, max, step, value: def, fmt, onInput: (v) => us.forEach((u) => (u.value = v)) })
     sec.body.appendChild(w.el)
     this._reset.push(() => (us.forEach((u) => (u.value = def)), w.set(def)))
+    this._export.push({ label, get: () => us[0].value })
   }
 
   _fVec(sec, label, vec, comp, min, max, step, fmt = 2) {
@@ -189,12 +207,14 @@ export class LightTool {
     const w = slider({ label, min, max, step, value: def, fmt, onInput: (v) => (vec[comp] = v) })
     sec.body.appendChild(w.el)
     this._reset.push(() => ((vec[comp] = def), w.set(def)))
+    this._export.push({ label, get: () => vec[comp] })
   }
 
   _c(sec, label, us, defHex) {
     const w = colorPicker({ label, value: defHex, onInput: (h) => this._setColors(us, h) })
     sec.body.appendChild(w.el)
     this._reset.push(() => (this._setColors(us, defHex), w.set(defHex)))
+    this._export.push({ label, get: () => '#' + us[0].value.getHexString() })
   }
 
   _setColors(us, hex) {
@@ -207,10 +227,14 @@ export class LightTool {
     for (const r of this._reset) r()
   }
 
-  // Keep the freeze checkbox + channel strip in sync if changed elsewhere.
-  onShow() {
+  // Keep the freeze checkbox + channel strip in sync with changes made
+  // elsewhere (the F3 hotkey, the AI tab's live-observe toggle).
+  update() {
+    this._freeze.set(this.dbg.freeze)
     this._chan.set(this.dbg.channel)
   }
+
+  onShow() {}
 
   dispose() {}
 }

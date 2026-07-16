@@ -18,6 +18,18 @@ npm run lint
 npm run build
 ```
 
+## Debug tools
+
+- `F2` — debug panel with four tabs (`1`-`4` to switch): **world** (top-down
+  live/explore map with connectivity + seam validators; the `map click` control
+  places the stalker or teleports the player), **light** (buffer channel viewer,
+  live uniform tuning with one-click `copy values`, and an isolated light room),
+  **ai** (Stalker + Pursuer inspectors, live params, 3D gizmos), and **perf**
+  (fps, frame-time sparkline, draw calls, memory).
+- `F3` — freeze/unfreeze the sim while the panel is open.
+- `` ` `` (backtick) — lightweight fps / draw-call overlay, no panel needed.
+- `?touch=1` / `?touch=0` — force the touch or desktop UI tier.
+
 ## World generation
 
 The world is generated reproducibly from a text seed. The headless generation

@@ -109,6 +109,23 @@ export class WorldMapTool {
     })
     ctl.body.appendChild(this._follow.el)
 
+    // Map-click behavior shared with DebugMode: nothing, place the stalker,
+    // or teleport the player (all guarded by cm.isBlocked at the target).
+    const clickRow = document.createElement('div')
+    clickRow.className = 'dbg-row'
+    const clickLab = document.createElement('span')
+    clickLab.className = 'dbg-label'
+    clickLab.textContent = 'map click'
+    clickRow.appendChild(clickLab)
+    const CLICK_MODES = ['off', 'stalker', 'player']
+    this._clickMode = segmented({
+      labels: CLICK_MODES,
+      value: 0,
+      onPick: (i) => (this.dbg.mapClickMode = CLICK_MODES[i]),
+    })
+    clickRow.appendChild(this._clickMode.el)
+    ctl.body.appendChild(clickRow)
+
     ctl.body.appendChild(
       slider({
         label: 'zoom',
@@ -191,25 +208,37 @@ export class WorldMapTool {
 
   _bindCanvas() {
     const c = this.canvas
-    let dragging = false
+    let dragId = null
     let lx = 0
     let lz = 0
-    c.addEventListener('mousedown', (e) => {
-      dragging = true
+    let moved = 0 // px travelled this drag — suppresses the click after a pan
+    c.addEventListener('pointerdown', (e) => {
+      if (dragId !== null) return
+      dragId = e.pointerId
+      try {
+        c.setPointerCapture(dragId)
+      } catch {
+        /* pointer already released */
+      }
       lx = e.clientX
       lz = e.clientY
+      moved = 0
     })
-    window.addEventListener('mouseup', () => (dragging = false))
-    c.addEventListener('mousemove', (e) => {
+    const end = (e) => {
+      if (e.pointerId === dragId) dragId = null
+    }
+    c.addEventListener('pointerup', end)
+    c.addEventListener('pointercancel', end)
+    c.addEventListener('pointermove', (e) => {
       const r = c.getBoundingClientRect()
       const w = this._screenToWorld(e.clientX - r.left, e.clientY - r.top)
       this._hover = w
-      if (dragging) {
-        this.view.cx -= (e.clientX - lx) / this.view.scale
-        this.view.cz -= (e.clientY - lz) / this.view.scale
-        lx = e.clientX
-        lz = e.clientY
-      }
+      if (e.pointerId !== dragId) return
+      moved += Math.abs(e.clientX - lx) + Math.abs(e.clientY - lz)
+      this.view.cx -= (e.clientX - lx) / this.view.scale
+      this.view.cz -= (e.clientY - lz) / this.view.scale
+      lx = e.clientX
+      lz = e.clientY
     })
     c.addEventListener('wheel', (e) => {
       e.preventDefault()
@@ -225,10 +254,13 @@ export class WorldMapTool {
     })
     c.addEventListener('dblclick', () => this._recenter())
     c.addEventListener('click', (e) => {
-      if (!this.dbg.aiPlace) return
+      if (moved > 4) return // that gesture was a pan, not a click
+      const mode = this.dbg.mapClickMode
+      if (mode === 'off') return
       const r = c.getBoundingClientRect()
       const w = this._screenToWorld(e.clientX - r.left, e.clientY - r.top)
-      this.engine.debugMode.placeStalker(w.wx, w.wz, this.floor)
+      if (mode === 'stalker') this.engine.debugMode.placeStalker(w.wx, w.wz, this.floor)
+      else this.engine.debugMode.teleportPlayer(w.wx, w.wz, this.floor)
     })
   }
 

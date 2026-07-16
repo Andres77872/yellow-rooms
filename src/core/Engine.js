@@ -161,6 +161,7 @@ export class Engine {
     this.ui.onStart = (seed) => this.startRun(seed)
     this.ui.onResume = () => this.resume()
     this.ui.onRestart = () => this.startRun(this.state.seedText)
+    this.ui.onQuit = () => this.quitToTitle()
     this.ui.onSetting = (k, v) => this._applySetting(k, v)
     this.ui.onResetSettings = () => {
       this.settings.reset()
@@ -279,6 +280,18 @@ export class Engine {
     this.touchControls?.reset()
   }
 
+  // Back to the title screen (the only way to change seed without a reload).
+  // The TITLE branch of _animate already renders the world backdrop at spawn.
+  quitToTitle() {
+    if (this.state.phase !== Phase.PAUSED) return
+    this.state.phase = Phase.TITLE
+    this.audio.setTension(0)
+    this.controller.unlock()
+    this.touchControls?.reset()
+    this.ui.showTitle()
+    this._checkOrientation()
+  }
+
   // Touch-only: pause + blocker while portrait. Also re-checked after
   // start/resume so ENTER pressed while portrait can't leave the game running
   // unattended behind the blocker.
@@ -295,7 +308,7 @@ export class Engine {
     this.audio.setTension(0)
     this.controller.unlock()
     this.touchControls?.reset()
-    this.ui.showDeath(reason)
+    this.ui.showDeath(reason, this.state)
   }
 
   _levelComplete() {

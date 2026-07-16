@@ -5,8 +5,9 @@ import { hasLineOfSight } from '../player/collision.js'
 import { groundHeightAt } from '../player/ground.js'
 import { sightGate } from '../entities/sense.js'
 import { WorldMapTool } from './WorldMapTool.js'
-import { LightTool } from './LightTool.js'
+import { LightTool, CHANNELS } from './LightTool.js'
 import { AiTool } from './AiTool.js'
+import { PerfTool } from './PerfTool.js'
 import { LightRoom } from './LightRoom.js'
 
 const CSS = `
@@ -18,8 +19,13 @@ const CSS = `
 #dbg-panel *{ box-sizing:border-box; }
 #dbg-head{ position:sticky; top:0; z-index:2; background:#15130a; border-bottom:1px solid #5e501a;
   padding:6px 8px; display:flex; flex-direction:column; gap:5px; }
-#dbg-head .t{ letter-spacing:.18em; color:#f8f1a8; display:flex; justify-content:space-between; }
+#dbg-head .t{ letter-spacing:.18em; color:#f8f1a8; display:flex; justify-content:space-between;
+  align-items:center; }
+#dbg-head .hint{ opacity:.5; font-size:9px; letter-spacing:.08em; }
 #dbg-head .st{ opacity:.7; font-size:10px; }
+#dbg-collapse{ cursor:pointer; background:none; border:1px solid #4a4017; color:#cdbf6e;
+  font:inherit; width:18px; height:18px; line-height:1; padding:0; border-radius:2px; }
+#dbg-panel.dbg-min #dbg-tabs, #dbg-panel.dbg-min .dbg-body{ display:none; }
 #dbg-tabs{ display:flex; gap:4px; }
 #dbg-tabs button{ flex:1; cursor:pointer; background:#1b1908; color:#cdbf6e; border:1px solid #4a4017;
   padding:4px 0; font:inherit; letter-spacing:.12em; border-radius:2px; }
@@ -47,12 +53,13 @@ const CSS = `
 .dbg-seg-btn.dbg-seg-on{ background:#cdbf6e; color:#15130a; font-weight:700; }
 .dbg-read{ display:flex; justify-content:space-between; gap:8px; }
 .dbg-read-k{ opacity:.65; } .dbg-read-v{ color:#f8f1a8; text-align:right; }
-.dbg-canvas{ display:block; margin:4px auto; border:1px solid #4a4017; background:#0d0d09; cursor:grab; }
+.dbg-canvas{ display:block; margin:4px auto; border:1px solid #4a4017; background:#0d0d09;
+  cursor:grab; touch-action:none; }
 `
 
-const TABS = ['world', 'light', 'ai']
+const TABS = ['world', 'light', 'ai', 'perf']
 
-// Debug-mode orchestrator. Inert until F2. Owns the tabbed panel, the three
+// Debug-mode orchestrator. Inert until F2. Owns the tabbed panel, the four
 // tools, the isolated light room (scene + orbit camera), and all engine hooks.
 // Almost everything runs without taking over the render loop; only the light
 // room swaps deferred.scene/camera (restored every frame by Engine in a finally).
@@ -67,7 +74,7 @@ export class DebugMode {
 
     // Shared overlay/AI state read by the tools.
     this.aiOverlay = true
-    this.aiPlace = false
+    this.mapClickMode = 'off' // world-map click: off | stalker | player
     this.aiSeen = false
     this.aiFlags = { dist: 0, inFrustum: false, los: false, seen: false, tension: 0 }
 
@@ -112,7 +119,15 @@ export class DebugMode {
 
     const head = document.createElement('div')
     head.id = 'dbg-head'
-    head.innerHTML = `<div class="t"><span>● DEBUG</span><span>F2 close</span></div>`
+    head.innerHTML = `<div class="t"><span>● DEBUG</span><button id="dbg-collapse" title="collapse panel">–</button></div>`
+    head.querySelector('#dbg-collapse').addEventListener('click', (e) => {
+      const min = root.classList.toggle('dbg-min')
+      e.target.textContent = min ? '+' : '–'
+    })
+    const hint = document.createElement('div')
+    hint.className = 'hint'
+    hint.textContent = '1-4 tabs · F3 freeze · F2 close · ` stats overlay'
+    head.appendChild(hint)
     this._status = document.createElement('div')
     this._status.className = 'st'
     head.appendChild(this._status)
@@ -134,6 +149,7 @@ export class DebugMode {
       world: new WorldMapTool(this.engine, this),
       light: new LightTool(this.engine, this),
       ai: new AiTool(this.engine, this),
+      perf: new PerfTool(this.engine),
     }
     this.ai = this._tools.ai
     this._bodies = {}
@@ -148,7 +164,8 @@ export class DebugMode {
 
     // Keep panel-input keystrokes from leaking to the game's global listeners.
     const guard = (e) => {
-      if (e.target.matches('input,textarea,select') && e.code !== 'F2') e.stopPropagation()
+      if (e.target.matches('input,textarea,select') && e.code !== 'F2' && e.code !== 'F3')
+        e.stopPropagation()
     }
     root.addEventListener('keydown', guard)
     root.addEventListener('keyup', guard)
@@ -192,6 +209,9 @@ export class DebugMode {
     e.stalker.frozen = false
     e.stalker.alwaysVisible = false
     e.stalker.mesh.visible = e.stalker.active
+    e.pursuer.frozen = false
+    e.pursuer.alwaysVisible = false
+    e.pursuer.mesh.visible = e.pursuer.active
     if (this.ai?.gizmos) this.ai.gizmos.visible = false
     if (this.root) this.root.style.display = 'none'
     if (e.state.phase === Phase.PLAYING) e.controller.lock()
@@ -257,6 +277,17 @@ export class DebugMode {
     s.mesh.visible = true
   }
 
+  // Drop the player at a map-clicked spot. The frozen sim skips Engine._tick,
+  // so chunk streaming + floor visibility must be refreshed explicitly here.
+  teleportPlayer(wx, wz, cy = this.engine.controller.floor) {
+    const e = this.engine
+    if (e.cm.isBlocked(wx, wz, cy)) return
+    e.controller.teleport(wx, wz, cy, e.controller.yaw)
+    e.cm.update(wx, wz, cy)
+    e.cm.updateVisibility(cy, null)
+    e._transitStair = null // stale stair cache would mis-gate the next live tick
+  }
+
   // --- Per-frame (called by Engine before render, while active) -------
   update(dt) {
     if (!this.active) return
@@ -267,7 +298,7 @@ export class DebugMode {
     if (this._status) {
       this._status.textContent =
         `${this.freeze ? 'FROZEN' : 'LIVE'} · ${this.invincible ? 'INVINC' : 'mortal'}` +
-        `${this.lightRoomActive ? ' · ROOM' : ''}${this.channel ? ' · ch' + this.channel : ''}`
+        `${this.lightRoomActive ? ' · ROOM' : ''}${this.channel ? ' · ch ' + CHANNELS[this.channel] : ''}`
     }
   }
 
@@ -328,12 +359,18 @@ export class DebugMode {
       return
     }
     if (!this.active) return
+    if (e.code === 'F3') {
+      e.preventDefault()
+      this.setFreeze(!this.freeze)
+      return
+    }
     const typing =
       document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)
     if (typing) return
     if (e.code === 'Digit1') this.showTab('world')
     else if (e.code === 'Digit2') this.showTab('light')
     else if (e.code === 'Digit3') this.showTab('ai')
+    else if (e.code === 'Digit4') this.showTab('perf')
   }
 
   dispose() {

@@ -46,21 +46,24 @@ export class AiTool {
       ]).el
     )
     cs.body.appendChild(toggle({ label: 'freeze AI', value: false, onChange: (v) => (s.frozen = v) }).el)
-    cs.body.appendChild(
-      toggle({ label: 'invincible', value: this.dbg.invincible, onChange: (v) => (this.dbg.invincible = v) }).el
-    )
+    this._invinc = toggle({
+      label: 'invincible',
+      value: this.dbg.invincible,
+      onChange: (v) => (this.dbg.invincible = v),
+    })
+    cs.body.appendChild(this._invinc.el)
     cs.body.appendChild(
       toggle({ label: 'always visible', value: false, onChange: (v) => ((s.alwaysVisible = v), (s.mesh.visible = v || s.active)) }).el
     )
-    cs.body.appendChild(
-      toggle({ label: 'live observe (unfreeze)', value: false, onChange: (v) => this.dbg.setFreeze(!v) }).el
-    )
-    this._observe = cs.body.lastChild
+    this._observe = toggle({
+      label: 'live observe (unfreeze)',
+      value: !this.dbg.freeze,
+      onChange: (v) => this.dbg.setFreeze(!v),
+    })
+    cs.body.appendChild(this._observe.el)
     cs.body.appendChild(toggle({ label: 'show map overlay', value: true, onChange: (v) => (this.dbg.aiOverlay = v) }).el)
     cs.body.appendChild(toggle({ label: '3D gizmos', value: false, onChange: (v) => (this.gizmos.visible = v) }).el)
-    cs.body.appendChild(
-      toggle({ label: 'place on map click', value: false, onChange: (v) => (this.dbg.aiPlace = v) }).el
-    )
+    // (Entity placement moved to the world map's click-mode control.)
 
     // Level stepper.
     const lvl = slider({
@@ -98,6 +101,36 @@ export class AiTool {
     add('despawnDelay', 'despawn delay', 0.5, 8, 0.1)
     add('respawnCooldown', 'respawn cd', 0.5, 12, 0.1)
     add('darkSpeedMul', 'dark speed×', 0.5, 2.5, 0.05, 2)
+
+    // --- Pursuer (the Crawler) ------------------------------------------
+    const pu = section('pursuer')
+    root.appendChild(pu.el)
+    const p = this.engine.pursuer
+    this._pr = {
+      state: readout('state'),
+      dist: readout('dist'),
+      floor: readout('floor'),
+    }
+    for (const k of Object.keys(this._pr)) pu.body.appendChild(this._pr[k].el)
+    pu.body.appendChild(toggle({ label: 'freeze pursuer', value: false, onChange: (v) => (p.frozen = v) }).el)
+    pu.body.appendChild(
+      toggle({
+        label: 'always visible',
+        value: false,
+        onChange: (v) => ((p.alwaysVisible = v), (p.mesh.visible = v || p.active)),
+      }).el
+    )
+    pu.body.appendChild(
+      slider({
+        label: 'speed',
+        min: 0,
+        max: 12,
+        step: 0.1,
+        value: p.chaseSpeed,
+        fmt: 1,
+        onInput: (v) => (p.chaseSpeed = v),
+      }).el
+    )
   }
 
   _setParam(key, v) {
@@ -179,6 +212,19 @@ export class AiTool {
     this._r.tension.set(f.tension.toFixed(2))
     this._r.level.set(`${s.level}  catch ${s.catchDist.toFixed(2)}`)
     this._r.params.set(`${s.minRange.toFixed(0)}-${s.maxRange.toFixed(0)} / ${s.interval.toFixed(1)} / ${s.chaseSpeed.toFixed(1)}`)
+
+    // Shared-flag checkboxes track external changes (F3, light-tab freeze).
+    this._observe.set(!this.dbg.freeze)
+    this._invinc.set(this.dbg.invincible)
+
+    // Pursuer readouts (computed here — only needed while this tab is viewed).
+    const p = this.engine.pursuer
+    const pl = this.engine.controller.pos
+    const pd = Math.hypot(pl.x - p.pos.x, (pl.y || 0) - p.pos.y, pl.z - p.pos.z)
+    const pdcy = p.cy - this.engine.controller.floor
+    this._pr.state.set(p.stateLabel)
+    this._pr.dist.set(p.active ? `${pd.toFixed(1)} m` : '—')
+    this._pr.floor.set(`cy ${p.cy}${pdcy ? ` · Δ ${pdcy > 0 ? '+' : ''}${pdcy}` : ''}`)
   }
 
   onShow() {}

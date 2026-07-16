@@ -113,6 +113,8 @@ const CSS = `
 #ui .chips { display:flex; flex-wrap:wrap; gap:8px; justify-content:center;
   max-width:min(540px,86vw); }
 #ui .chips .chip b { color:var(--gold); font-weight:700; }
+/* death-card run summary: user seeds can be arbitrarily long */
+#ui .dead-run { overflow-wrap:anywhere; }
 
 /* ── pause settings: grouped label/control rows, hairline separators ── */
 #ui .settings { display:flex; flex-direction:column; width:min(400px,90vw);
@@ -258,6 +260,13 @@ const CSS = `
   #ui *, #ui *::before, #ui *::after {
     animation:none !important; transition:none !important; }
 }
+
+/* ── short landscape screens (phones): slim the HUD down ───────── */
+@media (max-height:430px) {
+  #hud .bars { width:150px; gap:5px; }
+  #hud .bar .track { height:6px; margin-top:2px; }
+  #hud .compass { top:44px; }
+}
 `
 
 const bar = (id, label, jp) => `
@@ -287,14 +296,37 @@ const CONTROL_CHIPS = IS_TOUCH ? TOUCH_CHIPS : KEY_CHIPS
 const SENS_MULT_MIN = +(SENS_MIN / SENS_DEFAULT).toFixed(2)
 const SENS_MULT_MAX = +(SENS_MAX / SENS_DEFAULT).toFixed(2)
 
+// The settings block lives on BOTH the title and pause cards, so it hooks into
+// each card via data-key attributes (ids must stay unique); _cache collects one
+// wired instance per card and refreshSettings() keeps them in lockstep.
+const SETTINGS_HTML = `
+  <div class="group">LOOK</div>
+  <label>SENSITIVITY <span class="ctl">
+    <input type="range" data-k="sens" min="${SENS_MULT_MIN}" max="${SENS_MULT_MAX}" step="0.05">
+    <output class="val" data-k="sensVal"></output>
+  </span></label>
+  <label>INVERT Y <input type="checkbox" data-k="invY"></label>
+  <label>INVERT X <input type="checkbox" data-k="invX"></label>
+  <div class="group">AUDIO</div>
+  <label>VOLUME <span class="ctl">
+    <input type="range" data-k="vol" min="0" max="1" step="0.02">
+    <output class="val" data-k="volVal"></output>
+  </span></label>
+  <div class="group">DISPLAY</div>
+  <label>HEAD BOB <input type="checkbox" data-k="bob"></label>
+  <label>INK OUTLINE <input type="checkbox" data-k="out"></label>
+  <label>MINIMAP <input type="checkbox" data-k="map"></label>`
+
 export class UI {
   constructor(settings) {
     this.settings = settings
     this.onStart = null
     this.onResume = null
     this.onRestart = null
+    this.onQuit = null
     this.onSetting = null
     this.onResetSettings = null
+    this._hudCache = {} // last-written HUD values; skips redundant DOM writes
 
     const style = document.createElement('style')
     style.textContent = CSS
@@ -333,7 +365,9 @@ export class UI {
           <input type="text" id="seed-input" placeholder="world seed (optional)" aria-label="world seed" />
           <div class="row">
             <button id="btn-start" class="primary">ENTER ▸</button>
+            <button id="btn-settings" class="ghost">SETTINGS</button>
           </div>
+          <div class="settings hidden" id="title-settings">${SETTINGS_HTML}</div>
           <div class="chips">${CONTROL_CHIPS}</div>
         </div>
         ${IS_TOUCH ? '<div class="touchnote">best with headphones · landscape only</div>' : ''}
@@ -343,30 +377,13 @@ export class UI {
         <div class="card">
           <div class="jp-accent" aria-hidden="true">「小休止」</div>
           <h1 class="h-sm">PAUSED</h1>
-          <div class="settings">
-            <div class="group">LOOK</div>
-            <label>SENSITIVITY <span class="ctl">
-              <input type="range" id="set-sens" min="${SENS_MULT_MIN}" max="${SENS_MULT_MAX}" step="0.05"
-                aria-describedby="val-sens">
-              <output class="val" id="val-sens" for="set-sens"></output>
-            </span></label>
-            <label>INVERT Y <input type="checkbox" id="set-invy"></label>
-            <label>INVERT X <input type="checkbox" id="set-invx"></label>
-            <div class="group">AUDIO</div>
-            <label>VOLUME <span class="ctl">
-              <input type="range" id="set-vol" min="0" max="1" step="0.02" aria-describedby="val-vol">
-              <output class="val" id="val-vol" for="set-vol"></output>
-            </span></label>
-            <div class="group">DISPLAY</div>
-            <label>HEAD BOB <input type="checkbox" id="set-bob"></label>
-            <label>INK OUTLINE <input type="checkbox" id="set-out"></label>
-            <label>MINIMAP <input type="checkbox" id="set-map"></label>
-          </div>
+          <div class="settings">${SETTINGS_HTML}</div>
           <div class="chips">${CONTROL_CHIPS}</div>
           <div class="row">
             <button id="btn-resume" class="primary">RESUME</button>
             <button class="ghost" id="btn-restart-p">RESTART</button>
             <button class="ghost" id="btn-defaults">DEFAULTS</button>
+            <button class="ghost" id="btn-quit">QUIT TO TITLE</button>
           </div>
         </div>
       </div>
@@ -376,6 +393,7 @@ export class UI {
           <div class="jp-accent" id="dead-jp" aria-hidden="true">「捕獲」</div>
           <h1 id="dead-title">TAKEN</h1>
           <div class="keys" id="dead-sub"></div>
+          <div class="chip dead-run" id="dead-run"></div>
           <button id="btn-restart" class="primary">TRY AGAIN</button>
         </div>
       </div>
@@ -423,51 +441,84 @@ export class UI {
       deadTitle: $('#dead-title'),
       deadJp: $('#dead-jp'),
       deadSub: $('#dead-sub'),
+      deadRun: $('#dead-run'),
       trans: $('#p-trans'),
       transLevel: $('#trans-level'),
       rotate: $('#p-rotate'),
       seedInput: $('#seed-input'),
-      sens: $('#set-sens'),
-      sensVal: $('#val-sens'),
-      invY: $('#set-invy'),
-      invX: $('#set-invx'),
-      vol: $('#set-vol'),
-      volVal: $('#val-vol'),
-      bob: $('#set-bob'),
-      out: $('#set-out'),
-      map: $('#set-map'),
+      titleSettings: $('#title-settings'),
+      btnStart: $('#btn-start'),
+      btnResume: $('#btn-resume'),
+      btnRetry: $('#btn-restart'),
       minimap: $('#minimap'),
       mapwrap: $('#hud-mapwrap'),
     }
+    // One handle set per .settings card (title + pause share SETTINGS_HTML).
+    this.settingsBlocks = [...this.root.querySelectorAll('.settings')].map((rootEl) => {
+      const q = (k) => rootEl.querySelector(`[data-k="${k}"]`)
+      return {
+        sens: q('sens'),
+        sensVal: q('sensVal'),
+        invY: q('invY'),
+        invX: q('invX'),
+        vol: q('vol'),
+        volVal: q('volVal'),
+        bob: q('bob'),
+        out: q('out'),
+        map: q('map'),
+      }
+    })
   }
 
   _wire() {
     const start = () => this.onStart?.(this.el.seedInput.value.trim())
-    this.root.querySelector('#btn-start').addEventListener('click', start)
+    this.el.btnStart.addEventListener('click', start)
     this.el.seedInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') start()
     })
-    this.root.querySelector('#btn-resume').addEventListener('click', () => this.onResume?.())
-    this.root.querySelector('#btn-restart').addEventListener('click', () => this.onRestart?.())
+    this.root
+      .querySelector('#btn-settings')
+      .addEventListener('click', () => this.el.titleSettings.classList.toggle('hidden'))
+    this.el.btnResume.addEventListener('click', () => this.onResume?.())
+    this.el.btnRetry.addEventListener('click', () => this.onRestart?.())
     this.root.querySelector('#btn-restart-p').addEventListener('click', () => this.onRestart?.())
     this.root.querySelector('#btn-defaults').addEventListener('click', () => this.onResetSettings?.())
+    this.root.querySelector('#btn-quit').addEventListener('click', () => this.onQuit?.())
 
-    // The slider is in multiples of the default; the store keeps radians/px.
-    this.el.sens.addEventListener('input', (e) => {
-      const mult = parseFloat(e.target.value)
-      this.el.sensVal.value = `×${mult.toFixed(2)}`
-      this.onSetting?.('sensitivity', mult * SENS_DEFAULT)
-    })
-    this.el.vol.addEventListener('input', (e) => {
-      const v = parseFloat(e.target.value)
-      this.el.volVal.value = `${Math.round(v * 100)}%`
-      this.onSetting?.('volume', v)
-    })
-    this.el.invY.addEventListener('change', (e) => this.onSetting?.('invertY', e.target.checked))
-    this.el.invX.addEventListener('change', (e) => this.onSetting?.('invertX', e.target.checked))
-    this.el.bob.addEventListener('change', (e) => this.onSetting?.('bob', e.target.checked))
-    this.el.out.addEventListener('change', (e) => this.onSetting?.('outline', e.target.checked))
-    this.el.map.addEventListener('change', (e) => this.onSetting?.('minimap', e.target.checked))
+    // Every change round-trips through the Settings store, then BOTH cards are
+    // re-synced from the (clamped) truth so they can never show stale values.
+    const changed = () => this.refreshSettings()
+    for (const b of this.settingsBlocks) {
+      // The slider is in multiples of the default; the store keeps radians/px.
+      b.sens.addEventListener('input', (e) => {
+        this.onSetting?.('sensitivity', parseFloat(e.target.value) * SENS_DEFAULT)
+        changed()
+      })
+      b.vol.addEventListener('input', (e) => {
+        this.onSetting?.('volume', parseFloat(e.target.value))
+        changed()
+      })
+      b.invY.addEventListener('change', (e) => {
+        this.onSetting?.('invertY', e.target.checked)
+        changed()
+      })
+      b.invX.addEventListener('change', (e) => {
+        this.onSetting?.('invertX', e.target.checked)
+        changed()
+      })
+      b.bob.addEventListener('change', (e) => {
+        this.onSetting?.('bob', e.target.checked)
+        changed()
+      })
+      b.out.addEventListener('change', (e) => {
+        this.onSetting?.('outline', e.target.checked)
+        changed()
+      })
+      b.map.addEventListener('change', (e) => {
+        this.onSetting?.('minimap', e.target.checked)
+        changed()
+      })
+    }
   }
 
   // Pull every control back from the store. Also the way anything that changes a
@@ -475,15 +526,17 @@ export class UI {
   refreshSettings() {
     const s = this.settings
     const mult = s.get('sensitivity') / SENS_DEFAULT
-    this.el.sens.value = mult
-    this.el.sensVal.value = `×${mult.toFixed(2)}`
-    this.el.vol.value = s.get('volume')
-    this.el.volVal.value = `${Math.round(s.get('volume') * 100)}%`
-    this.el.invY.checked = s.get('invertY')
-    this.el.invX.checked = s.get('invertX')
-    this.el.bob.checked = s.get('bob')
-    this.el.out.checked = s.get('outline')
-    this.el.map.checked = s.get('minimap')
+    for (const b of this.settingsBlocks) {
+      b.sens.value = mult
+      b.sensVal.value = `×${mult.toFixed(2)}`
+      b.vol.value = s.get('volume')
+      b.volVal.value = `${Math.round(s.get('volume') * 100)}%`
+      b.invY.checked = s.get('invertY')
+      b.invX.checked = s.get('invertX')
+      b.bob.checked = s.get('bob')
+      b.out.checked = s.get('outline')
+      b.map.checked = s.get('minimap')
+    }
   }
 
   setSeedInput(v) {
@@ -496,6 +549,18 @@ export class UI {
     this.el.dead.classList.toggle('hidden', phase !== Phase.DEAD)
     this.el.trans.classList.toggle('hidden', phase !== Phase.TRANSITION)
     this.el.hud.classList.toggle('hidden', phase !== Phase.PLAYING)
+    // Move focus to the panel's primary action so Enter works without a mouse
+    // (and drop it when the HUD takes over, else Space would re-click a button).
+    const primary =
+      phase === Phase.TITLE
+        ? this.el.btnStart
+        : phase === Phase.PAUSED
+          ? this.el.btnResume
+          : phase === Phase.DEAD
+            ? this.el.btnRetry
+            : null
+    if (primary) primary.focus({ preventScroll: true })
+    else if (document.activeElement?.closest?.('#ui')) document.activeElement.blur()
   }
 
   // Portrait blocker sits above the phase panels and is driven by orientation,
@@ -513,13 +578,17 @@ export class UI {
   showPause() {
     this._showOnly(Phase.PAUSED)
   }
-  showDeath(reason) {
+  showDeath(reason, state) {
     const lost = reason === 'lost'
     this.el.deadTitle.textContent = lost ? 'CONSUMED' : 'TAKEN'
     this.el.deadJp.textContent = lost ? '「崩壊」' : '「捕獲」'
     this.el.deadSub.textContent = lost
       ? 'your mind dissolved into the hum.'
       : 'it found you in the yellow.'
+    // Run summary: how deep + which seed (shareable / reproducible).
+    this.el.deadRun.textContent = state
+      ? `LEVEL ${state.level}${state.seedText ? ` · SEED ${state.seedText}` : ''}`
+      : ''
     this._showOnly(Phase.DEAD)
   }
   showTransition(level) {
@@ -528,30 +597,46 @@ export class UI {
   }
 
   updateHud(state, exit) {
-    this.el.level.textContent = `LEVEL ${state.level}`
-    this.el.seed.textContent = state.seedText ? `SEED ${state.seedText}` : ''
-    this.el.seed.classList.toggle('hidden', !state.seedText)
+    const c = this._hudCache
+    // Dedupe DOM writes: text/aria/width only change when the VALUE changes.
+    const setText = (key, el, text) => {
+      if (c[key] === text) return
+      c[key] = text
+      el.textContent = text
+    }
+    // 0.1% granularity — sub-pixel on the ~190px tracks, so still smooth.
+    const setBar = (key, el, frac) => {
+      const pct = Math.round(Math.max(0, frac) * 1000) / 10
+      if (c[key] === pct) return
+      c[key] = pct
+      el.style.width = `${pct}%`
+      el.setAttribute('aria-valuenow', Math.round(pct))
+    }
 
-    const stam = Math.max(0, state.stamina)
-    this.el.stam.style.width = `${stam * 100}%`
-    this.el.stam.setAttribute('aria-valuenow', Math.round(stam * 100))
+    setText('level', this.el.level, `LEVEL ${state.level}`)
+    const seedText = state.seedText ? `SEED ${state.seedText}` : ''
+    if (c.seed !== seedText) {
+      c.seed = seedText
+      this.el.seed.textContent = seedText
+      this.el.seed.classList.toggle('hidden', !seedText)
+    }
 
-    const batt = Math.max(0, state.battery)
-    this.el.batt.style.width = `${batt * 100}%`
-    this.el.batt.setAttribute('aria-valuenow', Math.round(batt * 100))
+    setBar('stam', this.el.stam, state.stamina)
+    this.el.stam.classList.toggle('low', state.stamina < 0.2)
+    setBar('batt', this.el.batt, state.battery)
     this.el.batt.classList.toggle('low', state.battery < 0.2)
-
-    const san = Math.max(0, state.sanity)
-    this.el.san.style.width = `${san * 100}%`
-    this.el.san.setAttribute('aria-valuenow', Math.round(san * 100))
+    setBar('san', this.el.san, state.sanity)
     this.el.san.classList.toggle('low', state.sanity < 0.25)
 
     // Exposure only matters while staring; reveal the bar as it charges, redden
     // toward the freeze-failure limit.
     const expo = Math.max(0, Math.min(1, state.stareCharge || 0))
-    this.el.expoBar.style.opacity = expo > 0.01 ? '1' : '0.18'
-    this.el.expo.style.width = `${expo * 100}%`
-    this.el.expo.setAttribute('aria-valuenow', Math.round(expo * 100))
+    const expoOp = expo > 0.01 ? '1' : '0.18'
+    if (c.expoOp !== expoOp) {
+      c.expoOp = expoOp
+      this.el.expoBar.style.opacity = expoOp
+    }
+    setBar('expo', this.el.expo, expo)
     this.el.expo.classList.toggle('hot', expo > 0.75)
 
     this.el.fl.classList.toggle('on', state.flashlightOn)
@@ -562,13 +647,16 @@ export class UI {
       const df = exit.floorDelta ?? 0
       this.el.compass.style.opacity = df === 0 ? '0.85' : '0.45'
       this.el.compassArrow.style.transform = `rotate(${exit.relAngle}rad)`
-      this.el.dist.textContent =
+      setText(
+        'dist',
+        this.el.dist,
         df === 0
           ? `${Math.round(exit.dist)}m`
           : `${Math.round(exit.dist)}m ${df < 0 ? '▼' : '▲'}${Math.abs(df)}`
+      )
     } else {
       this.el.compass.style.opacity = '0.25'
-      this.el.dist.textContent = '—'
+      setText('dist', this.el.dist, '—')
     }
   }
 }
