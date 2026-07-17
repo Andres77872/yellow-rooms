@@ -47,10 +47,37 @@ describe('collectDoorways', () => {
     const b = collectDoorways(data, 1)
     expect(a).toEqual(b) // same data -> identical descriptors
     expect(collectDoorways(data, 0)[0].leaf).toBe(false) // fraction 0 -> never a leaf
-    // The open leaf must lie against an in-range wall neighbour, never off-chunk.
-    expect(Math.abs(a[0].hinge)).toBe(1)
-    expect(a[0].cell + a[0].hinge).toBeGreaterThanOrEqual(0)
-    expect(a[0].cell + a[0].hinge).toBeLessThan(CHUNK)
+    expect(collectDoorways(data, 0)[0].leaves).toEqual([])
+    // The open leaves must lie against in-range wall neighbours, never off-chunk.
+    for (const { hinge } of a[0].leaves) {
+      expect(Math.abs(hinge)).toBe(1)
+      expect(a[0].cell + hinge).toBeGreaterThanOrEqual(0)
+      expect(a[0].cell + hinge).toBeLessThan(CHUNK)
+    }
+  })
+
+  it('shows the door on both faces of the wall: one leaf per side, mirrored', () => {
+    const data = new ChunkData(0, 0, 0, ZONE_OFFICE)
+    wallLineV(data, 5)
+    data.setPassageV(5, 7, PASSAGE_DOOR)
+    const [door] = collectDoorways(data, 1)
+    expect(door.leaf).toBe(true)
+    expect(door.leaves).toHaveLength(2)
+    // One leaf hinged at each jamb...
+    expect(door.leaves.map((l) => l.hinge).sort()).toEqual([-1, 1])
+    // ...and exactly one leaf on each wall face, so both rooms see the door.
+    expect(door.leaves.map((l) => l.face).sort()).toEqual([-1, 1])
+  })
+
+  it('folds both leaves into the single flanking cell at a corner doorway', () => {
+    const data = new ChunkData(0, 0, 0, ZONE_OFFICE)
+    data.setV(5, 8, 1) // wall only on the high side of the doorway
+    data.setPassageV(5, 7, PASSAGE_DOOR)
+    const [door] = collectDoorways(data, 1)
+    expect(door.leaf).toBe(true)
+    expect(door.leaves).toHaveLength(2)
+    for (const l of door.leaves) expect(l.hinge).toBe(1)
+    expect(door.leaves.map((l) => l.face).sort()).toEqual([-1, 1])
   })
 
   it('does not infer a semantic door from an arbitrary raster gap', () => {

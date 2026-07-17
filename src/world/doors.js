@@ -9,12 +9,13 @@ import { PASSAGE_DOOR, PASSAGE_WIDE } from './mapTypes.js'
 // boundaries because the detector could not inspect the neighbouring chunk.
 //
 // Returns descriptors in GRID space — mesh.js turns them into instance
-// transforms. `leaf` (show an open door panel?), `hinge` (which side the panel
-// lies against) and `face` (which wall face) are derived deterministically from
-// the doorway's GLOBAL edge coordinate, so a given doorway always looks identical
-// across chunk reloads; it varies between seeds only because the wall layout does.
+// transforms. `leaf` (show the door?), `leaves[].hinge` (which side the panel
+// lies against) and `leaves[].face` (which wall face) are derived
+// deterministically from the doorway's GLOBAL edge coordinate, so a given
+// doorway always looks identical across chunk reloads; it varies between seeds
+// only because the wall layout does.
 //
-//   { axis: 'v'|'h', line, cell, leaf, hinge: -1|1, face: -1|1, tone: 0..1 }
+//   { axis: 'v'|'h', line, cell, leaf, leaves: [{ hinge: -1|1, face: -1|1 }], tone: 0..1 }
 //     v: line = lx (vertical grid line), cell = z (row along the line)
 //     h: line = lz (horizontal grid line), cell = x (column along the line)
 //     tone: leaf-colour seed (fresh hash bits) — mesh.js maps it onto the
@@ -52,17 +53,30 @@ export function normalizeDoorPassages(data) {
 }
 
 // Resolve the per-door cosmetic flags. `lo`/`hi` mark whether a REAL in-range
-// wall exists on the low / high side, so the open leaf always lies against an
-// actual wall (never floats off the chunk edge).
+// wall exists on the low / high side, so open leaves always lie against an
+// actual wall (never float off the chunk edge). A doorway that shows its door
+// gets a PAIR of leaves — each half the framed opening, so the closed pair
+// would fill it exactly — with one leaf on EACH face of the wall, so the door
+// reads from both rooms instead of existing on a single side. Wall on both
+// sides: one leaf per neighbour cell, mirrored through the opening. Wall on
+// one side only (a corner doorway): both leaves fold into the same neighbour
+// cell, one per face.
 function decorate(axis, line, cell, lo, hi, ga, gb, salt, fraction) {
   const h = hash2i(salt, ga, gb)
   const leaf = (lo || hi) && h / 4294967296 < fraction
-  const hinge = lo && hi ? ((h & 1) === 1 ? 1 : -1) : hi ? 1 : -1
   const face = (h & 2) === 2 ? 1 : -1
+  const leaves = []
+  if (leaf) {
+    if (lo && hi) leaves.push({ hinge: -1, face }, { hinge: 1, face: -face })
+    else {
+      const hinge = hi ? 1 : -1
+      leaves.push({ hinge, face }, { hinge, face: -face })
+    }
+  }
   // Fresh high bits for the leaf tint so colour never correlates with the
-  // hinge/face/leaf choices made from the low bits and the presence threshold.
+  // face/leaf choices made from the low bits and the presence threshold.
   const tone = (h >>> 8) / 16777216
-  return { axis, line, cell, leaf, hinge, face, tone }
+  return { axis, line, cell, leaf, leaves, tone }
 }
 
 export function collectDoorways(data, fraction) {

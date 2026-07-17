@@ -343,16 +343,21 @@ export const ZONE_WAREHOUSE = 2 // big open space, sparse long wall runs
 export const THICK = 0.16 // visual wall slab thickness (world units)
 export const WALL_COL_HALF = 0.08 // collision half-thickness of a wall line
 export const COL_HALF = 0.4 // freestanding column half-width
-export const HEADER_H = 0.5 // doorway lintel header height
+// Lintel/transom band above a doorway. 0.8 (not 0.5) drops the clear opening
+// to DOOR_H = 2.4 — a real door height under the 3.2 ceiling instead of a
+// near-square gate — and the deeper band reads as a designed transom.
+export const HEADER_H = 0.8 // doorway lintel header height
 
 // Decorative door frames + open leaves (mesh-only — selected by explicit
 // PASSAGE_DOOR metadata in mesh.js). A single-cell doorway gets a casing: two
 // jamb posts + a lintel filling
 // the wall above the DOOR_H (= WALL_H - HEADER_H) opening, standing FRAME_DEPTH
 // proud of the THICK wall. A deterministic DOOR_LEAF_FRACTION of doorways also
-// show an open door leaf laid flat against the wall (it never blocks the
-// passage). DOOR_SALT keys the per-door hash so each doorway looks identical
-// across chunk reloads.
+// show the door itself: a PAIR of leaves, each half the framed opening (so the
+// closed pair would fill it exactly — realistic ~1.36u doors, not a 2.7u
+// gate), swung flat against the flanking wall with one leaf on EACH face, so
+// the doorway reads as a door from both rooms. DOOR_SALT keys the per-door
+// hash so each doorway looks identical across chunk reloads.
 export const FRAME_W = 0.14 // jamb casing width along the wall (world units)
 export const FRAME_DEPTH = 0.22 // how proud the casing stands from the wall face (> THICK)
 // Door casing dressing (trimwork.js): plinth blocks at the jamb feet and a head
@@ -379,18 +384,21 @@ export const BRIDGE_GUARD_CAP_H = 0.1
 export const BRIDGE_BEAM_H = 0.45
 export const BRIDGE_BEAM_W = 0.24
 export const DOOR_LEAF_THICK = 0.06 // open door panel thickness
-export const DOOR_LEAF_FRACTION = 0.5 // fraction of doorways that show an open leaf
-export const DOOR_SALT = 0x0d00 | 0 // fixed hash salt for the per-door leaf/hinge choice
-// Raised panel moldings on the open leaf (two per face so both faces of the
-// flat-against-wall leaf read as a real door) + a small knob plate. All proud
-// of the leaf face; the whole assembly stays flat against the neighbour wall
-// cell, so it never intrudes into the passage (collision reads the edge bytes).
+export const DOOR_LEAF_GAP = 0.04 // hinge-gap from the jamb edge to the swung-flat leaf (clears the plinth toe)
+export const DOOR_LEAF_FRACTION = 0.5 // fraction of doorways that show the open door pair
+export const DOOR_SALT = 0x0d00 | 0 // fixed hash salt for the per-door leaf/face choice
+// Raised panel moldings dress each leaf's room-side face (the wall-side face
+// is hidden against the wall) + a small knob plate at the leading edge. All
+// proud of the leaf face; the whole assembly stays flat against the neighbour
+// wall cell, so it never intrudes into the passage (collision reads the edge
+// bytes). Sizes are fit to DOOR_H 2.4 x half-opening 1.36 leaves with balanced
+// 0.24 rails top / middle / bottom.
 export const DOOR_PANEL_PROUD = 0.015 // how far a raised panel stands off the leaf face
-export const DOOR_PANEL_MARGIN = 0.26 // side margin from leaf edge to panel
-export const DOOR_PANEL_TOP_Y = 2.0 // upper panel centre height
-export const DOOR_PANEL_TOP_H = 1.0
-export const DOOR_PANEL_BOT_Y = 0.72 // lower panel centre height
-export const DOOR_PANEL_BOT_H = 0.92
+export const DOOR_PANEL_MARGIN = 0.16 // side margin from leaf edge to panel
+export const DOOR_PANEL_TOP_Y = 1.72 // upper panel centre height
+export const DOOR_PANEL_TOP_H = 0.88
+export const DOOR_PANEL_BOT_Y = 0.64 // lower panel centre height
+export const DOOR_PANEL_BOT_H = 0.8
 export const DOOR_KNOB_Y = 1.02 // knob height off the floor
 export const DOOR_KNOB_W = 0.07 // knob plate size along the leaf
 export const DOOR_KNOB_H = 0.16 // knob plate height

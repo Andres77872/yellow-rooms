@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { pushDoorFrame, pushDoorLeaf, pushWindowTrim } from '../trimwork.js'
+import { pushDoorFrame, pushDoorLeaves, pushWindowTrim } from '../trimwork.js'
 import {
   CELL,
   WALL_H,
@@ -7,6 +7,7 @@ import {
   HEADER_H,
   FRAME_W,
   DOOR_LEAF_THICK,
+  DOOR_LEAF_GAP,
   DOOR_PANEL_PROUD,
   DOOR_KNOB_W,
   WINDOW_SILL_H,
@@ -17,7 +18,8 @@ import {
 } from '../constants.js'
 
 const DOOR_H = WALL_H - HEADER_H
-const LEAF_W = CELL - 2 * FRAME_W
+const OPENING_W = CELL - 2 * FRAME_W // clear span between the jambs
+const LEAF_W = OPENING_W / 2 // each leaf of the pair
 
 // Extent helpers over {px,py,pz,sx,sy,sz} descriptors.
 const xSpan = (b) => [b.px - b.sx / 2, b.px + b.sx / 2]
@@ -61,7 +63,7 @@ describe('pushDoorFrame', () => {
       pushDoorFrame(out, axis, 3, 5)
       const plane = 3 * CELL
       const centre = (5 + 0.5) * CELL
-      const clear = [centre - LEAF_W / 2, centre + LEAF_W / 2]
+      const clear = [centre - OPENING_W / 2, centre + OPENING_W / 2]
       for (const b of out) {
         const along = axis === 'v' ? zSpan(b) : xSpan(b)
         const across = axis === 'v' ? xSpan(b) : zSpan(b)
@@ -77,22 +79,34 @@ describe('pushDoorFrame', () => {
   })
 })
 
-describe('pushDoorLeaf', () => {
-  const base = { axis: 'v', line: 4, cell: 7, leaf: true, hinge: 1, face: 1, tone: 0.5 }
+describe('pushDoorLeaves', () => {
+  const base = { axis: 'v', line: 4, cell: 7, leaf: true, leaves: [{ hinge: 1, face: 1 }], tone: 0.5 }
 
-  it('builds a 4-part panel door (slab, 2 moldings, knob), roles tagged', () => {
+  it('builds a 4-part panel door per leaf (slab, 2 moldings, knob), roles tagged', () => {
     const out = []
-    pushDoorLeaf(out, base)
+    pushDoorLeaves(out, base)
     expect(out).toHaveLength(4)
     expect(out.filter((b) => b.role === 0)).toHaveLength(3) // paint
     expect(out.filter((b) => b.role === 1)).toHaveLength(1) // knob
+    // A pair doubles the parts.
+    const pair = []
+    pushDoorLeaves(pair, { ...base, leaves: [{ hinge: -1, face: 1 }, { hinge: 1, face: -1 }] })
+    expect(pair).toHaveLength(8)
+  })
+
+  it('fits the framed opening: two leaves are each half the clear span', () => {
+    const out = []
+    pushDoorLeaves(out, base)
+    const slab = out.find((b) => b.role === 0 && b.sy === DOOR_H)
+    expect(slab.sz).toBeCloseTo(LEAF_W, 10)
+    expect(2 * LEAF_W).toBeCloseTo(OPENING_W, 10)
   })
 
   it('stays flat against the neighbour cell and off the passage mouth', () => {
     for (const hinge of [-1, 1]) {
       for (const face of [-1, 1]) {
         const out = []
-        pushDoorLeaf(out, { ...base, hinge, face })
+        pushDoorLeaves(out, { ...base, leaves: [{ hinge, face }] })
         const plane = 4 * CELL
         const n0 = (7 + hinge) * CELL
         const n1 = (7 + hinge + 1) * CELL
@@ -121,11 +135,27 @@ describe('pushDoorLeaf', () => {
 
   it('puts the knob at the leading edge, away from the hinge side', () => {
     const out = []
-    pushDoorLeaf(out, { ...base, hinge: 1 })
+    pushDoorLeaves(out, base)
     const knob = out.find((b) => b.role === 1)
-    const zl = (7 + 1 + 0.5) * CELL
-    expect(knob.pz).toBeGreaterThan(zl) // hinge 1 -> leading edge on the +z side
+    const zl = 8 * CELL + DOOR_LEAF_GAP + LEAF_W / 2 // hinge 1 -> leaf centre in cell 8
+    expect(knob.pz).toBeGreaterThan(zl) // leading edge on the +z side
     expect(Math.abs(knob.pz - (zl + LEAF_W / 2 - DOOR_KNOB_W))).toBeLessThan(1e-9)
+  })
+
+  it('mirrors a pair across the wall: one leaf per flanking cell, one per face', () => {
+    const out = []
+    pushDoorLeaves(out, {
+      ...base,
+      leaves: [{ hinge: -1, face: 1 }, { hinge: 1, face: -1 }],
+    })
+    const plane = 4 * CELL
+    const slabs = out.filter((b) => b.role === 0 && b.sy === DOOR_H)
+    expect(slabs).toHaveLength(2)
+    const [low, high] = [...slabs].sort((a, b) => a.pz - b.pz)
+    expect(low.pz).toBeLessThan(7 * CELL) // inside the low neighbour cell
+    expect(low.px).toBeGreaterThan(plane + THICK / 2) // on the +face side
+    expect(high.pz).toBeGreaterThan(8 * CELL) // inside the high neighbour cell
+    expect(high.px).toBeLessThan(plane - THICK / 2) // on the -face side
   })
 })
 

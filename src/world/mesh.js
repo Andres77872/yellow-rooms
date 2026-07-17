@@ -24,7 +24,7 @@ import {
   cIdx,
 } from './constants.js'
 import { collectDoorways } from './doors.js'
-import { pushDoorFrame, pushDoorLeaf, pushWindowTrim } from './trimwork.js'
+import { pushDoorFrame, pushDoorLeaves, pushWindowTrim } from './trimwork.js'
 import { lampPanelTint } from './lampCharacter.js'
 import { STAIR_E, STAIR_S, STAIR_W } from './slab.js'
 import { WALL_PLAIN, WALL_RAIL, WALL_WINDOW } from './mapTypes.js'
@@ -378,17 +378,19 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
 
   // --- Decorative door frames + dressed open leaves (from explicit passage metadata) ---
   // Purely visual: a plinth-and-cap casing around every single-cell doorway,
-  // plus a panelled open leaf laid flat against the wall on a deterministic
-  // subset — all built by trimwork.js into unit-box descriptors, so it adds no
-  // geometry primitive and never blocks the opening (collision/LOS read the
-  // edge bytes). Leaves carry the doorway's `tone` seed for per-door tinting.
+  // plus a panelled door PAIR swung flat against the flanking walls on a
+  // deterministic subset — one leaf per wall face, so the doorway reads as a
+  // door from both rooms. All built by trimwork.js into unit-box descriptors,
+  // so it adds no geometry primitive and never blocks the opening
+  // (collision/LOS read the edge bytes). Leaves carry the doorway's `tone`
+  // seed for per-door tinting.
   const frameInst = featureFrameInst.slice() // {px,py,pz, sx,sy,sz}
   const leafInst = [] // same, plus role (0 paint / 1 knob) + tone
   for (const d of collectDoorways(data, DOOR_LEAF_FRACTION)) {
     pushDoorFrame(frameInst, d.axis, d.line, d.cell)
     if (d.leaf) {
       const at = leafInst.length
-      pushDoorLeaf(leafInst, d)
+      pushDoorLeaves(leafInst, d)
       for (let i = at; i < leafInst.length; i++) leafInst[i].tone = d.tone
     }
   }

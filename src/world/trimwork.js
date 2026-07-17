@@ -6,6 +6,7 @@ import {
   FRAME_W,
   FRAME_DEPTH,
   DOOR_LEAF_THICK,
+  DOOR_LEAF_GAP,
   DOOR_PLINTH_H,
   DOOR_PLINTH_W,
   DOOR_CAP_H,
@@ -47,7 +48,8 @@ import {
 
 const DOOR_H = WALL_H - HEADER_H // clear opening height (lintel fills above)
 const JAMB_OFF = CELL / 2 - FRAME_W / 2 // jamb centre offset from the gap centre
-const LEAF_W = CELL - 2 * FRAME_W // leaf width: the opening minus both jambs
+const OPENING_W = CELL - 2 * FRAME_W // clear span between the jambs
+const LEAF_W = OPENING_W / 2 // each leaf of the pair: half the framed opening
 
 // Emit one axis-aligned box, mirrored across x/z by `vertical` (wall runs
 // along z for a vertical grid line, along x for a horizontal one).
@@ -77,38 +79,40 @@ export function pushDoorFrame(out, axis, line, cell) {
   return out
 }
 
-// The open leaf laid flat against the neighbour wall cell, dressed as a real
-// panel door: raised moldings on the ROOM-side face plus a knob plate at the
-// leading edge. (The wall-side face is coplanar with the wall and can never be
-// seen, so it gets no molding.) Every part is role-tagged so mesh.js can tint
-// the paint and the metal independently per door.
-export function pushDoorLeaf(out, door) {
+// The door itself, swung open flat against the neighbour wall. door.leaves
+// lists one entry per panel (doors.js): a full pair puts one leaf on EACH face
+// of the wall — hinged at opposite jambs, mirrored through the opening — so
+// the doorway reads as a door from both rooms. Each leaf hugs its hinge jamb
+// (a small gap clears the plinth toe) and is dressed as a real panel door:
+// raised moldings on the room-side face plus a knob plate at the leading edge.
+// (The wall-side face is coplanar with the wall and can never be seen, so it
+// gets no molding.) Every part is role-tagged so mesh.js can tint the paint
+// and the metal independently per door.
+export function pushDoorLeaves(out, door) {
   const vertical = door.axis === 'v'
-  const plane = line0(door)
-  const zl = (door.cell + door.hinge + 0.5) * CELL // leaf centre: the neighbour cell
-  const leafOff = door.face * (THICK / 2 + DOOR_LEAF_THICK / 2) // just off the wall face
-  const across = plane + leafOff
+  const plane = door.line * CELL
+  for (const { hinge, face } of door.leaves) {
+    const jambEdge = (door.cell + (hinge + 1) / 2) * CELL // cell boundary at the hinge jamb
+    const zl = jambEdge + hinge * (DOOR_LEAF_GAP + LEAF_W / 2) // leaf centre, inside the neighbour cell
+    const across = plane + face * (THICK / 2 + DOOR_LEAF_THICK / 2) // just off the wall face
 
-  // The slab itself.
-  box(out, vertical, zl, DOOR_H / 2, across, LEAF_W, DOOR_H, DOOR_LEAF_THICK, 0)
+    // The slab itself.
+    box(out, vertical, zl, DOOR_H / 2, across, LEAF_W, DOOR_H, DOOR_LEAF_THICK, 0)
 
-  // Raised panels, proud of the room-side leaf face.
-  const panelW = LEAF_W - 2 * DOOR_PANEL_MARGIN
-  const faceOff = across + door.face * (DOOR_LEAF_THICK / 2 + DOOR_PANEL_PROUD / 2)
-  box(out, vertical, zl, DOOR_PANEL_TOP_Y, faceOff, panelW, DOOR_PANEL_TOP_H, DOOR_PANEL_PROUD, 0)
-  box(out, vertical, zl, DOOR_PANEL_BOT_Y, faceOff, panelW, DOOR_PANEL_BOT_H, DOOR_PANEL_PROUD, 0)
+    // Raised panels, proud of the room-side leaf face.
+    const panelW = LEAF_W - 2 * DOOR_PANEL_MARGIN
+    const faceOff = across + face * (DOOR_LEAF_THICK / 2 + DOOR_PANEL_PROUD / 2)
+    box(out, vertical, zl, DOOR_PANEL_TOP_Y, faceOff, panelW, DOOR_PANEL_TOP_H, DOOR_PANEL_PROUD, 0)
+    box(out, vertical, zl, DOOR_PANEL_BOT_Y, faceOff, panelW, DOOR_PANEL_BOT_H, DOOR_PANEL_PROUD, 0)
 
-  // Knob plate near the leading edge (the edge AWAY from the hinge/doorway).
-  // Offset outward so its inner face stays flush with the wall face — deeper
-  // than the leaf but never buried in the wall slab.
-  const leading = zl + door.hinge * (LEAF_W / 2 - DOOR_KNOB_W)
-  const knobAcross = across + door.face * 0.02
-  box(out, vertical, leading, DOOR_KNOB_Y, knobAcross, DOOR_KNOB_W, DOOR_KNOB_H, DOOR_LEAF_THICK + 0.04, 1)
+    // Knob plate near the leading edge (the edge AWAY from the hinge/doorway).
+    // Offset outward so its inner face stays flush with the wall face — deeper
+    // than the leaf but never buried in the wall slab.
+    const leading = jambEdge + hinge * (DOOR_LEAF_GAP + LEAF_W - DOOR_KNOB_W)
+    const knobAcross = across + face * 0.02
+    box(out, vertical, leading, DOOR_KNOB_Y, knobAcross, DOOR_KNOB_W, DOOR_KNOB_H, DOOR_LEAF_THICK + 0.04, 1)
+  }
   return out
-}
-
-function line0(door) {
-  return door.line * CELL
 }
 
 // Gallery observation window: casing + a projecting stool ledge + slim glazing
