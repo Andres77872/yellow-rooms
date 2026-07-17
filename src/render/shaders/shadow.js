@@ -29,6 +29,7 @@ export const SHADOW_FRAG = /* glsl */ `
   uniform float uShadowThickness;
   uniform vec3 uLampViewPos[LIGHT_MAX]; // lamp positions in VIEW space (CPU-precomputed)
   uniform int uLampCount;
+  uniform vec4 uLampChar[LIGHT_MAX];   // per-fixture flicker (a) — weights the mask like the lit pass
   uniform float uLampRange;
   uniform float uLampWrap;
 
@@ -71,7 +72,9 @@ export const SHADOW_FRAG = /* glsl */ `
     float jitter = ign(gl_FragCoord.xy);
 
     // Same lamp selection as the lit pass: array order (nearest-first), in-range,
-    // shadow-march only the meaningfully-lit nearest SHADOW_MAX.
+    // shadow-march only the meaningfully-lit nearest SHADOW_MAX. The per-fixture
+    // flicker scales each lamp's weight so a strobing tube's shadow pulses with
+    // its pool instead of staying frozen at full strength.
     float wsum = 0.0, vissum = 0.0;
     int shadowed = 0;
     for (int i = 0; i < LIGHT_MAX; i++) {
@@ -81,7 +84,7 @@ export const SHADOW_FRAG = /* glsl */ `
       float d = length(toL);
       if (d > uLampRange) continue;
       float ndl = wrapNL(dot(N, toL / max(d, 1e-4)));
-      float contrib = band(ndl) * lampAtt(d, uLampRange);
+      float contrib = uLampChar[i].a * band(ndl) * lampAtt(d, uLampRange);
       float vis = 1.0;
       if (contrib > 0.08 && shadowed < SHADOW_MAX) { vis = march(P, Lv, jitter); shadowed++; }
       wsum += contrib;

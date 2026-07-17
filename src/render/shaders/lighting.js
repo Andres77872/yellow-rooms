@@ -33,6 +33,7 @@ export const LIGHTING_FRAG = /* glsl */ `
   uniform vec3 uUpView;          // world up, in view space
   uniform vec3 uLampViewPos[LIGHT_MAX]; // lamp positions in VIEW space (CPU-precomputed)
   uniform int uLampCount;
+  uniform vec4 uLampChar[LIGHT_MAX];   // per-fixture identity: rgb tint, a flicker
   uniform vec3 uLampColor;
   uniform float uLampIntensity;
   uniform float uLampFlicker;    // per-frame fluorescent dip (1 = steady); driven by Engine
@@ -113,7 +114,9 @@ export const LIGHTING_FRAG = /* glsl */ `
     // fades over the last LAMP_FADE_BAND units of the query radius (lamp
     // distance from the CAMERA, i.e. length of its view-space position), so
     // lamps entering/leaving the LightField candidate set ramp in smoothly
-    // instead of snapping their whole floor pool on/off mid-walk.
+    // instead of snapping their whole floor pool on/off mid-walk. Every lamp
+    // carries its own tint + flicker identity, so neighbouring fixtures never
+    // pulse in lockstep (and a bad tube strobes on its own).
     vec3 lamps = vec3(0.0);
     for (int i = 0; i < LIGHT_MAX; i++) {
       if (i >= uLampCount) break;
@@ -124,7 +127,8 @@ export const LIGHTING_FRAG = /* glsl */ `
       float ndl = wrapNL(dot(N, toL / max(d, 1e-4)));
       float setFade = 1.0 - smoothstep(
         ${glslFloat(LAMP_QUERY_R - LAMP_FADE_BAND)}, ${glslFloat(LAMP_QUERY_R)}, length(Lv));
-      lamps += band(ndl + celDither) * lampAtt(d, uLampRange) * setFade;
+      lamps += uLampChar[i].rgb *
+        (uLampChar[i].a * band(ndl + celDither) * lampAtt(d, uLampRange) * setFade);
     }
     // Screen-space lamp shadows (half-res, blurred) modulate the whole lamp term.
     // tShadow is the contribution-weighted visibility, so this equals per-lamp

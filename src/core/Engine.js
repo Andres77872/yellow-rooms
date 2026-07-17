@@ -94,10 +94,7 @@ export class Engine {
     this.pursuer = new Pursuer(scene, this.materials, this.geom, this.cm)
 
     this.deferred = new DeferredRenderer(renderer, scene, camera)
-    this.lightField = new LightField(
-      this.deferred.lamps.uLampPos,
-      this.deferred.lamps.uLampCount
-    )
+    this.lightField = new LightField(this.deferred.lamps)
 
     this.debug = new DebugOverlay(renderer)
     this.ui = new UI(this.settings)

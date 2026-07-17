@@ -14,9 +14,11 @@ import { PASSAGE_DOOR, PASSAGE_WIDE } from './mapTypes.js'
 // the doorway's GLOBAL edge coordinate, so a given doorway always looks identical
 // across chunk reloads; it varies between seeds only because the wall layout does.
 //
-//   { axis: 'v'|'h', line, cell, leaf, hinge: -1|1, face: -1|1 }
+//   { axis: 'v'|'h', line, cell, leaf, hinge: -1|1, face: -1|1, tone: 0..1 }
 //     v: line = lx (vertical grid line), cell = z (row along the line)
 //     h: line = lz (horizontal grid line), cell = x (column along the line)
+//     tone: leaf-colour seed (fresh hash bits) — mesh.js maps it onto the
+//           painted-cream band or, rarely, the dark-stained "wrong door".
 
 const SALT_V = DOOR_SALT
 const SALT_H = (DOOR_SALT ^ 0x68f1) | 0
@@ -57,7 +59,10 @@ function decorate(axis, line, cell, lo, hi, ga, gb, salt, fraction) {
   const leaf = (lo || hi) && h / 4294967296 < fraction
   const hinge = lo && hi ? ((h & 1) === 1 ? 1 : -1) : hi ? 1 : -1
   const face = (h & 2) === 2 ? 1 : -1
-  return { axis, line, cell, leaf, hinge, face }
+  // Fresh high bits for the leaf tint so colour never correlates with the
+  // hinge/face/leaf choices made from the low bits and the presence threshold.
+  const tone = (h >>> 8) / 16777216
+  return { axis, line, cell, leaf, hinge, face, tone }
 }
 
 export function collectDoorways(data, fraction) {

@@ -1,4 +1,4 @@
-import { HASH, LAMP_ATT, VIEW_RECON, glslFloat } from './common.js'
+import { IGN, LAMP_ATT, VIEW_RECON, glslFloat } from './common.js'
 import { LIGHT_MAX, VOL_LIGHT_MAX, VOL_OCC_NEAR, VOL_OCC_FAR } from '../../world/constants.js'
 import { QUALITY } from '../../core/device.js'
 
@@ -23,6 +23,7 @@ export const VOL_FRAG = /* glsl */ `
   uniform mat4 uProjInverse;
   uniform vec3 uLampViewPos[LIGHT_MAX]; // lamp positions in VIEW space (CPU-precomputed)
   uniform int uLampCount;
+  uniform vec4 uLampChar[LIGHT_MAX];   // per-fixture identity: rgb tint, a flicker
   uniform vec3 uLampColor;
   uniform float uLampIntensity;  // shared with the lit pass so shafts track lamp brightness
   uniform float uLampFlicker;    // shared fluorescent dip so shafts flicker with the lamps
@@ -38,7 +39,7 @@ export const VOL_FRAG = /* glsl */ `
   uniform float uFlashCosInner;
   uniform float uFlashCosOuter;
 
-  ${HASH}
+  ${IGN}
   ${LAMP_ATT}
   ${VIEW_RECON}
 
@@ -77,7 +78,9 @@ export const VOL_FRAG = /* glsl */ `
     float maxT = min(plen, uMaxDist);
     vec3 dir = P / max(plen, 1e-4);
     float step = maxT / float(VOL_STEPS);
-    float jitter = hash(gl_FragCoord.xy);
+    // Interleaved Gradient Noise like the lighting/shadow passes — the old
+    // HASH jitter degenerated into correlated streaks on some drivers.
+    float jitter = ign(gl_FragCoord.xy);
 
     // Single outer step loop: compute the ray sample S once per step, then gather
     // in-scatter from each lamp (was re-walking the whole ray per lamp).
@@ -96,7 +99,8 @@ export const VOL_FRAG = /* glsl */ `
         float dl = distance(S, Lv);
         if (dl < uLampRange){
           float phase = phaseHG(dot(dir, (Lv - S) / max(dl, 1e-4)));
-          acc += lampAtt(dl, uLampRange) * phase * visToLight(S, Lv) * trans;
+          acc += uLampChar[j].rgb *
+            (uLampChar[j].a * lampAtt(dl, uLampRange) * phase * visToLight(S, Lv) * trans);
         }
       }
       t += step;

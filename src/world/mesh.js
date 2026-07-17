@@ -8,14 +8,13 @@ import {
   STAIR_STEPS,
   THICK,
   COL_HALF,
-  HEADER_H,
-  FRAME_W,
   FRAME_DEPTH,
-  DOOR_LEAF_THICK,
   DOOR_LEAF_FRACTION,
+  DOOR_DARK_CHANCE,
+  DOOR_DARK_TINT,
+  DOOR_TINT_VAR,
   WINDOW_SILL_H,
   WINDOW_HEAD_Y,
-  WINDOW_TRIM_W,
   BRIDGE_GUARD_H,
   BRIDGE_GUARD_CAP_H,
   BRIDGE_BEAM_H,
@@ -25,6 +24,8 @@ import {
   cIdx,
 } from './constants.js'
 import { collectDoorways } from './doors.js'
+import { pushDoorFrame, pushDoorLeaf, pushWindowTrim } from './trimwork.js'
+import { lampPanelTint } from './lampCharacter.js'
 import { STAIR_E, STAIR_S, STAIR_W } from './slab.js'
 import { WALL_PLAIN, WALL_RAIL, WALL_WINDOW } from './mapTypes.js'
 
@@ -32,6 +33,23 @@ const _m = new THREE.Matrix4()
 const _q = new THREE.Quaternion()
 const _p = new THREE.Vector3()
 const _s = new THREE.Vector3()
+const _c = new THREE.Color()
+const _tint3 = [0, 0, 0]
+
+// Per-door leaf colour from the doorway's deterministic tone seed (doors.js).
+// instanceColor multiplies the doorLeaf material's painted-cream base: most
+// leaves drift a little in brightness; a rare one comes out dark-stained —
+// the liminal "this door is wrong" beat. Knob parts go dark metal.
+function leafTint(part, out) {
+  if (part.role === 1) return out.setRGB(0.25, 0.22, 0.18)
+  const tone = part.tone ?? 0.5
+  if (tone < DOOR_DARK_CHANCE) {
+    return out.setRGB(DOOR_DARK_TINT, DOOR_DARK_TINT * 0.88, DOOR_DARK_TINT * 0.76)
+  }
+  const t = (tone - DOOR_DARK_CHANCE) / (1 - DOOR_DARK_CHANCE)
+  const b = 1 - DOOR_TINT_VAR + 2 * DOOR_TINT_VAR * t
+  return out.setRGB(b, b * 0.99, b * 0.955)
+}
 
 // Build the THREE meshes for one chunk from its ChunkData (thin-wall model).
 // Returns { group, lamps, exitWorld, dispose }. Geometry/materials are shared
@@ -230,6 +248,8 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
     const sx = vertical ? THICK : CELL
     const sz = vertical ? CELL : THICK
     if (feature === WALL_WINDOW) {
+      // Collision-solid sill + header (wallpaper); the joinery (casings, stool,
+      // glazing cross) comes from the shared trimwork builder.
       inst.push({ px, py: WINDOW_SILL_H / 2, pz, sx, sy: WINDOW_SILL_H, sz })
       inst.push({
         px,
@@ -239,29 +259,7 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
         sy: WALL_H - WINDOW_HEAD_Y,
         sz,
       })
-      const openingH = WINDOW_HEAD_Y - WINDOW_SILL_H
-      const trimDepth = FRAME_DEPTH
-      if (vertical) {
-        const z0 = cell * CELL
-        const z1 = (cell + 1) * CELL
-        featureFrameInst.push(
-          { px, py: (WINDOW_SILL_H + WINDOW_HEAD_Y) / 2, pz: z0 + WINDOW_TRIM_W / 2, sx: trimDepth, sy: openingH, sz: WINDOW_TRIM_W },
-          { px, py: (WINDOW_SILL_H + WINDOW_HEAD_Y) / 2, pz: z1 - WINDOW_TRIM_W / 2, sx: trimDepth, sy: openingH, sz: WINDOW_TRIM_W },
-          { px, py: (WINDOW_SILL_H + WINDOW_HEAD_Y) / 2, pz, sx: trimDepth, sy: openingH, sz: WINDOW_TRIM_W },
-          { px, py: WINDOW_SILL_H, pz, sx: trimDepth, sy: WINDOW_TRIM_W, sz: CELL },
-          { px, py: WINDOW_HEAD_Y, pz, sx: trimDepth, sy: WINDOW_TRIM_W, sz: CELL }
-        )
-      } else {
-        const x0 = cell * CELL
-        const x1 = (cell + 1) * CELL
-        featureFrameInst.push(
-          { px: x0 + WINDOW_TRIM_W / 2, py: (WINDOW_SILL_H + WINDOW_HEAD_Y) / 2, pz, sx: WINDOW_TRIM_W, sy: openingH, sz: trimDepth },
-          { px: x1 - WINDOW_TRIM_W / 2, py: (WINDOW_SILL_H + WINDOW_HEAD_Y) / 2, pz, sx: WINDOW_TRIM_W, sy: openingH, sz: trimDepth },
-          { px, py: (WINDOW_SILL_H + WINDOW_HEAD_Y) / 2, pz, sx: WINDOW_TRIM_W, sy: openingH, sz: trimDepth },
-          { px, py: WINDOW_SILL_H, pz, sx: CELL, sy: WINDOW_TRIM_W, sz: trimDepth },
-          { px, py: WINDOW_HEAD_Y, pz, sx: CELL, sy: WINDOW_TRIM_W, sz: trimDepth }
-        )
-      }
+      pushWindowTrim(featureFrameInst, axis, line, cell)
       return
     }
     if (feature === WALL_RAIL) {
@@ -378,38 +376,20 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
     group.add(walls)
   }
 
-  // --- Decorative door frames + open leaves (from explicit passage metadata) ---
-  // Purely visual: a casing (two jambs + a lintel) around every single-cell
-  // doorway, plus an open door leaf laid flat against the wall on a deterministic
-  // subset. Reuses the unit box (axis-aligned scales, like the walls), so it adds
-  // no geometry primitive and never blocks the opening — collision/LOS, which read
-  // the edge bytes, are untouched.
-  const DOOR_H = WALL_H - HEADER_H
-  const JAMB_OFF = CELL / 2 - FRAME_W / 2 // jamb centre offset from the gap centre
-  const leafFaceOff = THICK / 2 + DOOR_LEAF_THICK / 2 // panel sits just off the wall face
+  // --- Decorative door frames + dressed open leaves (from explicit passage metadata) ---
+  // Purely visual: a plinth-and-cap casing around every single-cell doorway,
+  // plus a panelled open leaf laid flat against the wall on a deterministic
+  // subset — all built by trimwork.js into unit-box descriptors, so it adds no
+  // geometry primitive and never blocks the opening (collision/LOS read the
+  // edge bytes). Leaves carry the doorway's `tone` seed for per-door tinting.
   const frameInst = featureFrameInst.slice() // {px,py,pz, sx,sy,sz}
-  const leafInst = []
+  const leafInst = [] // same, plus role (0 paint / 1 knob) + tone
   for (const d of collectDoorways(data, DOOR_LEAF_FRACTION)) {
-    if (d.axis === 'v') {
-      const x0 = d.line * CELL // wall plane (x)
-      const zc = (d.cell + 0.5) * CELL // gap centre along z
-      frameInst.push({ px: x0, py: DOOR_H + HEADER_H / 2, pz: zc, sx: FRAME_DEPTH, sy: HEADER_H, sz: CELL })
-      frameInst.push({ px: x0, py: DOOR_H / 2, pz: zc - JAMB_OFF, sx: FRAME_DEPTH, sy: DOOR_H, sz: FRAME_W })
-      frameInst.push({ px: x0, py: DOOR_H / 2, pz: zc + JAMB_OFF, sx: FRAME_DEPTH, sy: DOOR_H, sz: FRAME_W })
-      if (d.leaf) {
-        const zl = (d.cell + d.hinge + 0.5) * CELL // flat against the neighbour wall cell
-        leafInst.push({ px: x0 + d.face * leafFaceOff, py: DOOR_H / 2, pz: zl, sx: DOOR_LEAF_THICK, sy: DOOR_H, sz: CELL - 2 * FRAME_W })
-      }
-    } else {
-      const z0 = d.line * CELL // wall plane (z)
-      const xc = (d.cell + 0.5) * CELL // gap centre along x
-      frameInst.push({ px: xc, py: DOOR_H + HEADER_H / 2, pz: z0, sx: CELL, sy: HEADER_H, sz: FRAME_DEPTH })
-      frameInst.push({ px: xc - JAMB_OFF, py: DOOR_H / 2, pz: z0, sx: FRAME_W, sy: DOOR_H, sz: FRAME_DEPTH })
-      frameInst.push({ px: xc + JAMB_OFF, py: DOOR_H / 2, pz: z0, sx: FRAME_W, sy: DOOR_H, sz: FRAME_DEPTH })
-      if (d.leaf) {
-        const xl = (d.cell + d.hinge + 0.5) * CELL
-        leafInst.push({ px: xl, py: DOOR_H / 2, pz: z0 + d.face * leafFaceOff, sx: CELL - 2 * FRAME_W, sy: DOOR_H, sz: DOOR_LEAF_THICK })
-      }
+    pushDoorFrame(frameInst, d.axis, d.line, d.cell)
+    if (d.leaf) {
+      const at = leafInst.length
+      pushDoorLeaf(leafInst, d)
+      for (let i = at; i < leafInst.length; i++) leafInst[i].tone = d.tone
     }
   }
 
@@ -437,13 +417,19 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
       _s.set(it.sx, it.sy, it.sz)
       _m.compose(_p, _q, _s)
       leaves.setMatrixAt(i, _m)
+      leaves.setColorAt(i, leafTint(it, _c))
     }
     leaves.instanceMatrix.needsUpdate = true
+    leaves.instanceColor.needsUpdate = true
     leaves.computeBoundingSphere()
     group.add(leaves)
   }
 
   // --- Fluorescent ceiling panels (lit feed the light pool; dead are dark) ---
+  // Each lit panel's emissive is tinted by its fixture identity (lampCharacter):
+  // the same colour-temperature drift the cast light gets, and a browned-dim
+  // face for bad tubes — so what the tube LOOKS like never argues with the
+  // pool it throws.
   const lamps = [] // world Vector3 of LIT lamps, tagged with the layer index
   const lit = data.lamps.filter((l) => l.lit)
   const dead = data.lamps.filter((l) => !l.lit)
@@ -459,11 +445,16 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
       // Light-point hangs lower than the recessed panel mesh so the lamp sits
       // clearly IN the room: ceiling tiles around it now catch real N·L and the
       // light shafts/shadows originate in-room (not coplanar with the ceiling).
-      const v = new THREE.Vector3(ox + (l.lx + 0.5) * CELL, oy + WALL_H - 0.5, oz + (l.lz + 0.5) * CELL)
+      const wx = ox + (l.lx + 0.5) * CELL
+      const wz = oz + (l.lz + 0.5) * CELL
+      const v = new THREE.Vector3(wx, oy + WALL_H - 0.5, wz)
       v.cy = data.cy // floor tag for the cross-floor light filter
       lamps.push(v)
+      lampPanelTint(wx, wz, data.cy, _tint3)
+      panels.setColorAt(i, _c.setRGB(_tint3[0], _tint3[1], _tint3[2]))
     })
     panels.instanceMatrix.needsUpdate = true
+    panels.instanceColor.needsUpdate = true
     panels.computeBoundingSphere()
     group.add(panels)
   }

@@ -173,6 +173,20 @@ export const ENTITY_RIM = 0x8fa3c8
 // lamp-less zones dark. 0 = pure Lambert (old look); ~0.3 = gentle wrap.
 export const LAMP_WRAP = 0.3
 
+// Per-lamp character (lampCharacter.js). The old lighting flickered EVERY lamp
+// in the world in lockstep off one global uniform — a screen-wide pulse no real
+// building makes. Each fixture now gets a deterministic identity from its world
+// position: a slow individual breathing ripple (small amplitude — fluorescent
+// tubes look steady), a subtle colour-temperature drift (aged tubes run
+// greener/pinker), and a rare BAD tube that strobes erratically and burns dim.
+// The identity is shared by the emissive panel mesh (instanceColor) and the
+// cast-light uniforms, so a fixture's glow and its pool never disagree.
+export const LAMP_FLICKER_AMP = 0.07 // ± breathing amplitude on healthy tubes
+export const LAMP_BAD_CHANCE = 0.07 // fraction of lit tubes that strobe
+export const LAMP_BAD_LO = 0.2 // strobe floor (bad tube nearly dies at the bottom)
+export const LAMP_BAD_RATE = 9 // stepped-buzz rate (Hz-ish) for bad tubes
+export const LAMP_TINT_VAR = 0.045 // per-channel colour-temperature drift (subtle)
+
 // Flashlight (analytic cone in the lighting pass)
 export const FLASH_RANGE = 26
 export const FLASH_INTENSITY = 2.2
@@ -341,13 +355,25 @@ export const HEADER_H = 0.5 // doorway lintel header height
 // across chunk reloads.
 export const FRAME_W = 0.14 // jamb casing width along the wall (world units)
 export const FRAME_DEPTH = 0.22 // how proud the casing stands from the wall face (> THICK)
+// Door casing dressing (trimwork.js): plinth blocks at the jamb feet and a head
+// cap ledge above the opening give the frame a designed silhouette instead of
+// three bare boards — bold flat shapes, which is what reads as "anime
+// background art" under the cel ramp and ink outline.
+export const DOOR_PLINTH_H = 0.16 // plinth block height at each jamb foot
+export const DOOR_PLINTH_W = 0.2 // plinth width along the wall (> FRAME_W)
+export const DOOR_CAP_H = 0.09 // head-cap ledge height, at the top of the opening
 // Observation windows exist only on multi-level room galleries. They are
 // open-pane apertures in the opaque deferred renderer: a collision-solid sill,
 // lintel and trim communicate the barrier while the eye-height opening reveals
 // the atrium. Bridge guards use a low parapet plus a contrasting cap.
 export const WINDOW_SILL_H = 0.9
 export const WINDOW_HEAD_Y = 2.55
-export const WINDOW_TRIM_W = 0.12
+export const WINDOW_TRIM_W = 0.12 // side/head casing width
+// Glazing bars sit INSIDE the opening (slimmer and shallower than the casings)
+// so they read as window joinery behind the wall face, not as more trim.
+export const WINDOW_MULLION_W = 0.06
+export const WINDOW_STOOL_H = 0.07 // projecting sill ledge
+export const WINDOW_STOOL_DEPTH = 0.3 // deeper than the casing: a ledge you could touch
 export const BRIDGE_GUARD_H = 1.05
 export const BRIDGE_GUARD_CAP_H = 0.1
 export const BRIDGE_BEAM_H = 0.45
@@ -355,6 +381,25 @@ export const BRIDGE_BEAM_W = 0.24
 export const DOOR_LEAF_THICK = 0.06 // open door panel thickness
 export const DOOR_LEAF_FRACTION = 0.5 // fraction of doorways that show an open leaf
 export const DOOR_SALT = 0x0d00 | 0 // fixed hash salt for the per-door leaf/hinge choice
+// Raised panel moldings on the open leaf (two per face so both faces of the
+// flat-against-wall leaf read as a real door) + a small knob plate. All proud
+// of the leaf face; the whole assembly stays flat against the neighbour wall
+// cell, so it never intrudes into the passage (collision reads the edge bytes).
+export const DOOR_PANEL_PROUD = 0.015 // how far a raised panel stands off the leaf face
+export const DOOR_PANEL_MARGIN = 0.26 // side margin from leaf edge to panel
+export const DOOR_PANEL_TOP_Y = 2.0 // upper panel centre height
+export const DOOR_PANEL_TOP_H = 1.0
+export const DOOR_PANEL_BOT_Y = 0.72 // lower panel centre height
+export const DOOR_PANEL_BOT_H = 0.92
+export const DOOR_KNOB_Y = 1.02 // knob height off the floor
+export const DOOR_KNOB_W = 0.07 // knob plate size along the leaf
+export const DOOR_KNOB_H = 0.16 // knob plate height
+// Per-door leaf tint (deterministic from the same doorway hash): most doors
+// sit within a narrow painted-cream brightness band; a rare one comes out
+// dark-stained — the liminal "something is off with this one" beat.
+export const DOOR_TINT_VAR = 0.12 // ± brightness variation on ordinary leaves
+export const DOOR_DARK_CHANCE = 0.05 // fraction of leaves that are stained dark
+export const DOOR_DARK_TINT = 0.32 // brightness multiplier for a dark-stained leaf
 
 // Helpers ---------------------------------------------------------------
 export const idx = (lx, lz) => lz * CHUNK + lx

@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { CELL, WALL_H, NEAR, FAR, FOV, LIGHT_MAX, LIGHT_INTENSITY } from '../world/constants.js'
+import { lampTint, lampPanelTint } from '../world/lampCharacter.js'
 
 const ROOM = 7 // cells across (odd -> centered)
 const HALF = (ROOM / 2) | 0
@@ -98,12 +99,19 @@ export class LightRoom {
     }
     const fix = new THREE.InstancedMesh(this.engine.geom.panel, this.engine.materials.panel, n)
     const m = new THREE.Matrix4()
+    const tint = [0, 0, 0]
+    const c = new THREE.Color(1, 1, 1)
     for (let i = 0; i < n; i++) {
       const p = this.lampPos[i]
       m.makeTranslation(p.x, WALL_H - 0.02, p.z)
       fix.setMatrixAt(i, m)
+      // The shared panel material expects per-instance colour (production sets
+      // it in mesh.js); the room previews the same fixture identity.
+      lampPanelTint(p.x, p.z, 0, tint)
+      fix.setColorAt(i, c.setRGB(tint[0], tint[1], tint[2]))
     }
     fix.instanceMatrix.needsUpdate = true
+    fix.instanceColor.needsUpdate = true
     this.scene.add(fix)
     this._fixtures = fix
   }
@@ -112,7 +120,13 @@ export class LightRoom {
   applyLamps(deferred) {
     const L = deferred.lamps
     const n = this.lampPos.length
-    for (let i = 0; i < n; i++) L.uLampPos.value[i].copy(this.lampPos[i])
+    const tint = [0, 0, 0]
+    for (let i = 0; i < n; i++) {
+      L.uLampPos.value[i].copy(this.lampPos[i])
+      lampTint(this.lampPos[i].x, this.lampPos[i].z, 0, tint)
+      // w = 1: isolated room runs steady tubes (no flicker dip on cast light).
+      L.uLampChar.value[i].set(tint[0], tint[1], tint[2], 1)
+    }
     L.uLampCount.value = n
     deferred.lightUniforms.uLampIntensity.value = this.config.intensity
     deferred.lightUniforms.uLampFlicker.value = 1 // isolated room: no flicker dip on the cast light

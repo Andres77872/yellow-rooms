@@ -21,9 +21,11 @@ const VERT_STATIC = /* glsl */ `
   uniform mat3 normalMatrix;
   out vec2 vUv;
   out vec3 vViewNormal;
+  out vec3 vTint;
   void main(){
     vUv = uv;
     vViewNormal = normalize(normalMatrix * normal);
+    vTint = vec3(1.0);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
 `
@@ -34,15 +36,27 @@ const VERT_INSTANCED = /* glsl */ `
   in vec3 normal;
   in vec2 uv;
   in mat4 instanceMatrix;
+  #ifdef USE_INSTANCING_COLOR
+    in vec3 instanceColor;
+  #endif
   uniform mat4 modelViewMatrix;
   uniform mat4 projectionMatrix;
   uniform mat3 normalMatrix;
   out vec2 vUv;
   out vec3 vViewNormal;
+  out vec3 vTint;
   void main(){
     vUv = uv;
     vec3 iNormal = mat3(instanceMatrix) * normal;
     vViewNormal = normalize(normalMatrix * iNormal);
+    // Per-instance albedo multiplier (door-leaf tones, panel tube identity).
+    // Only enabled on materials whose meshes ALWAYS setColorAt — an unbound
+    // attribute reads as black, so it stays opt-in via the define.
+    #ifdef USE_INSTANCING_COLOR
+      vTint = instanceColor;
+    #else
+      vTint = vec3(1.0);
+    #endif
     gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
   }
 `
@@ -51,6 +65,7 @@ const FRAG = /* glsl */ `
   precision highp float;
   in vec2 vUv;
   in vec3 vViewNormal;
+  in vec3 vTint;
   layout(location = 0) out vec4 gColor;
   layout(location = 1) out vec4 gNormal;
   uniform vec3 uColor;       // tint (map path) or flat/emissive color (linear)
@@ -65,9 +80,9 @@ const FRAG = /* glsl */ `
       // Textures are tagged THREE.SRGBColorSpace (textures.js), so the GPU sampler
       // already returns linear values — decoding again here would double-decode and
       // darken every textured surface (~5.7x at mid grey).
-      albedo = texture(map, vUv).rgb * uColor;
+      albedo = texture(map, vUv).rgb * uColor * vTint;
     #else
-      albedo = uColor * uIntensity;
+      albedo = uColor * uIntensity * vTint;
     #endif
     gColor = vec4(albedo, uMatID);
     gNormal = vec4(normalize(vViewNormal) * 0.5 + 0.5, 1.0);
@@ -94,9 +109,10 @@ function surfaceMaterial(map, instanced) {
   })
 }
 
-function flatMaterial(colorLinear, matID, instanced) {
+function flatMaterial(colorLinear, matID, instanced, tinted = false) {
   return new THREE.RawShaderMaterial({
     glslVersion: THREE.GLSL3,
+    defines: tinted ? { USE_INSTANCING_COLOR: '' } : {},
     uniforms: {
       map: { value: null },
       uColor: { value: colorLinear },
@@ -108,9 +124,10 @@ function flatMaterial(colorLinear, matID, instanced) {
   })
 }
 
-function emissiveMaterial(colorLinear, instanced) {
+function emissiveMaterial(colorLinear, instanced, tinted = false) {
   return new THREE.RawShaderMaterial({
     glslVersion: THREE.GLSL3,
+    defines: tinted ? { USE_INSTANCING_COLOR: '' } : {},
     uniforms: {
       map: { value: null },
       uColor: { value: colorLinear },
@@ -129,14 +146,16 @@ export function createGBufferMaterials(renderer) {
   const ceiling = surfaceMaterial(ceilingTexture(aniso), false) // ceiling mesh
   const wallpaper = surfaceMaterial(wallpaperTexture(aniso), true) // instanced pillars
 
-  const panel = emissiveMaterial(lin(PANEL_COLOR), true) // instanced lit lamps
+  const panel = emissiveMaterial(lin(PANEL_COLOR), true, true) // instanced lit lamps, per-tube identity tint
   const panelDead = flatMaterial(lin(0x5c563a), 0, true) // instanced dead tubes
   const entity = flatMaterial(lin(0x16161c), 2, false) // Stalker capsule silhouette (near-black)
   const pursuer = flatMaterial(lin(0x3a0d0d), 2, false) // Pursuer silhouette (dark blood-red, distinct)
   const exit = emissiveMaterial(lin(0xeafff2), false) // glowing anomaly
 
-  const doorFrame = flatMaterial(lin(0xd8d4c4), 0, true) // instanced door casings (off-white trim)
-  const doorLeaf = flatMaterial(lin(0x9a9387), 0, true) // instanced open door leaves (grey)
+  const doorFrame = flatMaterial(lin(0xd8d4c4), 0, true) // instanced door/window casings (off-white trim)
+  // Painted-cream leaf base; per-door instanceColor tones it (brightness band,
+  // rare dark stain) and darkens the knob to metal — see mesh.js leafTint.
+  const doorLeaf = flatMaterial(lin(0xbfb49a), 0, true, true)
 
   return { carpet, ceiling, wallpaper, panel, panelDead, entity, pursuer, exit, doorFrame, doorLeaf }
 }

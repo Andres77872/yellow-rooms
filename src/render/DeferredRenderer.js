@@ -112,6 +112,7 @@ export class DeferredRenderer {
     // Shared per-frame state: the projection inverse (computed once, copied into
     // every pass instead of re-inverted) and lamp positions in view space.
     this._projInv = new THREE.Matrix4()
+    this._clearScratch = new THREE.Color()
 
     const { dw, dh } = this._dims()
     // Cel ramp + lamp field are shared by the shadow and lighting passes, so
@@ -199,6 +200,7 @@ export class DeferredRenderer {
       uShadowThickness: { value: SHADOW_THICKNESS },
       uLampViewPos: this.lamps.uLampViewPos,
       uLampCount: this.lamps.uLampCount,
+      uLampChar: this.lamps.uLampChar,
       uLampRange: { value: LIGHT_RANGE },
       uLampWrap: { value: LAMP_WRAP },
     }
@@ -230,6 +232,7 @@ export class DeferredRenderer {
       uUpView: { value: new THREE.Vector3(0, 1, 0) },
       uLampViewPos: this.lamps.uLampViewPos,
       uLampCount: this.lamps.uLampCount,
+      uLampChar: this.lamps.uLampChar,
       uLampColor: { value: linVec(PANEL_COLOR) },
       uLampIntensity: { value: LIGHT_INTENSITY },
       uLampFlicker: { value: 1 }, // Engine._updateFlicker dips this with the fluorescent hum
@@ -261,6 +264,7 @@ export class DeferredRenderer {
       uProjInverse: { value: new THREE.Matrix4() },
       uLampViewPos: this.lamps.uLampViewPos,
       uLampCount: this.lamps.uLampCount,
+      uLampChar: this.lamps.uLampChar,
       uLampColor: { value: linVec(PANEL_COLOR) },
       // Share the lit pass's lamp-intensity + flicker value-objects so shafts
       // track lamp brightness (incl. LightTool edits + the Engine flicker dip).
@@ -557,14 +561,33 @@ export class DeferredRenderer {
     this.fxaaQuad.render(this.renderer)
   }
 
+  // Fill a target with a flat color without running its shader — used when a
+  // pass is skipped because nothing could contribute (see render()).
+  _clearRT(rt, hex) {
+    const r = this.renderer
+    const prevColor = r.getClearColor(this._clearScratch)
+    const prevAlpha = r.getClearAlpha()
+    r.setRenderTarget(rt)
+    r.setClearColor(hex, 1)
+    r.clear(true, false, false)
+    r.setClearColor(prevColor, prevAlpha)
+  }
+
   render(time) {
     // 1. G-buffer  2. SSAO  3. shadow mask  4. lighting  5. volumetrics  6. bloom  7. composite
     this._updateFrame() // proj-inverse (once) + CPU lamp world->view
     this._renderGBuffer()
     this._renderSSAO()
-    this._renderShadow()
+    // Skip raymarch passes whose result is provably constant: with no lamps
+    // loaded the shadow mask is 1 everywhere and (flashlight off) the shafts
+    // are black — dark zones get both passes for the price of a clear.
+    const lampsLoaded = this.lamps.uLampCount.value > 0
+    const flashOn = this.lightUniforms.uFlashOn.value > 0.5
+    if (lampsLoaded) this._renderShadow()
+    else this._clearRT(this.shadowBlurRT, 0xffffff)
     this._renderLighting()
-    this._renderVolumetrics()
+    if (lampsLoaded || flashOn) this._renderVolumetrics()
+    else this._clearRT(this.volRT, 0x000000)
     this._renderBloom()
     this._composite()
 

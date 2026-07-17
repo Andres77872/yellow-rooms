@@ -1,0 +1,163 @@
+import { describe, it, expect } from 'vitest'
+import { pushDoorFrame, pushDoorLeaf, pushWindowTrim } from '../trimwork.js'
+import {
+  CELL,
+  WALL_H,
+  THICK,
+  HEADER_H,
+  FRAME_W,
+  DOOR_LEAF_THICK,
+  DOOR_PANEL_PROUD,
+  DOOR_KNOB_W,
+  WINDOW_SILL_H,
+  WINDOW_HEAD_Y,
+  WINDOW_TRIM_W,
+  WINDOW_MULLION_W,
+  WINDOW_STOOL_H,
+} from '../constants.js'
+
+const DOOR_H = WALL_H - HEADER_H
+const LEAF_W = CELL - 2 * FRAME_W
+
+// Extent helpers over {px,py,pz,sx,sy,sz} descriptors.
+const xSpan = (b) => [b.px - b.sx / 2, b.px + b.sx / 2]
+const ySpan = (b) => [b.py - b.sy / 2, b.py + b.sy / 2]
+const zSpan = (b) => [b.pz - b.sz / 2, b.pz + b.sz / 2]
+const overlap = (a, b) => Math.min(a[1], b[1]) - Math.max(a[0], b[0])
+
+describe('pushDoorFrame', () => {
+  it('dresses a vertical doorway with a symmetric 6-box casing', () => {
+    const out = []
+    pushDoorFrame(out, 'v', 4, 7)
+    expect(out).toHaveLength(6)
+    const plane = 4 * CELL
+    const centre = (7 + 0.5) * CELL
+    for (const b of out) {
+      expect(b.px).toBeCloseTo(plane, 10) // every box centred on the wall plane
+      expect(b.sx).toBeGreaterThanOrEqual(0.22) // stands proud of the THICK wall
+    }
+    // Symmetry about the gap centre: offset boxes come in mirrored pairs.
+    const offCentre = out.filter((b) => Math.abs(b.pz - centre) > 1e-9)
+    expect(offCentre).toHaveLength(4) // 2 jambs + 2 plinths
+    for (const b of offCentre) {
+      const mirror = out.find(
+        (m) =>
+          m !== b &&
+          Math.abs(m.pz - (2 * centre - b.pz)) < 1e-9 &&
+          Math.abs(m.py - b.py) < 1e-9 &&
+          Math.abs(m.sy - b.sy) < 1e-9
+      )
+      expect(mirror, `mirror of box at z=${b.pz}`).toBeTruthy()
+    }
+    // The lintel closes exactly to the ceiling line.
+    const lintel = out.find((b) => Math.abs(b.py - (DOOR_H + HEADER_H / 2)) < 1e-9)
+    expect(lintel).toBeTruthy()
+    expect(ySpan(lintel)[1]).toBeCloseTo(WALL_H, 10)
+  })
+
+  it('keeps the walkable opening clear (bar real-trim ankle intrusion)', () => {
+    for (const axis of ['v', 'h']) {
+      const out = []
+      pushDoorFrame(out, axis, 3, 5)
+      const plane = 3 * CELL
+      const centre = (5 + 0.5) * CELL
+      const clear = [centre - LEAF_W / 2, centre + LEAF_W / 2]
+      for (const b of out) {
+        const along = axis === 'v' ? zSpan(b) : xSpan(b)
+        const across = axis === 'v' ? xSpan(b) : zSpan(b)
+        const y = ySpan(b)
+        if (y[0] >= DOOR_H) continue // header zone is allowed to fill
+        // Trim may stand proud ACROSS the plane (it frames the mouth) but may
+        // not narrow the clear span along it beyond a plinth's 3cm toe.
+        const into = overlap(along, clear)
+        expect(into).toBeLessThanOrEqual(0.05)
+        expect(overlap(across, [plane - THICK / 2, plane + THICK / 2])).toBeGreaterThan(0)
+      }
+    }
+  })
+})
+
+describe('pushDoorLeaf', () => {
+  const base = { axis: 'v', line: 4, cell: 7, leaf: true, hinge: 1, face: 1, tone: 0.5 }
+
+  it('builds a 4-part panel door (slab, 2 moldings, knob), roles tagged', () => {
+    const out = []
+    pushDoorLeaf(out, base)
+    expect(out).toHaveLength(4)
+    expect(out.filter((b) => b.role === 0)).toHaveLength(3) // paint
+    expect(out.filter((b) => b.role === 1)).toHaveLength(1) // knob
+  })
+
+  it('stays flat against the neighbour cell and off the passage mouth', () => {
+    for (const hinge of [-1, 1]) {
+      for (const face of [-1, 1]) {
+        const out = []
+        pushDoorLeaf(out, { ...base, hinge, face })
+        const plane = 4 * CELL
+        const n0 = (7 + hinge) * CELL
+        const n1 = (7 + hinge + 1) * CELL
+        for (const b of out) {
+          // Whole part inside the neighbour cell span (never over the opening).
+          const [z0, z1] = zSpan(b)
+          expect(z0).toBeGreaterThanOrEqual(n0 - 1e-9)
+          expect(z1).toBeLessThanOrEqual(n1 + 1e-9)
+          // Whole part on the room side of the wall face (never in the wall
+          // slab or the doorway throat).
+          const [x0, x1] = xSpan(b)
+          if (face === 1) expect(x0).toBeGreaterThanOrEqual(plane + THICK / 2 - 1e-9)
+          else expect(x1).toBeLessThanOrEqual(plane - THICK / 2 + 1e-9)
+          // Nothing prouder than leaf + panel off the wall face (the knob
+          // excepted — a knob legitimately stands past the moldings).
+          if (b.role !== 1) {
+            const reach = Math.max(Math.abs(x0 - plane), Math.abs(x1 - plane))
+            expect(reach).toBeLessThanOrEqual(
+              THICK / 2 + DOOR_LEAF_THICK + DOOR_PANEL_PROUD + 1e-9
+            )
+          }
+        }
+      }
+    }
+  })
+
+  it('puts the knob at the leading edge, away from the hinge side', () => {
+    const out = []
+    pushDoorLeaf(out, { ...base, hinge: 1 })
+    const knob = out.find((b) => b.role === 1)
+    const zl = (7 + 1 + 0.5) * CELL
+    expect(knob.pz).toBeGreaterThan(zl) // hinge 1 -> leading edge on the +z side
+    expect(Math.abs(knob.pz - (zl + LEAF_W / 2 - DOOR_KNOB_W))).toBeLessThan(1e-9)
+  })
+})
+
+describe('pushWindowTrim', () => {
+  it('frames the aperture with casing, a flush stool and a glazing cross', () => {
+    const out = []
+    pushWindowTrim(out, 'h', 2, 9)
+    expect(out).toHaveLength(6)
+    const plane = 2 * CELL
+    const centre = (9 + 0.5) * CELL
+    for (const b of out) expect(b.pz).toBeCloseTo(plane, 10)
+
+    // Stool top sits flush with the sill line.
+    const stool = out.find((b) => Math.abs(ySpan(b)[1] - WINDOW_SILL_H) < 1e-9)
+    expect(stool).toBeTruthy()
+    expect(stool.sy).toBeCloseTo(WINDOW_STOOL_H, 10)
+
+    // Glazing cross: two slim bars through the opening centre, clearly slimmer
+    // than the casings so they read as joinery, not trim.
+    const bars = out.filter((b) => b.sx === WINDOW_MULLION_W || b.sy === WINDOW_MULLION_W)
+    expect(bars).toHaveLength(2)
+    for (const bar of bars) {
+      expect(bar.px).toBeCloseTo(centre, 10)
+      expect(bar.py).toBeCloseTo((WINDOW_SILL_H + WINDOW_HEAD_Y) / 2, 10)
+    }
+    expect(WINDOW_MULLION_W).toBeLessThan(WINDOW_TRIM_W)
+
+    // Nothing escapes the cell span.
+    for (const b of out) {
+      const [x0, x1] = xSpan(b)
+      expect(x0).toBeGreaterThanOrEqual(9 * CELL - 1e-9)
+      expect(x1).toBeLessThanOrEqual(10 * CELL + 1e-9)
+    }
+  })
+})
