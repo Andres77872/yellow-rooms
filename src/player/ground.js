@@ -1,4 +1,5 @@
 import { CELL, LAYER_H, layerY, worldToCell } from '../world/constants.js'
+import { DEFAULT_MULTILEVEL_CONFIG } from '../world/multilevel.js'
 
 // Walkable ground height for a feet point on layer `cy` (v8). Pure — shared by
 // the player controller and the AI path follower, and unit-tested headless.
@@ -18,10 +19,16 @@ export function groundHeightAt(cm, wx, wz, cy) {
   const gx = worldToCell(wx)
   const gz = worldToCell(wz)
   const s = cm.stairAt(gx, gz, cy)
-  // A guarded atrium void normally cannot be entered. If debug teleportation
-  // or malformed external state puts a body there, expose the real lower hall
-  // rather than inventing an invisible flat floor at the upper layer.
-  if (!s) return cm.floorHoleAt?.(gx, gz, cy) ? layerY(cy - 1) : layerY(cy)
+  // A guarded shaft normally cannot be entered. If debug teleportation or
+  // malformed external state puts a body there, fall through every aligned
+  // aperture to the first real deck/bottom hall instead of inventing a floor
+  // one storey below. The generator hard-caps structures at ten levels.
+  if (!s) {
+    let supportCy = cy
+    let remaining = DEFAULT_MULTILEVEL_CONFIG.maxLevels
+    while (remaining-- > 0 && cm.floorHoleAt?.(gx, gz, supportCy)) supportCy--
+    return layerY(supportCy)
+  }
   if (s.part === 'landing') return layerY(s.baseCy)
   if (s.part === 'exit') return layerY(s.baseCy + 1)
   const along = s.axis === 'x' ? wx : wz

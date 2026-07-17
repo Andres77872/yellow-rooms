@@ -1,5 +1,6 @@
 import { CHUNK, LOAD_RADIUS, fmod } from './constants.js'
 import { hash3i, hash3f } from './core/hash.js'
+import { multilevelStructureAt } from './multilevel.js'
 
 // Slab contracts (v9). The slab between layer cy and cy+1 is ONE shared object,
 // keyed by the LOWER layer — the vertical analogue of the border contracts in
@@ -172,6 +173,45 @@ function excluded(cx, cz, cy, contract) {
   return false
 }
 
+// Tall structures own their participant chunks before stairs are elected. Be
+// deliberately conservative: a slab is reserved when either floor it joins is
+// part of a structure, even when the stair strip would miss the exact void
+// footprint. This also keeps stair lobbies off the bottom hall and top gallery.
+function structureReservesSlab(seed, cx, cz, cy, config) {
+  return (
+    multilevelStructureAt(seed, cx, cz, cy, config).hasRoom ||
+    multilevelStructureAt(seed, cx, cz, cy + 1, config).hasRoom
+  )
+}
+
+// Elect the first available chunk in a root-seeded cyclic permutation of one
+// stair district. A structure can therefore displace the old fixed fallback
+// slot without removing the district's deterministic stair guarantee whenever
+// at least one chunk in that district remains unreserved.
+function isFallbackChunk(seed, cx, cz, cy, config, stairs) {
+  const K = stairs.districtChunks
+  const districtX = Math.floor(cx / K)
+  const districtZ = Math.floor(cz / K)
+  const area = K * K
+  const start = hash3i(
+    (seed ^ stairs.fallbackSalt) | 0,
+    districtX,
+    cy,
+    districtZ
+  ) % area
+
+  for (let offset = 0; offset < area; offset++) {
+    const index = (start + offset) % area
+    const candidateCx = districtX * K + (index % K)
+    const candidateCz = districtZ * K + Math.floor(index / K)
+    if (structureReservesSlab(seed, candidateCx, candidateCz, cy, config)) {
+      continue
+    }
+    return candidateCx === cx && candidateCz === cz
+  }
+  return false
+}
+
 // The slab contract for the slab ABOVE layer cy in chunk column (cx, cz).
 // Layer cy realizes the lower half (landing + ramp + ceiling holes); layer
 // cy+1 realizes the upper half (floor holes + exit + guard walls).
@@ -179,16 +219,18 @@ export function slabContract(seed, cx, cz, cy, config) {
   const s = stairConfig(config)
   if (!s.enabled) return { cy, hasStair: false }
 
+  // Structure ownership wins for both organic stairs and district fallbacks.
+  // Suppress the complete contract so neither participating floor can stamp a
+  // conflicting half later, regardless of generation or query order.
+  if (structureReservesSlab(seed, cx, cz, cy, config)) {
+    return { cy, hasStair: false }
+  }
+
   // Existence: a hash gate for organic density, OR'd with a deterministic
-  // fallback that elects exactly one chunk per K x K stair-district per slab —
-  // so every floor ALWAYS has an up- and a down-stair within Chebyshev 2K-1
-  // chunks of any position. No stranded floors, by construction.
+  // fallback that walks a root-seeded cyclic permutation of each K x K stair
+  // district and elects its first chunk not reserved by a tall structure.
   const gate = hash3f((seed ^ s.salt) | 0, cx, cy, cz) < s.chance
-  const K = s.districtChunks
-  const sx = Math.floor(cx / K)
-  const sz = Math.floor(cz / K)
-  const j = hash3i((seed ^ s.fallbackSalt) | 0, sx, cy, sz) % (K * K)
-  const fallback = fmod(cx, K) === j % K && fmod(cz, K) === ((j / K) | 0)
+  const fallback = !gate && isFallbackChunk(seed, cx, cz, cy, config, s)
   if (!gate && !fallback) return { cy, hasStair: false }
 
   const list = candidates(cy)

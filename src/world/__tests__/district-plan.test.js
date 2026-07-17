@@ -25,6 +25,7 @@ import {
   officeDistrictCoords,
 } from '../zones/officePlan.js'
 import { warehouseWallH, warehouseWallV } from '../warehouseStructure.js'
+import { multilevelConfig, multilevelContract } from '../multilevel.js'
 
 function forcedZone(zone) {
   const cfg = structuredClone(CFG)
@@ -119,7 +120,7 @@ describe('multi-chunk office district plan', () => {
         if (isCirculation(plan.cellKind[i])) cells.push(i)
       }
       expect(plan.metrics.corridorCoverage).toBeGreaterThanOrEqual(0.1)
-      // A reserved two-floor atrium may contribute its wide lower hall or
+      // A reserved tall structure may contribute its wide lower hall or
       // gallery ring to circulation before room allocation.
       expect(plan.metrics.corridorCoverage).toBeLessThanOrEqual(0.38)
       expect(plan.metrics.wallFraction).toBeGreaterThanOrEqual(0.15)
@@ -370,31 +371,52 @@ describe('multi-chunk office district plan', () => {
     }
   })
 
-  it('reserves both atrium floors and routes the opposite bridge banks before rooms', () => {
+  it('reserves every floor/chunk of a tall atrium before rooms and routes its approaches', () => {
     const rootSeed = 1337
-    const host = { cx: -2, cz: -9 }
-    const district = officeDistrictCoords(host.cx, host.cz, cfg)
-    for (const cy of [0, 1]) {
-      const seedForLayer = layerSeed(rootSeed, cy)
-      const plan = buildOfficeDistrictPlan(seedForLayer, district.dx, district.dz, cfg, {
-        rootSeed,
-        layerSeed: seedForLayer,
-        cy,
-      })
-      const lobby = plan.multilevelLobbies.find(
-        (candidate) => candidate.cx === host.cx && candidate.cz === host.cz
-      )
-      expect(lobby).toBeTruthy()
-      expect(lobby.kind).toBe(cy === 0 ? 'up' : 'down')
-      expect(plan.metrics.unroutedMultilevel).toBe(0)
-      expect(plan.metrics.multilevelLobbies).toBe(plan.multilevelLobbies.length)
-      for (const mouth of lobby.mouths) {
-        expect(isCirculation(plan.cellKind[mouth.z * plan.size + mouth.x])).toBe(true)
+    const structureCfg = structuredClone(cfg)
+    structureCfg.multilevel.bridgeChance = 1
+    structureCfg.multilevel.minLevels = 4
+    structureCfg.multilevel.maxLevels = 4
+    const K = multilevelConfig(structureCfg).districtChunks
+    let structure = null
+    for (let dz = 0; dz < K && !structure; dz++) {
+      for (let dx = 0; dx < K; dx++) {
+        const candidate = multilevelContract(rootSeed, dx, dz, 0, structureCfg)
+        if (candidate.hasRoom) structure = candidate
       }
-      for (const cell of lobby.cells) expect(plan.cellKind[cell]).toBe(CELL_LOBBY)
+    }
+    expect(structure).not.toBeNull()
 
-      const stamped = buildChunk(rootSeed, host.cx, cy, host.cz, cfg)
-      expect(stamped[cy === 0 ? 'multilevelUp' : 'multilevelDown']).toEqual(lobby.room)
+    for (let cy = structure.baseCy; cy <= structure.topCy; cy++) {
+      for (const participant of structure.participants) {
+        const district = officeDistrictCoords(participant.cx, participant.cz, structureCfg)
+        const seedForLayer = layerSeed(rootSeed, cy)
+        const plan = buildOfficeDistrictPlan(
+          seedForLayer,
+          district.dx,
+          district.dz,
+          structureCfg,
+          { rootSeed, layerSeed: seedForLayer, cy }
+        )
+        const lobby = plan.multilevelLobbies.find(
+          (candidate) => candidate.cx === participant.cx && candidate.cz === participant.cz
+        )
+        expect(lobby).toBeTruthy()
+        const bridged = structure.bridgeLevels.includes(cy)
+        expect(lobby.kind).toBe(cy === structure.baseCy ? 'bottom' : bridged ? 'bridge' : 'gallery')
+        expect(plan.metrics.unroutedMultilevel).toBe(0)
+        expect(plan.metrics.multilevelLobbies).toBe(plan.multilevelLobbies.length)
+        for (const mouth of lobby.mouths) {
+          expect(isCirculation(plan.cellKind[mouth.z * plan.size + mouth.x])).toBe(true)
+        }
+        for (const cell of lobby.cells) expect(plan.cellKind[cell]).toBe(CELL_LOBBY)
+
+        const stamped = buildChunk(rootSeed, participant.cx, cy, participant.cz, structureCfg)
+        const surface = cy === structure.baseCy
+          ? stamped.multilevelUp
+          : stamped.multilevelDown
+        expect(surface).toEqual(lobby.room)
+      }
     }
   })
 

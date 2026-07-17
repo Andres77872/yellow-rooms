@@ -1,8 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { buildChunk } from '../pipeline.js'
 import { DEFAULT_WORLD_CONFIG as CFG } from '../config.js'
-import { chunkKey } from '../constants.js'
-import { auditPatch } from '../audit.js'
+import { CHUNK, chunkKey } from '../constants.js'
+import {
+  auditPatch,
+  classifySeam,
+  hSeamLine,
+  vSeamLine,
+} from '../audit.js'
+import { PASSAGE_WIDE, WALL_PLAIN } from '../mapTypes.js'
 
 // Proves canonical transition contracts remain safe while internal office
 // chunk lines behave like ordinary cuts through a district plan:
@@ -18,12 +24,125 @@ const Z0 = -7
 const N = 14
 const SEEDS = [1, 42, 0xbeef, 314159, 0xc0ffee, 99999, 7, 2026]
 
+const inBounds = (bounds, gx, gz) =>
+  gx >= bounds.x0 && gx <= bounds.x1 && gz >= bounds.z0 && gz <= bounds.z1
+
+const participantsInclude = (structure, chunk) => structure.participants.some(
+  ({ cx, cz }) => cx === chunk.cx && cz === chunk.cz
+)
+
+function sharedStructure(a, b, axis) {
+  const structure = a.multilevelStructure
+  if (
+    !structure ||
+    structure.id !== b.multilevelStructure?.id ||
+    structure.bridgeAxis !== axis ||
+    a.cy !== b.cy ||
+    a.cy < structure.baseCy ||
+    a.cy > structure.topCy ||
+    !participantsInclude(structure, a) ||
+    !participantsInclude(structure, b)
+  ) return null
+  return structure
+}
+
+function ownsVSeamCell(west, east, z) {
+  const structure = sharedStructure(west, east, 'x')
+  if (!structure) return false
+  const carve = {
+    x0: structure.globalBounds.x0 - 1,
+    z0: structure.globalBounds.z0 - 1,
+    x1: structure.globalBounds.x1 + 1,
+    z1: structure.globalBounds.z1 + 1,
+  }
+  const gx = east.cx * CHUNK
+  const gz = east.cz * CHUNK + z
+  return inBounds(carve, gx - 1, gz) && inBounds(carve, gx, gz)
+}
+
+function ownsHSeamCell(north, south, x) {
+  const structure = sharedStructure(north, south, 'z')
+  if (!structure) return false
+  const carve = {
+    x0: structure.globalBounds.x0 - 1,
+    z0: structure.globalBounds.z0 - 1,
+    x1: structure.globalBounds.x1 + 1,
+    z1: structure.globalBounds.z1 + 1,
+  }
+  const gx = south.cx * CHUNK + x
+  const gz = south.cz * CHUNK
+  return inBounds(carve, gx, gz - 1) && inBounds(carve, gx, gz)
+}
+
+// Office macro-border corners normally remain solid. A tall structure may
+// deliberately cross that macro border, but only the exact footprint+gallery
+// seam cells may override it, and those cells must carry a wide threshold.
+function officeCornerEvidence(dataAt) {
+  const result = { structureOwnedSeams: 0, invalid: [] }
+  const check = (a, b, line, owns, passageAt, featureAt, axis, cx, cz) => {
+    if (classifySeam(a.zone, b.zone, CFG, a, b) !== 'office') return
+    const openCorners = [0, CHUNK - 1].filter((position) => line[position] === 0)
+    if (openCorners.length === 0) return
+    const invalid = openCorners.filter((position) =>
+      !owns(a, b, position) ||
+      passageAt(b, position) !== PASSAGE_WIDE ||
+      featureAt(b, position) !== WALL_PLAIN
+    )
+    if (invalid.length > 0) {
+      result.invalid.push({ axis, cx, cz, positions: invalid })
+    } else {
+      result.structureOwnedSeams++
+    }
+  }
+
+  for (let cz = Z0; cz < Z0 + N; cz++) {
+    for (let cx = X0; cx < X0 + N - 1; cx++) {
+      const west = dataAt(cx, cz)
+      const east = dataAt(cx + 1, cz)
+      if (!west || !east) continue
+      check(
+        west,
+        east,
+        vSeamLine(east),
+        ownsVSeamCell,
+        (chunk, z) => chunk.passageVAt(0, z),
+        (chunk, z) => chunk.wallFeatureVAt(0, z),
+        'v',
+        cx,
+        cz
+      )
+    }
+  }
+  for (let cx = X0; cx < X0 + N; cx++) {
+    for (let cz = Z0; cz < Z0 + N - 1; cz++) {
+      const north = dataAt(cx, cz)
+      const south = dataAt(cx, cz + 1)
+      if (!north || !south) continue
+      check(
+        north,
+        south,
+        hSeamLine(south),
+        ownsHSeamCell,
+        (chunk, x) => chunk.passageHAt(x, 0),
+        (chunk, x) => chunk.wallFeatureHAt(x, 0),
+        'h',
+        cx,
+        cz
+      )
+    }
+  }
+  return result
+}
+
 function patch(seed) {
   const m = new Map()
   for (let cz = Z0; cz < Z0 + N; cz++) {
     for (let cx = X0; cx < X0 + N; cx++) m.set(chunkKey(cx, cz), buildChunk(seed, cx, 0, cz, CFG))
   }
-  return auditPatch((cx, cz) => m.get(chunkKey(cx, cz)) ?? null, X0, Z0, N, N, CFG)
+  const dataAt = (cx, cz) => m.get(chunkKey(cx, cz)) ?? null
+  const audit = auditPatch(dataAt, X0, Z0, N, N, CFG)
+  audit.officeCornerEvidence = officeCornerEvidence(dataAt)
+  return audit
 }
 
 describe('chunk continuity (not isolated boxes)', () => {
@@ -50,12 +169,18 @@ describe('chunk continuity (not isolated boxes)', () => {
     }
   })
 
-  it('office district boundaries keep corners walled and have sparse portals', () => {
+  it('office district corners stay walled except at exact tall-structure cuts', () => {
+    let exercised = 0
     for (const a of audits) {
       if (a.office.n === 0) continue
-      expect(a.office.cornerWalls).toBe(a.office.n)
+      expect(a.officeCornerEvidence.invalid).toEqual([])
+      expect(
+        a.office.cornerWalls + a.officeCornerEvidence.structureOwnedSeams
+      ).toBe(a.office.n)
       expect(a.office.minDoors).toBeGreaterThanOrEqual(1)
+      exercised += a.officeCornerEvidence.structureOwnedSeams
     }
+    expect(exercised).toBeGreaterThan(0)
   })
 
   it('internal office seam slices have varied patterns instead of a periodic lattice', () => {

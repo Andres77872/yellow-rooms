@@ -4,6 +4,7 @@ import { ChunkManager } from '../ChunkManager.js'
 import { buildChunk } from '../pipeline.js'
 import { buildStairCells } from '../stairCells.js'
 import { slabContract } from '../slab.js'
+import { multilevelConfig, multilevelContract } from '../multilevel.js'
 import { DEFAULT_WORLD_CONFIG } from '../config.js'
 import {
   LIGHT_RANGE,
@@ -13,13 +14,14 @@ import {
   WALL_H,
   CELL,
   CHUNK,
+  chunkKey3,
 } from '../constants.js'
 
-// The v8 cross-floor lamp policy, tested on the REAL ChunkManager (headless
+// The cross-floor lamp policy, tested on the REAL ChunkManager (headless
 // THREE scene, chunks injected directly — no WebGL, no generation): lamps are
 // shadowless, so the slab is enforced by ASSIGNMENT, not shadowing. Same-floor
-// lamps always qualify; cy±1 lamps only within LIGHT_SPILL_R of a stair
-// aperture between the two floors; cy±2 never.
+// lamps always qualify; cy±1 lamps spill near an aperture; farther floors can
+// contribute only through one continuous tall structure and within true range.
 
 const lampAt = (x, cy, z) => {
   const v = new THREE.Vector3(x, cy * LAYER_H + WALL_H - 0.5, z)
@@ -29,8 +31,20 @@ const lampAt = (x, cy, z) => {
 
 function makeCM(lampsByFloor, apertures = []) {
   const cm = new ChunkManager(new THREE.Scene(), 1, null, null)
-  for (const [cy, lamps] of Object.entries(lampsByFloor)) {
-    cm.chunks.set(`0,${cy},0`, { cx: 0, cy: Number(cy), cz: 0, lamps, apertures: [] })
+  for (const [cy, value] of Object.entries(lampsByFloor)) {
+    const entry = Array.isArray(value) ? { lamps: value } : value
+    const cx = entry.cx ?? 0
+    const cz = entry.cz ?? 0
+    const structure = entry.structure ?? null
+    cm.chunks.set(chunkKey3(cx, Number(cy), cz), {
+      cx,
+      cy: Number(cy),
+      cz,
+      lamps: entry.lamps,
+      apertures: [],
+      multilevelStructure: structure,
+      data: { multilevelStructure: structure },
+    })
   }
   for (const a of apertures) {
     cm.apertures.set(`${a.cx ?? 0},${a.cz ?? 0},${a.lowerCy}`, { cx: a.cx ?? 0, cz: a.cz ?? 0, ...a })
@@ -38,10 +52,39 @@ function makeCM(lampsByFloor, apertures = []) {
   return cm
 }
 
+function tallConfig(levels = 10) {
+  const config = structuredClone(DEFAULT_WORLD_CONFIG)
+  config.multilevel.minLevels = levels
+  config.multilevel.maxLevels = levels
+  return config
+}
+
+function findStructure(seed, config, baseCy = 0) {
+  const K = multilevelConfig(config).districtChunks
+  for (let dz = 0; dz < K; dz++) {
+    for (let dx = 0; dx < K; dx++) {
+      const structure = multilevelContract(seed, K + dx, -K + dz, baseCy, config)
+      if (structure.hasRoom) return structure
+    }
+  }
+  throw new Error('expected a deterministic multilevel structure')
+}
+
+function distanceToStructure(x, z, structure) {
+  const bounds = structure.globalBounds
+  const minX = bounds.x0 * CELL
+  const maxX = (bounds.x1 + 1) * CELL
+  const minZ = bounds.z0 * CELL
+  const maxZ = (bounds.z1 + 1) * CELL
+  const nearestX = Math.max(minX, Math.min(maxX, x))
+  const nearestZ = Math.max(minZ, Math.min(maxZ, z))
+  return Math.hypot(x - nearestX, z - nearestZ)
+}
+
 describe('cross-floor lamp filter', () => {
   const aperture = { centerX: 21, centerZ: 21, lowerCy: 0 }
 
-  it('passes same-floor lamps, spills cy±1 only near an aperture, never cy±2', () => {
+  it('passes same-floor lamps, spills cy±1 near an aperture, and blocks unconnected cy±2', () => {
     const near1 = lampAt(21, 1, 24) // 3u from the aperture: spills down
     const far1 = lampAt(21 + LIGHT_SPILL_R + 5, 1, 21) // beyond spill radius
     const same = lampAt(30, 0, 30)
@@ -96,6 +139,90 @@ describe('cross-floor lamp filter', () => {
     const cm = makeCM({ 0: [a], 2: [b] }, [])
     expect(cm.collectLampsNear(21, 21, [])).toHaveLength(2)
   })
+
+  it('spills from distant floors only through the same continuous tall structure', () => {
+    const seed = 0x1a17
+    const structure = findStructure(seed, tallConfig(10))
+    const participant = structure.participants[0]
+    const x = (structure.globalBounds.x0 + 0.5) * CELL
+    const z = (structure.globalBounds.z0 + 0.5) * CELL
+    const near = lampAt(x, structure.baseCy + 2, z)
+    const beyondVerticalRange = lampAt(x, structure.baseCy + 4, z)
+    const cm = makeCM({
+      [structure.baseCy + 2]: {
+        cx: participant.cx,
+        cz: participant.cz,
+        lamps: [near],
+        structure,
+      },
+      [structure.baseCy + 4]: {
+        cx: participant.cx,
+        cz: participant.cz,
+        lamps: [beyondVerticalRange],
+        structure,
+      },
+    })
+
+    const out = cm.collectLampsNear(x, z, [], structure.baseCy)
+    expect(out).toContain(near)
+    expect(out).not.toContain(beyondVerticalRange)
+
+    const disconnected = {
+      ...structure,
+      id: `${structure.id}:disconnected`,
+      baseCy: structure.baseCy + 1,
+    }
+    const disconnectedCM = makeCM({
+      [structure.baseCy + 2]: {
+        cx: participant.cx,
+        cz: participant.cz,
+        lamps: [near],
+        structure: disconnected,
+      },
+    })
+    expect(disconnectedCM.collectLampsNear(x, z, [], structure.baseCy))
+      .not.toContain(near)
+  })
+
+  it('rejects a distant-floor lamp in a participant chunk when it is far from the void', () => {
+    const seed = 0x1a18
+    const structure = findStructure(seed, tallConfig(10))
+    const candidates = structure.participants.flatMap((participant) => {
+      const minX = participant.cx * CHUNK * CELL
+      const minZ = participant.cz * CHUNK * CELL
+      const maxX = minX + CHUNK * CELL
+      const maxZ = minZ + CHUNK * CELL
+      return [
+        { participant, x: minX + 0.5, z: minZ + 0.5 },
+        { participant, x: maxX - 0.5, z: minZ + 0.5 },
+        { participant, x: minX + 0.5, z: maxZ - 0.5 },
+        { participant, x: maxX - 0.5, z: maxZ - 0.5 },
+      ]
+    })
+    const farthest = candidates.sort((a, b) =>
+      distanceToStructure(b.x, b.z, structure) -
+      distanceToStructure(a.x, a.z, structure)
+    )[0]
+    expect(distanceToStructure(farthest.x, farthest.z, structure))
+      .toBeGreaterThan(LIGHT_SPILL_R)
+    const farLamp = lampAt(
+      farthest.x,
+      structure.baseCy + 2,
+      farthest.z
+    )
+    const sampleX = (structure.globalBounds.x0 + 0.5) * CELL
+    const sampleZ = (structure.globalBounds.z0 + 0.5) * CELL
+    const cm = makeCM({
+      [structure.baseCy + 2]: {
+        cx: farthest.participant.cx,
+        cz: farthest.participant.cz,
+        lamps: [farLamp],
+        structure,
+      },
+    })
+    expect(cm.collectLampsNear(sampleX, sampleZ, [], structure.baseCy))
+      .not.toContain(farLamp)
+  })
 })
 
 describe('cross-floor visibility state', () => {
@@ -119,7 +246,9 @@ describe('cross-floor visibility state', () => {
 
 describe('isBlocked fails closed on stair geometry', () => {
   it('blocks ramp (run) and hole cells of a real stamped chunk', () => {
-    const cfg = { ...DEFAULT_WORLD_CONFIG, stairs: { ...DEFAULT_WORLD_CONFIG.stairs, chance: 1 } }
+    const cfg = structuredClone(DEFAULT_WORLD_CONFIG)
+    cfg.stairs.chance = 1
+    cfg.multilevel.enabled = false
     const seed = 7
     const c = slabContract(seed, 1, 1, 0, cfg)
     expect(c.hasStair).toBe(true)
@@ -157,10 +286,12 @@ describe('isBlocked fails closed on stair geometry', () => {
 describe('isBlocked understands multilevel surfaces', () => {
   it('blocks atrium void cells but accepts the retained bridge deck', () => {
     const seed = 1337
-    const cx = 2
-    const cz = -7
-    const cy = 1
-    const data = buildChunk(seed, cx, cy, cz, DEFAULT_WORLD_CONFIG)
+    const config = tallConfig(10)
+    config.multilevel.bridgeChance = 1
+    const structure = findStructure(seed, config)
+    const { cx, cz } = structure.participants[0]
+    const cy = structure.bridgeLevels[0]
+    const data = buildChunk(seed, cx, cy, cz, config)
     const room = data.multilevelDown
     expect(room).not.toBeNull()
     const cm = new ChunkManager(new THREE.Scene(), seed, null, null)

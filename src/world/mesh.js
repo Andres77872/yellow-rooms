@@ -109,14 +109,19 @@ function buildSlabFace(holes, y, faceUp) {
 // thickness (local y WALL_H..LAYER_H). Emitting each solid/void boundary edge
 // independently supports irregular masks and the two lobes split by a retained
 // bridge deck; the old bounding-rectangle rim incorrectly sealed such shapes.
-function appendHoleRims(geo, holes) {
+function appendHoleRims(geo, holes, outsideHole = null) {
   const pos = Array.from(geo.attributes.position.array)
   const nrm = Array.from(geo.attributes.normal.array)
   const uv = Array.from(geo.attributes.uv.array)
   const y0 = WALL_H
   const y1 = LAYER_H
   const v = (u, y) => [u / CELL, y / CELL]
-  const has = (x, z) => holes.has(`${x},${z}`)
+  const has = (x, z) => {
+    if (x >= 0 && x < CHUNK && z >= 0 && z < CHUNK) {
+      return holes.has(`${x},${z}`)
+    }
+    return outsideHole ? outsideHole(x, z) : false
+  }
   for (let z = 0; z < CHUNK; z++) {
     for (let x = 0; x < CHUNK; x++) {
       if (!has(x, z)) continue
@@ -156,6 +161,27 @@ function collectHoles(data, ceiling) {
   return holes
 }
 
+// A tall void can continue through an owned chunk seam. Chunk-local hole sets
+// alone would treat the neighbour as solid and erect a false vertical fascia
+// across the shaft/bridge. The canonical slab slice has enough global geometry
+// to answer the one-cell halo queried by appendHoleRims without generating the
+// neighbouring chunk.
+function multilevelHoleOutsideChunk(data, lx, lz) {
+  const room = data.multilevelUp
+  if (!room?.hasRoom) return false
+  const gx = data.cx * CHUNK + lx
+  const gz = data.cz * CHUNK + lz
+  const bounds = room.globalBounds
+  if (
+    gx < bounds.x0 || gx > bounds.x1 ||
+    gz < bounds.z0 || gz > bounds.z1
+  ) return false
+  if (room.globalBridgeLine === null) return true
+  return room.bridgeAxis === 'x'
+    ? gz !== room.globalBridgeLine
+    : gx !== room.globalBridgeLine
+}
+
 export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
   const group = new THREE.Group()
   group.position.set(ox, oy, oz)
@@ -183,7 +209,11 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
     ceil.position.set(CHUNK_WORLD / 2, WALL_H, CHUNK_WORLD / 2)
   } else {
     const g = buildSlabFace(ceilingHoles, WALL_H, false)
-    appendHoleRims(g, ceilingHoles) // slab-owner renders every exposed cut face
+    appendHoleRims(
+      g,
+      ceilingHoles,
+      (x, z) => multilevelHoleOutsideChunk(data, x, z)
+    ) // slab-owner renders only real global solid/void boundaries
     ownedGeos.push(g)
     ceil = new THREE.Mesh(g, materials.ceiling)
   }
@@ -311,7 +341,7 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
   // supported structural span, not a paper-thin strip floating over the hall.
   // They belong to the lower/slab-owner chunk and sit below the retained bridge
   // underside, well above player head height.
-  if (data.multilevelUp) {
+  if (data.multilevelUp?.bridgeCells.length) {
     const room = data.multilevelUp
     const { x0, z0, x1, z1 } = room.bounds
     const alongX = room.bridgeAxis === 'x'

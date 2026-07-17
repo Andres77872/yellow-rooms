@@ -22,13 +22,105 @@ const LOGH = 322
 const HUBC = (CHUNK / 2) | 0
 const SPAWN = (HUBC + 0.5) * CELL
 
+const validStructureBounds = (bounds) =>
+  Number.isInteger(bounds?.x0) &&
+  Number.isInteger(bounds?.z0) &&
+  Number.isInteger(bounds?.x1) &&
+  Number.isInteger(bounds?.z1) &&
+  bounds.x0 <= bounds.x1 &&
+  bounds.z0 <= bounds.z1
+
+// Build the layered-audit box from the structure selected in the map. A tall
+// volume is audited as one object: all of its floors and both participant
+// chunks are included even when the current viewport clips an edge. Without a
+// selection the historical current-floor +/-1 stair audit remains useful.
+export function multilevelAuditBox(structure, c0x, c1x, c0z, c1z, floor) {
+  let x0 = c0x
+  let x1 = c1x
+  let z0 = c0z
+  let z1 = c1z
+  let y0 = floor - 1
+  let y1 = floor + 1
+
+  if (
+    structure?.hasRoom &&
+    Number.isInteger(structure.baseCy) &&
+    Number.isInteger(structure.topCy) &&
+    structure.baseCy <= structure.topCy
+  ) {
+    y0 = structure.baseCy
+    y1 = structure.topCy
+    const participants = Array.isArray(structure.participants)
+      ? structure.participants
+      : []
+    if (participants.length > 0) {
+      for (const participant of participants) {
+        if (!Number.isInteger(participant?.cx) || !Number.isInteger(participant?.cz)) continue
+        x0 = Math.min(x0, participant.cx)
+        x1 = Math.max(x1, participant.cx)
+        z0 = Math.min(z0, participant.cz)
+        z1 = Math.max(z1, participant.cz)
+      }
+    } else if (validStructureBounds(structure.globalBounds)) {
+      x0 = Math.min(x0, Math.floor(structure.globalBounds.x0 / CHUNK))
+      x1 = Math.max(x1, Math.floor(structure.globalBounds.x1 / CHUNK))
+      z0 = Math.min(z0, Math.floor(structure.globalBounds.z0 / CHUNK))
+      z1 = Math.max(z1, Math.floor(structure.globalBounds.z1 / CHUNK))
+    }
+  }
+
+  return {
+    x0,
+    y0,
+    z0,
+    nx: x1 - x0 + 1,
+    ny: y1 - y0 + 1,
+    nz: z1 - z0 + 1,
+  }
+}
+
+export function structureAtCell(structures, gx, gz, floor) {
+  if (!Number.isInteger(gx) || !Number.isInteger(gz) || !Number.isInteger(floor)) return null
+  for (const structure of structures) {
+    const bounds = structure?.globalBounds
+    if (
+      structure?.hasRoom &&
+      validStructureBounds(bounds) &&
+      floor >= structure.baseCy &&
+      floor <= structure.topCy &&
+      gx >= bounds.x0 &&
+      gx <= bounds.x1 &&
+      gz >= bounds.z0 &&
+      gz <= bounds.z1
+    ) return structure
+  }
+  return null
+}
+
+export function formatMultilevelStructure(structures, selected, source = 'visible') {
+  if (structures.length === 0) return 'visible 0 · current —'
+  const structure = selected ?? structures[0]
+  const levels = Number.isInteger(structure.levelCount)
+    ? structure.levelCount
+    : structure.topCy - structure.baseCy + 1
+  const bridges = structure.bridgeLevels?.length
+    ? structure.bridgeLevels.join(',')
+    : 'none'
+  return `visible ${structures.length} · ${source} #${structure.id} ${structure.kind} · cy ${structure.baseCy}…${structure.topCy} · ${levels} levels · bridges ${bridges}`
+}
+
+export function formatMultilevelAudit(audit) {
+  if (!audit) return 'off'
+  return `struct ${audit.multilevelStructures ?? 0} · pairs ${audit.multilevelPairs ?? 0} · slices ${audit.multilevelSlices ?? 0} · mismatch ${audit.mismatchedMultilevelDescriptors ?? 0} · bad room/struct ${audit.invalidMultilevelRooms ?? 0}/${audit.invalidMultilevelStructures ?? 0} · orphan ${audit.orphanedMultilevelHalves ?? 0} · stray ${audit.strayWallFeatures ?? 0} · missing ${audit.missingMultilevelSlices ?? 0} · seams ${audit.closedBridgeSeams ?? 0}`
+}
+
 const ZONE_TINT = {
   [ZONE_OFFICE]: 'rgba(150,90,40,.10)',
   [ZONE_PILLARS]: 'rgba(70,120,140,.09)',
   [ZONE_WAREHOUSE]: 'rgba(120,110,60,.06)',
 }
 
-// World-gen top-down map for the thin-wall model, one floor (v9 layer) at a
+// World-gen top-down map for the thin-wall model, one floor (v11 layer) at a
 // time. Draws wall edges, columns, border openings, lamps (lit/dead), stair
 // glyphs, the exit and live entities. LIVE reads loaded chunks; EXPLORE
 // regenerates any floor for an arbitrary seed (generation is a pure function
@@ -174,6 +266,8 @@ export class WorldMapTool {
       zones: readout('zones'),
       conn: readout('connectivity'),
       integrity: readout('3d integrity'),
+      multilevel: readout('multilevel'),
+      multilevelAudit: readout('multilevel audit'),
       cont: readout('continuity'),
       seed: readout('seed'),
       cursor: readout('cursor'),
@@ -357,6 +451,7 @@ export class WorldMapTool {
     let litN = 0
     let deadN = 0
     const zoneN = { [ZONE_OFFICE]: 0, [ZONE_PILLARS]: 0, [ZONE_WAREHOUSE]: 0 }
+    const structuresByKey = new Map()
     let knownChunks = 0
     const wallW = Math.max(1, scale * 0.12)
 
@@ -365,6 +460,13 @@ export class WorldMapTool {
         const d = this._chunkData(ccx, ccz)
         if (!d) continue
         knownChunks++
+        const structure = d.multilevelStructure
+        if (structure?.hasRoom) {
+          structuresByKey.set(
+            `${structure.id}:${structure.baseCy}:${structure.topCy}`,
+            structure
+          )
+        }
         if (zoneN[d.zone] !== undefined) zoneN[d.zone]++
         const ox = ccx * CHUNK_WORLD
         const oz = ccz * CHUNK_WORLD
@@ -502,19 +604,67 @@ export class WorldMapTool {
     // red = wall, with the wide transition mouths reading as long green runs).
     let cont = null
     if (this.seams) cont = this._drawSeams(c0x, c1x, c0z, c1z)
+
+    const visibleStructures = [...structuresByKey.values()]
+    let selectedStructure = null
+    let selectedSource = 'visible'
+    if (this._hover) {
+      selectedStructure = structureAtCell(
+        visibleStructures,
+        worldToCell(this._hover.wx),
+        worldToCell(this._hover.wz),
+        this.floor
+      )
+      if (selectedStructure) selectedSource = 'cursor'
+    }
+    const controller = this.engine.controller
+    if (!selectedStructure && controller.floor === this.floor) {
+      selectedStructure = structureAtCell(
+        visibleStructures,
+        worldToCell(controller.pos.x),
+        worldToCell(controller.pos.z),
+        this.floor
+      )
+      if (selectedStructure) selectedSource = 'player'
+    }
+    if (!selectedStructure) {
+      selectedStructure = structureAtCell(
+        visibleStructures,
+        worldToCell(this.view.cx),
+        worldToCell(this.view.cz),
+        this.floor
+      )
+      if (selectedStructure) selectedSource = 'center'
+    }
+    if (!selectedStructure && visibleStructures.length > 0) {
+      selectedStructure = visibleStructures[0]
+    }
+
     let integrity = null
     if (this.validate) {
-      // The audit builds a full 3D graph. Cache it while the viewed chunk box,
-      // floor, seed/source, and live resident count stay unchanged; drawing
-      // still runs every frame without rebuilding thousands of graph nodes.
-      const integrityKey = [
-        this.source,
-        this.source === 0 ? this.engine.cm.seed : this.previewSeed,
-        this.floor,
+      const auditBox = multilevelAuditBox(
+        selectedStructure,
         c0x,
         c1x,
         c0z,
         c1z,
+        this.floor
+      )
+      // The audit builds a full 3D graph. Cache it while the viewed chunk box,
+      // selected structure, seed/source, and live resident count stay
+      // unchanged; drawing still runs every frame without rebuilding thousands
+      // of graph nodes. Selecting a multilevel volume expands Y to its complete
+      // canonical base..top span (up to ten floors).
+      const integrityKey = [
+        this.source,
+        this.source === 0 ? this.engine.cm.seed : this.previewSeed,
+        selectedStructure?.id ?? '-',
+        auditBox.x0,
+        auditBox.y0,
+        auditBox.z0,
+        auditBox.nx,
+        auditBox.ny,
+        auditBox.nz,
         this.source === 0 ? this.engine.cm.loadedCount : 0,
       ].join(':')
       if (this._integrityCache.key !== integrityKey) {
@@ -522,12 +672,12 @@ export class WorldMapTool {
           key: integrityKey,
           value: auditLayeredPatch(
             (cx, cy, cz) => this._chunkDataAt(cx, cy, cz),
-            c0x,
-            this.floor - 1,
-            c0z,
-            c1x - c0x + 1,
-            3,
-            c1z - c0z + 1
+            auditBox.x0,
+            auditBox.y0,
+            auditBox.z0,
+            auditBox.nx,
+            auditBox.ny,
+            auditBox.nz
           ),
         }
       }
@@ -554,6 +704,14 @@ export class WorldMapTool {
         ? `${integrity.ok ? 'ok' : 'FAIL'} · desc ${integrity.mismatchedDescriptors} · holes ${integrity.holeMismatches} · orphan ${integrity.orphanedHalves} · bad links ${integrity.invalidCanonicalLinks}/${integrity.canonicalLinks} · comp ${integrity.components}`
         : 'off'
     )
+    this._stat.multilevel.set(
+      formatMultilevelStructure(
+        visibleStructures,
+        selectedStructure,
+        selectedSource
+      )
+    )
+    this._stat.multilevelAudit.set(formatMultilevelAudit(integrity))
     this._stat.cont.set(
       cont ? `score ${cont.score.toFixed(2)} · ${cont.sealed} unsafe · plan variety ${cont.planVariety.toFixed(2)}` : 'off'
     )

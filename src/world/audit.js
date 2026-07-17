@@ -198,6 +198,9 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
     orphanedMultilevelHalves: [],
     invalidMultilevelRooms: [],
     strayWallFeatures: [],
+    invalidMultilevelStructures: [],
+    missingMultilevelSlices: [],
+    closedBridgeSeams: [],
   }
   const audit = {
     chunks: chunks.size,
@@ -216,6 +219,11 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
     orphanedMultilevelHalves: 0,
     invalidMultilevelRooms: 0,
     strayWallFeatures: 0,
+    multilevelStructures: 0,
+    multilevelSlices: 0,
+    invalidMultilevelStructures: 0,
+    missingMultilevelSlices: 0,
+    closedBridgeSeams: 0,
     walkableCells: 0,
     components: 0,
     componentSizes: [],
@@ -230,6 +238,7 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
   // nodes have been materialized. Bad/mismatched/orphaned halves never create
   // a synthetic vertical connection that could hide a real disconnection.
   const pendingLinks = []
+  const pairedLowerRooms = new Set()
   const pairedUpperRooms = new Set()
   for (let cy = Y0; cy < Y0 + NY - 1; cy++) {
     for (let cz = Z0; cz < Z0 + NZ; cz++) {
@@ -278,17 +287,17 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
             half: roomUp ? 'lower.multilevelUp' : 'upper.multilevelDown',
           })
         } else if (roomUp && roomDown) {
+          pairedLowerRooms.add(key3(cx, cy, cz))
           pairedUpperRooms.add(key3(cx, cy + 1, cz))
           audit.multilevelPairs++
           if (!sameMultilevelDescriptor(roomUp, roomDown)) {
             audit.mismatchedMultilevelDescriptors++
             details.mismatchedMultilevelDescriptors.push({ cx, cy, cz })
-          } else {
-            const reasons = multilevelRoomErrors(lower, upper, roomUp)
-            if (reasons.length > 0) {
-              audit.invalidMultilevelRooms++
-              details.invalidMultilevelRooms.push({ cx, cy, cz, id: roomUp.id, reasons })
-            }
+          }
+          const reasons = multilevelPairErrors(lower, upper, roomUp, roomDown)
+          if (reasons.length > 0) {
+            audit.invalidMultilevelRooms++
+            details.invalidMultilevelRooms.push({ cx, cy, cz, id: roomUp.id, reasons })
           }
         }
 
@@ -308,28 +317,49 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
     }
   }
 
-  // A window/rail without an upper multilevel descriptor is categorically
-  // invalid: ordinary walls and lower atrium halls may never acquire these
-  // see-through collision features. Paired upper rooms receive the stricter
-  // exact-edge validation in multilevelRoomErrors above.
+  // Validate boundary halves independently. A live/debug patch can start in
+  // the middle of a tall structure, so an upper surface remains fully
+  // auditable even when its lower slab owner is outside the patch. Conversely,
+  // a lower `up` half still owns an exact ceiling mask when its consumer is
+  // outside the patch. Paired halves were already checked together above.
   for (const [key, data] of chunks) {
     if (data.multilevelDown) {
-      if (pairedUpperRooms.has(key)) continue
-      const reasons = multilevelUpperBoundaryErrors(data, data.multilevelDown)
+      if (!pairedUpperRooms.has(key)) {
+        const reasons = multilevelSurfaceErrors(data, data.multilevelDown)
+        if (reasons.length > 0) {
+          const [cx, cy, cz] = key.split(',').map(Number)
+          audit.invalidMultilevelRooms++
+          details.invalidMultilevelRooms.push({
+            cx,
+            cy: data.multilevelDown.lowerCy ?? cy - 1,
+            cz,
+            id: data.multilevelDown.id,
+            reasons,
+            boundaryHalf: 'upper.multilevelDown',
+          })
+        }
+      }
+    }
+    if (data.multilevelUp && !pairedLowerRooms.has(key)) {
+      const reasons = multilevelLowerHalfErrors(data, data.multilevelUp)
       if (reasons.length > 0) {
-        const [cx, , cz] = key.split(',').map(Number)
+        const [cx, cy, cz] = key.split(',').map(Number)
         audit.invalidMultilevelRooms++
         details.invalidMultilevelRooms.push({
           cx,
-          cy: data.multilevelDown.baseCy,
+          cy,
           cz,
-          id: data.multilevelDown.id,
+          id: data.multilevelUp.id,
           reasons,
-          boundaryHalf: 'upper.multilevelDown',
+          boundaryHalf: 'lower.multilevelUp',
         })
       }
-      continue
     }
+
+    // A window/rail without a descriptor for this floor's visible surface is
+    // categorically stray. In particular, the bottom hall has `up` but no
+    // `down`, and must remain completely window/rail-free.
+    if (data.multilevelDown) continue
     let count = 0
     for (let i = 0; i < data.wallFeatureV.length; i++) {
       if (data.wallFeatureV[i] !== WALL_PLAIN) count++
@@ -340,6 +370,16 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
     audit.strayWallFeatures += count
     details.strayWallFeatures.push({ cx, cy, cz, count })
   }
+
+  const structureAudit = auditMultilevelStructureGroups(chunks)
+  audit.multilevelStructures = structureAudit.structures
+  audit.multilevelSlices = structureAudit.slices
+  audit.invalidMultilevelStructures = structureAudit.invalid
+  audit.missingMultilevelSlices = structureAudit.missing.length
+  audit.closedBridgeSeams = structureAudit.closed.length
+  details.invalidMultilevelStructures.push(...structureAudit.details)
+  details.missingMultilevelSlices.push(...structureAudit.missing)
+  details.closedBridgeSeams.push(...structureAudit.closed)
 
   const nodes = new Map()
   const nodeKey = (gx, gz, cy) => `${gx},${gz},${cy}`
@@ -445,6 +485,9 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
     audit.orphanedMultilevelHalves === 0 &&
     audit.invalidMultilevelRooms === 0 &&
     audit.strayWallFeatures === 0 &&
+    audit.invalidMultilevelStructures === 0 &&
+    audit.missingMultilevelSlices === 0 &&
+    audit.closedBridgeSeams === 0 &&
     audit.connected
   return audit
 }
@@ -492,30 +535,22 @@ function cellWalkable(data, lx, lz) {
   )
 }
 
-function multilevelRoomErrors(lower, upper, room) {
-  const reasons = []
-  const { x0, z0, x1, z1 } = room.bounds || {}
-  if (
-    !Number.isInteger(room.id) || room.id <= 0 || room.id > 0xffffffff ||
-    room.baseCy !== lower.cy ||
-    !Number.isInteger(x0) ||
-    !Number.isInteger(z0) ||
-    !Number.isInteger(x1) ||
-    !Number.isInteger(z1) ||
-    x0 < 1 || z0 < 1 || x1 >= CHUNK - 1 || z1 >= CHUNK - 1 ||
-    x0 > x1 || z0 > z1
-  ) {
-    return ['invalid room identity or bounds']
-  }
-  if (room.bridgeAxis !== 'x' && room.bridgeAxis !== 'z') {
-    return ['invalid bridge axis']
-  }
+const boundsEqual = (a, b) => !!a && !!b &&
+  a.x0 === b.x0 && a.z0 === b.z0 && a.x1 === b.x1 && a.z1 === b.z1
 
-  const expectedWindows = new Set()
-  const expectedRails = new Set()
-  const expectedMouths = new Set()
-  const edgeKey = (axis, line, cell) => `${axis}:${line},${cell}`
-  const state = (data, axis, line, cell) => axis === 'v'
+const validBounds = (bounds) =>
+  Number.isInteger(bounds?.x0) &&
+  Number.isInteger(bounds?.z0) &&
+  Number.isInteger(bounds?.x1) &&
+  Number.isInteger(bounds?.z1) &&
+  bounds.x0 <= bounds.x1 &&
+  bounds.z0 <= bounds.z1
+
+const multilevelCellKey = (lx, lz) => `${lx},${lz}`
+const multilevelEdgeKey = (axis, line, cell) => `${axis}:${line},${cell}`
+
+function multilevelEdgeState(data, axis, line, cell) {
+  return axis === 'v'
     ? {
         wall: data.vAt(line, cell),
         passage: data.passageVAt(line, cell),
@@ -526,147 +561,352 @@ function multilevelRoomErrors(lower, upper, room) {
         passage: data.passageHAt(cell, line),
         feature: data.wallFeatureHAt(cell, line),
       }
+}
 
-  for (let z = z0; z <= z1; z++) {
-    const ends = room.bridgeAxis === 'x' && z === room.bridgeLine
-    for (const line of [x0, x1 + 1]) {
-      ;(ends ? expectedMouths : expectedWindows).add(edgeKey('v', line, z))
+// Validate the coordinate contract and derive the canonical local partition.
+// The footprint is allowed to touch any chunk border: only the GLOBAL bounds
+// decide whether a local edge is an exterior wall or an internal owned seam.
+function multilevelSliceGeometry(data, room, expectedLowerCy) {
+  const reasons = []
+  const bounds = room?.localBounds || room?.bounds
+  const global = room?.globalBounds
+  if (
+    room?.hasRoom !== true ||
+    !Number.isInteger(room?.id) || room.id <= 0 || room.id > 0xffffffff ||
+    !validBounds(bounds) ||
+    bounds.x0 < 0 || bounds.z0 < 0 ||
+    bounds.x1 >= CHUNK || bounds.z1 >= CHUNK ||
+    !validBounds(global)
+  ) {
+    reasons.push('invalid room identity or bounds')
+  }
+  if (
+    !Number.isInteger(room?.baseCy) ||
+    !Number.isInteger(room?.topCy) ||
+    room.baseCy >= room.topCy ||
+    room?.lowerCy !== expectedLowerCy ||
+    room?.levelCy !== expectedLowerCy + 1 ||
+    expectedLowerCy < room.baseCy ||
+    expectedLowerCy >= room.topCy
+  ) reasons.push('invalid multilevel slab coordinates')
+  if (room?.kind !== 'bridged' && room?.kind !== 'openVoid') {
+    reasons.push('invalid multilevel structure kind')
+  }
+  if (room?.bridgeAxis !== 'x' && room?.bridgeAxis !== 'z') {
+    reasons.push('invalid bridge axis')
+  }
+  if (room?.bounds && room?.localBounds && !boundsEqual(room.bounds, room.localBounds)) {
+    reasons.push('inconsistent local bounds aliases')
+  }
+
+  let expectedBounds = null
+  if (validBounds(global)) {
+    const chunkX0 = data.cx * CHUNK
+    const chunkZ0 = data.cz * CHUNK
+    const gx0 = Math.max(global.x0, chunkX0)
+    const gz0 = Math.max(global.z0, chunkZ0)
+    const gx1 = Math.min(global.x1, chunkX0 + CHUNK - 1)
+    const gz1 = Math.min(global.z1, chunkZ0 + CHUNK - 1)
+    if (gx0 <= gx1 && gz0 <= gz1) {
+      expectedBounds = {
+        x0: gx0 - chunkX0,
+        z0: gz0 - chunkZ0,
+        x1: gx1 - chunkX0,
+        z1: gz1 - chunkZ0,
+      }
     }
   }
-  for (let x = x0; x <= x1; x++) {
-    const ends = room.bridgeAxis === 'z' && x === room.bridgeLine
-    for (const line of [z0, z1 + 1]) {
-      ;(ends ? expectedMouths : expectedWindows).add(edgeKey('h', line, x))
+  if (!expectedBounds || !boundsEqual(bounds, expectedBounds)) {
+    reasons.push('local bounds do not match global structure bounds')
+  }
+
+  const globalBridgeLine = room?.globalBridgeLine
+  let expectedBridgeLine = null
+  if (globalBridgeLine !== null) {
+    if (!Number.isInteger(globalBridgeLine) || room?.kind !== 'bridged') {
+      reasons.push('invalid global bridge line')
+    } else if (room?.bridgeAxis === 'x') {
+      if (!validBounds(global) || globalBridgeLine < global.z0 || globalBridgeLine > global.z1) {
+        reasons.push('invalid global bridge line')
+      }
+      expectedBridgeLine = globalBridgeLine - data.cz * CHUNK
+    } else if (room?.bridgeAxis === 'z') {
+      if (!validBounds(global) || globalBridgeLine < global.x0 || globalBridgeLine > global.x1) {
+        reasons.push('invalid global bridge line')
+      }
+      expectedBridgeLine = globalBridgeLine - data.cx * CHUNK
     }
   }
-  if (room.bridgeAxis === 'x') {
-    for (let x = x0; x <= x1; x++) {
-      expectedRails.add(edgeKey('h', room.bridgeLine, x))
-      expectedRails.add(edgeKey('h', room.bridgeLine + 1, x))
-    }
-  } else {
-    for (let z = z0; z <= z1; z++) {
-      expectedRails.add(edgeKey('v', room.bridgeLine, z))
-      expectedRails.add(edgeKey('v', room.bridgeLine + 1, z))
+  if (room?.bridgeLine !== expectedBridgeLine) reasons.push('invalid local bridge line')
+  if (room?.kind === 'openVoid' && globalBridgeLine !== null) {
+    reasons.push('open void has a bridge line')
+  }
+
+  const expectedVoid = new Set()
+  const expectedBridge = new Set()
+  const expectedBridgeCells = []
+  if (validBounds(bounds) && bounds.x0 >= 0 && bounds.z0 >= 0 &&
+      bounds.x1 < CHUNK && bounds.z1 < CHUNK) {
+    for (let z = bounds.z0; z <= bounds.z1; z++) {
+      for (let x = bounds.x0; x <= bounds.x1; x++) {
+        const bridge = globalBridgeLine !== null && (
+          room.bridgeAxis === 'x' ? z === expectedBridgeLine : x === expectedBridgeLine
+        )
+        const key = multilevelCellKey(x, z)
+        if (bridge) {
+          expectedBridge.add(key)
+          expectedBridgeCells.push({ lx: x, lz: z })
+        } else {
+          expectedVoid.add(key)
+        }
+      }
     }
   }
 
-  const actualVoid = new Set(room.voidCells?.map((c) => `${c.lx},${c.lz}`) || [])
-  const actualBridge = new Set(room.bridgeCells?.map((c) => `${c.lx},${c.lz}`) || [])
-  const footprint = (x1 - x0 + 1) * (z1 - z0 + 1)
-  for (let z = z0; z <= z1; z++) {
-    for (let x = x0; x <= x1; x++) {
-      const key = `${x},${z}`
-      const bridge = room.bridgeAxis === 'x' ? z === room.bridgeLine : x === room.bridgeLine
-      if (bridge !== actualBridge.has(key) || bridge === actualVoid.has(key)) {
-        reasons.push('descriptor does not partition footprint into void and bridge')
+  const actualVoid = new Set()
+  const actualBridge = new Set()
+  let duplicateOrInvalidCell = false
+  for (const [cells, target] of [
+    [room?.voidCells, actualVoid],
+    [room?.bridgeCells, actualBridge],
+  ]) {
+    if (!Array.isArray(cells)) {
+      duplicateOrInvalidCell = true
+      continue
+    }
+    for (const cell of cells) {
+      const key = multilevelCellKey(cell?.lx, cell?.lz)
+      if (!validCell(cell) || target.has(key)) duplicateOrInvalidCell = true
+      target.add(key)
+    }
+  }
+  const partitionMatches =
+    !duplicateOrInvalidCell &&
+    actualVoid.size === expectedVoid.size &&
+    actualBridge.size === expectedBridge.size &&
+    [...expectedVoid].every((key) => actualVoid.has(key)) &&
+    [...expectedBridge].every((key) => actualBridge.has(key))
+  if (!partitionMatches) {
+    reasons.push('descriptor does not partition footprint into void and bridge')
+  }
+  const footprint = validBounds(bounds)
+    ? (bounds.x1 - bounds.x0 + 1) * (bounds.z1 - bounds.z0 + 1)
+    : 0
+  if (actualVoid.size + actualBridge.size !== footprint) {
+    reasons.push('descriptor footprint area mismatch')
+  }
+  if ((room?.bridgeCells?.length || 0) !== expectedBridgeCells.length) {
+    reasons.push('invalid bridge length')
+  } else if (expectedBridgeCells.some((cell, index) => !sameCell(cell, room.bridgeCells[index]))) {
+    reasons.push('non-canonical bridge deck')
+  }
+
+  return {
+    reasons,
+    bounds: expectedBounds && boundsEqual(bounds, expectedBounds) ? bounds : null,
+    global: validBounds(global) ? global : null,
+    expectedVoid,
+    expectedBridge,
+    expectedBridgeCells,
+  }
+}
+
+function multilevelLowerHalfErrors(lower, room) {
+  const geometry = multilevelSliceGeometry(lower, room, lower.cy)
+  const reasons = [...geometry.reasons]
+  const bounds = geometry.bounds
+  if (!bounds) return [...new Set(reasons)]
+
+  for (let z = bounds.z0; z <= bounds.z1; z++) {
+    for (let x = bounds.x0; x <= bounds.x1; x++) {
+      const isVoid = geometry.expectedVoid.has(multilevelCellKey(x, z))
+      if (lower.hasCeilHole(x, z) !== isVoid) {
+        reasons.push(isVoid
+          ? 'void slab mask is incomplete'
+          : 'bridge deck is not a retained slab cell')
       }
-      if (lower.colAt(x, z) || upper.colAt(x, z)) reasons.push('column inside room volume')
-      if (bridge) {
-        if (lower.hasCeilHole(x, z) || upper.hasFloorHole(x, z)) {
-          reasons.push('bridge deck is not a retained slab cell')
-        }
-        if (upper.cellKind[cIdx(x, z)] !== CELL_BRIDGE) reasons.push('bridge semantic missing')
-      } else {
-        if (!lower.hasCeilHole(x, z) || !upper.hasFloorHole(x, z)) {
-          reasons.push('void slab mask is incomplete')
-        }
-        if (upper.cellKind[cIdx(x, z)] !== CELL_VOID) reasons.push('void semantic missing')
+      if (lower.colAt(x, z)) reasons.push('column inside room volume')
+      if (lower.spaceId[cIdx(x, z)] !== room.id) {
+        reasons.push('room identity missing from footprint')
       }
-      if (lower.cellKind[cIdx(x, z)] !== CELL_ATRIUM) reasons.push('lower atrium semantic missing')
-      if (lower.spaceId[cIdx(x, z)] !== room.id || upper.spaceId[cIdx(x, z)] !== room.id) {
+      // Only the actual base is an atrium hall. A lower chunk in any later
+      // slab is itself a gallery stamped from its `multilevelDown` slice.
+      if (lower.cy === room.baseCy && lower.cellKind[cIdx(x, z)] !== CELL_ATRIUM) {
+        reasons.push('lower atrium semantic missing')
+      }
+    }
+  }
+  if (lower.cy === room.baseCy) {
+    for (let i = 0; i < lower.wallFeatureV.length; i++) {
+      if (lower.wallFeatureV[i] !== WALL_PLAIN || lower.wallFeatureH[i] !== WALL_PLAIN) {
+        reasons.push('bottom floor has a window or rail feature')
+        break
+      }
+    }
+  }
+  return [...new Set(reasons)]
+}
+
+function multilevelSurfaceErrors(upper, room) {
+  const geometry = multilevelSliceGeometry(upper, room, upper.cy - 1)
+  const reasons = [...geometry.reasons]
+  const bounds = geometry.bounds
+  const global = geometry.global
+  if (!bounds || !global) return [...new Set(reasons)]
+
+  for (let z = bounds.z0; z <= bounds.z1; z++) {
+    for (let x = bounds.x0; x <= bounds.x1; x++) {
+      const key = multilevelCellKey(x, z)
+      const bridge = geometry.expectedBridge.has(key)
+      if (upper.hasFloorHole(x, z) !== !bridge) {
+        reasons.push(bridge
+          ? 'bridge deck is not a retained slab cell'
+          : 'void slab mask is incomplete')
+      }
+      if (upper.colAt(x, z)) reasons.push('column inside room volume')
+      const expectedKind = bridge ? CELL_BRIDGE : CELL_VOID
+      if (upper.cellKind[cIdx(x, z)] !== expectedKind) {
+        reasons.push(bridge ? 'bridge semantic missing' : 'void semantic missing')
+      }
+      if (upper.spaceId[cIdx(x, z)] !== room.id) {
         reasons.push('room identity missing from footprint')
       }
     }
   }
-  if (actualVoid.size + actualBridge.size !== footprint) {
-    reasons.push('descriptor footprint area mismatch')
-  }
 
-  const bridgeCells = room.bridgeCells || []
-  const expectedLength = room.bridgeAxis === 'x' ? x1 - x0 + 1 : z1 - z0 + 1
-  if (bridgeCells.length !== expectedLength) reasons.push('invalid bridge length')
-  for (let i = 1; i < bridgeCells.length; i++) {
-    const a = bridgeCells[i - 1]
-    const b = bridgeCells[i]
-    const canonical = room.bridgeAxis === 'x'
-      ? b.lx === a.lx + 1 && b.lz === a.lz
-      : b.lz === a.lz + 1 && b.lx === a.lx
-    if (!canonical) {
-      reasons.push('non-canonical bridge deck')
-      break
+  const expectedWindows = new Set()
+  const expectedRails = new Set()
+  const expectedMouths = new Set()
+  const chunkGX = upper.cx * CHUNK
+  const chunkGZ = upper.cz * CHUNK
+  const bridge = room.globalBridgeLine
+
+  for (let z = bounds.z0; z <= bounds.z1; z++) {
+    const gz = chunkGZ + z
+    const bridgeEnd = bridge !== null && room.bridgeAxis === 'x' && gz === bridge
+    if (chunkGX + bounds.x0 === global.x0) {
+      ;(bridgeEnd ? expectedMouths : expectedWindows)
+        .add(multilevelEdgeKey('v', bounds.x0, z))
     }
-    const axis = room.bridgeAxis === 'x' ? 'v' : 'h'
-    const line = room.bridgeAxis === 'x' ? b.lx : b.lz
-    const cell = room.bridgeAxis === 'x' ? a.lz : a.lx
-    if (state(upper, axis, line, cell).wall !== 0) {
-      reasons.push('blocked bridge deck')
-      break
+    if (chunkGX + bounds.x1 === global.x1) {
+      ;(bridgeEnd ? expectedMouths : expectedWindows)
+        .add(multilevelEdgeKey('v', bounds.x1 + 1, z))
     }
   }
-  const banks = room.bridgeAxis === 'x'
-    ? [
-        { lx: x0 - 1, lz: room.bridgeLine },
-        { lx: x1 + 1, lz: room.bridgeLine },
-      ]
-    : [
-        { lx: room.bridgeLine, lz: z0 - 1 },
-        { lx: room.bridgeLine, lz: z1 + 1 },
-      ]
-  for (const bank of banks) {
-    if (
-      upper.hasFloorHole(bank.lx, bank.lz) ||
-      upper.colAt(bank.lx, bank.lz) ||
-      upper.cellKind[cIdx(bank.lx, bank.lz)] !== CELL_LOBBY
-    ) {
-      reasons.push('invalid bridge bank')
-      break
+  for (let x = bounds.x0; x <= bounds.x1; x++) {
+    const gx = chunkGX + x
+    const bridgeEnd = bridge !== null && room.bridgeAxis === 'z' && gx === bridge
+    if (chunkGZ + bounds.z0 === global.z0) {
+      ;(bridgeEnd ? expectedMouths : expectedWindows)
+        .add(multilevelEdgeKey('h', bounds.z0, x))
+    }
+    if (chunkGZ + bounds.z1 === global.z1) {
+      ;(bridgeEnd ? expectedMouths : expectedWindows)
+        .add(multilevelEdgeKey('h', bounds.z1 + 1, x))
+    }
+  }
+  for (const { lx, lz } of geometry.expectedBridgeCells) {
+    if (room.bridgeAxis === 'x') {
+      expectedRails.add(multilevelEdgeKey('h', lz, lx))
+      expectedRails.add(multilevelEdgeKey('h', lz + 1, lx))
+    } else {
+      expectedRails.add(multilevelEdgeKey('v', lx, lz))
+      expectedRails.add(multilevelEdgeKey('v', lx + 1, lz))
     }
   }
 
-  for (const key of expectedWindows) {
-    const [axis, coords] = key.split(':')
-    const [line, cell] = coords.split(',').map(Number)
-    const s = state(upper, axis, line, cell)
-    if (s.wall !== 1 || s.passage !== PASSAGE_WALL || s.feature !== WALL_WINDOW) {
-      reasons.push('invalid observation window')
-      break
+  const verifyEdges = (keys, expected, reason) => {
+    for (const key of keys) {
+      const [axis, coordinates] = key.split(':')
+      const [line, cell] = coordinates.split(',').map(Number)
+      const state = multilevelEdgeState(upper, axis, line, cell)
+      if (
+        state.wall !== expected.wall ||
+        state.passage !== expected.passage ||
+        state.feature !== expected.feature
+      ) {
+        reasons.push(reason)
+        break
+      }
     }
   }
-  for (const key of expectedRails) {
-    const [axis, coords] = key.split(':')
-    const [line, cell] = coords.split(',').map(Number)
-    const s = state(upper, axis, line, cell)
-    if (s.wall !== 1 || s.passage !== PASSAGE_WALL || s.feature !== WALL_RAIL) {
-      reasons.push('invalid bridge guard')
-      break
+  verifyEdges(
+    expectedWindows,
+    { wall: 1, passage: PASSAGE_WALL, feature: WALL_WINDOW },
+    'invalid observation window'
+  )
+  verifyEdges(
+    expectedRails,
+    { wall: 1, passage: PASSAGE_WALL, feature: WALL_RAIL },
+    'invalid bridge guard'
+  )
+  verifyEdges(
+    expectedMouths,
+    { wall: 0, passage: PASSAGE_WIDE, feature: WALL_PLAIN },
+    'invalid bridge approach'
+  )
+
+  // Every longitudinal edge that is owned inside this chunk must stay open.
+  // The one edge crossing a participant boundary is checked by the group pass.
+  if (bridge !== null) {
+    if (room.bridgeAxis === 'x') {
+      for (let x = bounds.x0 + 1; x <= bounds.x1; x++) {
+        if (multilevelEdgeState(upper, 'v', x, room.bridgeLine).wall !== 0) {
+          reasons.push('blocked bridge deck')
+          break
+        }
+      }
+    } else {
+      for (let z = bounds.z0 + 1; z <= bounds.z1; z++) {
+        if (multilevelEdgeState(upper, 'h', z, room.bridgeLine).wall !== 0) {
+          reasons.push('blocked bridge deck')
+          break
+        }
+      }
     }
-  }
-  for (const key of expectedMouths) {
-    const [axis, coords] = key.split(':')
-    const [line, cell] = coords.split(',').map(Number)
-    const s = state(upper, axis, line, cell)
-    if (s.wall !== 0 || s.passage !== PASSAGE_WIDE || s.feature !== WALL_PLAIN) {
-      reasons.push('invalid bridge approach')
-      break
+
+    // Validate only the true global endpoints. A clipped chunk boundary in
+    // the middle of a long bridge is a seam, not a bank.
+    const banks = room.bridgeAxis === 'x'
+      ? [
+          { gx: global.x0 - 1, gz: bridge },
+          { gx: global.x1 + 1, gz: bridge },
+        ]
+      : [
+          { gx: bridge, gz: global.z0 - 1 },
+          { gx: bridge, gz: global.z1 + 1 },
+        ]
+    for (const bank of banks) {
+      const lx = bank.gx - chunkGX
+      const lz = bank.gz - chunkGZ
+      if (lx < 0 || lx >= CHUNK || lz < 0 || lz >= CHUNK) continue
+      if (
+        upper.hasFloorHole(lx, lz) ||
+        upper.colAt(lx, lz) ||
+        upper.cellKind[cIdx(lx, lz)] !== CELL_LOBBY
+      ) {
+        reasons.push('invalid bridge bank')
+        break
+      }
     }
   }
 
-  // No feature-marked edge may exist outside the room-derived sets. This is
-  // the audit-level proof that ordinary partitions never become windows.
+  // No feature-marked edge may exist outside this floor's expected global
+  // perimeter/bridge sets. Internal participant seams are therefore always
+  // plain, even when the local slice happens to end at a chunk border.
   for (let cell = 0; cell < CHUNK; cell++) {
     for (let line = 0; line < CHUNK; line++) {
       const vf = upper.wallFeatureVAt(line, cell)
       const hf = upper.wallFeatureHAt(cell, line)
       if (vf !== WALL_PLAIN) {
-        const key = edgeKey('v', line, cell)
+        const key = multilevelEdgeKey('v', line, cell)
         if (
           (vf !== WALL_WINDOW || !expectedWindows.has(key)) &&
           (vf !== WALL_RAIL || !expectedRails.has(key))
         ) reasons.push('window or rail outside its multilevel room')
       }
       if (hf !== WALL_PLAIN) {
-        const key = edgeKey('h', line, cell)
+        const key = multilevelEdgeKey('h', line, cell)
         if (
           (hf !== WALL_WINDOW || !expectedWindows.has(key)) &&
           (hf !== WALL_RAIL || !expectedRails.has(key))
@@ -677,22 +917,164 @@ function multilevelRoomErrors(lower, upper, room) {
   return [...new Set(reasons)]
 }
 
-// A bounded live/debug patch may begin on an upper atrium floor and omit the
-// lower owner by design. Validate every upper-local invariant anyway by
-// supplying a canonical lower semantic view derived from the descriptor; only
-// cross-slab pairing/connectivity remains outside the patch's authority.
-function multilevelUpperBoundaryErrors(upper, room) {
-  const voidCells = new Set(room?.voidCells?.map((cell) => `${cell.lx},${cell.lz}`) || [])
-  const cellKind = new Uint8Array(CHUNK * CHUNK).fill(CELL_ATRIUM)
-  const spaceId = new Uint32Array(CHUNK * CHUNK).fill(room?.id || 0)
-  const lower = {
-    cy: room?.baseCy,
-    cellKind,
-    spaceId,
-    colAt: () => 0,
-    hasCeilHole: (lx, lz) => voidCells.has(`${lx},${lz}`),
+function multilevelPairErrors(lower, upper, roomUp, roomDown) {
+  return [...new Set([
+    ...multilevelLowerHalfErrors(lower, roomUp),
+    ...multilevelSurfaceErrors(upper, roomDown),
+  ])]
+}
+
+function chunkIntersectsGlobalBounds(data, bounds) {
+  if (!validBounds(bounds)) return false
+  const x0 = data.cx * CHUNK
+  const z0 = data.cz * CHUNK
+  return bounds.x0 <= x0 + CHUNK - 1 && bounds.x1 >= x0 &&
+    bounds.z0 <= z0 + CHUNK - 1 && bounds.z1 >= z0
+}
+
+// Cross-slice invariants are checked only where this patch has enough
+// authority: both chunks for a slab before reporting a missing participant,
+// and both upper participant chunks before inspecting an owned bridge seam.
+// This keeps a streaming boundary from looking like corrupt world data.
+function auditMultilevelStructureGroups(chunks) {
+  const groups = new Map()
+  let slices = 0
+  for (const [key, data] of chunks) {
+    const [cx, cy, cz] = key.split(',').map(Number)
+    for (const [half, slice] of [
+      ['up', data.multilevelUp],
+      ['down', data.multilevelDown],
+    ]) {
+      if (!slice) continue
+      slices++
+      if (!Number.isInteger(slice.id) || slice.id <= 0) continue
+      let group = groups.get(slice.id)
+      if (!group) groups.set(slice.id, (group = []))
+      group.push({ cx, cy, cz, half, slice })
+    }
   }
-  return multilevelRoomErrors(lower, upper, room)
+
+  const missing = []
+  const closed = []
+  const details = []
+  const missingKeys = new Set()
+  const closedKeys = new Set()
+  const key3 = (cx, cy, cz) => `${cx},${cy},${cz}`
+
+  for (const [id, records] of groups) {
+    const canonical = records[0].slice
+    const reasons = new Set()
+    for (const { slice } of records.slice(1)) {
+      if (
+        slice.baseCy !== canonical.baseCy ||
+        slice.topCy !== canonical.topCy ||
+        slice.kind !== canonical.kind ||
+        slice.bridgeAxis !== canonical.bridgeAxis ||
+        !boundsEqual(slice.globalBounds, canonical.globalBounds)
+      ) reasons.add('inconsistent structure descriptor')
+    }
+
+    const recordsBySlab = new Map()
+    for (const record of records) {
+      if (!Number.isInteger(record.slice.lowerCy)) continue
+      let slab = recordsBySlab.get(record.slice.lowerCy)
+      if (!slab) recordsBySlab.set(record.slice.lowerCy, (slab = []))
+      slab.push(record)
+    }
+    for (const [lowerCy, slab] of recordsBySlab) {
+      const first = slab[0].slice
+      if (slab.some(({ slice }) =>
+        slice.levelCy !== first.levelCy ||
+        slice.globalBridgeLine !== first.globalBridgeLine
+      )) reasons.add(`inconsistent slab descriptor at ${lowerCy}`)
+    }
+
+    const global = canonical.globalBounds
+    if (
+      Number.isInteger(canonical.baseCy) &&
+      Number.isInteger(canonical.topCy) &&
+      canonical.baseCy < canonical.topCy &&
+      validBounds(global)
+    ) {
+      // Iterate loaded slab owners instead of the possibly corrupted global
+      // coordinate range. It is both bounded and exactly expresses the rule
+      // that absent chunks outside this patch are not audit participants.
+      for (const [key, lower] of chunks) {
+        const [cx, lowerCy, cz] = key.split(',').map(Number)
+        if (lowerCy < canonical.baseCy || lowerCy >= canonical.topCy) continue
+        const upper = chunks.get(key3(cx, lowerCy + 1, cz))
+        if (!upper || !chunkIntersectsGlobalBounds(lower, global)) continue
+        const up = lower.multilevelUp
+        const down = upper.multilevelDown
+        if (
+          up?.id === id && down?.id === id &&
+          up.lowerCy === lowerCy && down.lowerCy === lowerCy
+        ) continue
+        const missingKey = `${id}:${cx},${lowerCy},${cz}`
+        if (missingKeys.has(missingKey)) continue
+        missingKeys.add(missingKey)
+        missing.push({ id, cx, cy: lowerCy, cz })
+        reasons.add('missing loaded participant slice')
+      }
+    }
+
+    // Inspect each observed bridge slab once. Local bridge validation covers
+    // every longitudinal edge except a chunk crossing, whose owner is the
+    // east/south chunk's line zero.
+    for (const [lowerCy, slab] of recordsBySlab) {
+      const slice = slab[0].slice
+      const line = slice.globalBridgeLine
+      const globalBounds = slice.globalBounds
+      const levelCy = lowerCy + 1
+      if (line === null || !Number.isInteger(line) || !validBounds(globalBounds)) continue
+      if (slice.bridgeAxis === 'x') {
+        const cz = Math.floor(line / CHUNK)
+        for (
+          let lineGX = (Math.floor(globalBounds.x0 / CHUNK) + 1) * CHUNK;
+          lineGX <= globalBounds.x1;
+          lineGX += CHUNK
+        ) {
+          const west = chunks.get(key3(Math.floor((lineGX - 1) / CHUNK), levelCy, cz))
+          const east = chunks.get(key3(Math.floor(lineGX / CHUNK), levelCy, cz))
+          if (!west || !east) continue
+          if (east.vAt(0, line - cz * CHUNK) === 0) continue
+          const closedKey = `${id}:${lowerCy}:v:${lineGX},${line}`
+          if (closedKeys.has(closedKey)) continue
+          closedKeys.add(closedKey)
+          closed.push({ id, lowerCy, levelCy, axis: 'v', line: lineGX, cell: line })
+          reasons.add('closed bridge seam')
+        }
+      } else if (slice.bridgeAxis === 'z') {
+        const cx = Math.floor(line / CHUNK)
+        for (
+          let lineGZ = (Math.floor(globalBounds.z0 / CHUNK) + 1) * CHUNK;
+          lineGZ <= globalBounds.z1;
+          lineGZ += CHUNK
+        ) {
+          const north = chunks.get(key3(cx, levelCy, Math.floor((lineGZ - 1) / CHUNK)))
+          const south = chunks.get(key3(cx, levelCy, Math.floor(lineGZ / CHUNK)))
+          if (!north || !south) continue
+          if (south.hAt(line - cx * CHUNK, 0) === 0) continue
+          const closedKey = `${id}:${lowerCy}:h:${line},${lineGZ}`
+          if (closedKeys.has(closedKey)) continue
+          closedKeys.add(closedKey)
+          closed.push({ id, lowerCy, levelCy, axis: 'h', line: lineGZ, cell: line })
+          reasons.add('closed bridge seam')
+        }
+      }
+    }
+
+    if (reasons.size > 0) details.push({ id, reasons: [...reasons] })
+  }
+
+  return {
+    structures: groups.size,
+    slices,
+    invalid: details.length,
+    missing,
+    closed,
+    details,
+  }
 }
 
 function canonicalLinkErrors(lower, upper, stair) {

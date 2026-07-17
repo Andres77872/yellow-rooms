@@ -5,6 +5,8 @@ import { buildChunkMeshes } from '../mesh.js'
 import { DEFAULT_WORLD_CONFIG } from '../config.js'
 import { createGeometries, disposeGeometries } from '../../render/geometries.js'
 import {
+  BRIDGE_BEAM_H,
+  BRIDGE_BEAM_W,
   BRIDGE_GUARD_H,
   CELL,
   CHUNK,
@@ -18,10 +20,35 @@ import {
   layerY,
 } from '../constants.js'
 import { WALL_RAIL, WALL_WINDOW } from '../mapTypes.js'
+import { multilevelConfig, multilevelContract } from '../multilevel.js'
 
-const cfg = {
-  ...DEFAULT_WORLD_CONFIG,
-  stairs: { ...DEFAULT_WORLD_CONFIG.stairs, chance: 1 },
+const cfg = structuredClone(DEFAULT_WORLD_CONFIG)
+cfg.stairs.chance = 1
+cfg.multilevel.enabled = false
+
+function structureConfig(kind = 'bridged', levels = 6) {
+  const config = structuredClone(DEFAULT_WORLD_CONFIG)
+  config.multilevel.bridgeChance = kind === 'bridged' ? 1 : 0
+  config.multilevel.minLevels = levels
+  config.multilevel.maxLevels = levels
+  return config
+}
+
+function districtStructure(seed, districtX, districtZ, baseCy, config) {
+  const K = multilevelConfig(config).districtChunks
+  for (let dz = 0; dz < K; dz++) {
+    for (let dx = 0; dx < K; dx++) {
+      const structure = multilevelContract(
+        seed,
+        districtX * K + dx,
+        districtZ * K + dz,
+        baseCy,
+        config
+      )
+      if (structure.hasRoom) return structure
+    }
+  }
+  throw new Error('expected structure')
 }
 
 function materials() {
@@ -52,6 +79,25 @@ function horizontalArea(geometry, normalY) {
   const ac = new THREE.Vector3()
   for (let i = 0; i < p.count; i += 3) {
     if (Math.sign(n.getY(i)) !== Math.sign(normalY)) continue
+    a.fromBufferAttribute(p, i)
+    b.fromBufferAttribute(p, i + 1)
+    c.fromBufferAttribute(p, i + 2)
+    area += ab.subVectors(b, a).cross(ac.subVectors(c, a)).length() * 0.5
+  }
+  return area
+}
+
+function fasciaArea(geometry) {
+  const p = geometry.attributes.position
+  const n = geometry.attributes.normal
+  let area = 0
+  const a = new THREE.Vector3()
+  const b = new THREE.Vector3()
+  const c = new THREE.Vector3()
+  const ab = new THREE.Vector3()
+  const ac = new THREE.Vector3()
+  for (let i = 0; i < p.count; i += 3) {
+    if (Math.abs(n.getY(i)) > 1e-6) continue
     a.fromBufferAttribute(p, i)
     b.fromBufferAttribute(p, i + 1)
     c.fromBufferAttribute(p, i + 2)
@@ -117,45 +163,68 @@ describe('3D chunk mesh / slab ownership', () => {
     material.dispose()
   })
 
-  it('meshes an irregular atrium mask around its retained bridge without sealing it', () => {
+  it('meshes one global bridge aperture across two chunks without seam fascia', () => {
     const geom = createGeometries()
     const { material, all } = materials()
-    const lowerData = buildChunk(1337, 2, 0, -7, DEFAULT_WORLD_CONFIG)
-    const upperData = buildChunk(1337, 2, 1, -7, DEFAULT_WORLD_CONFIG)
-    const room = lowerData.multilevelUp
-    expect(room).not.toBeNull()
-    expect(upperData.multilevelDown).toEqual(room)
+    const config = structureConfig('bridged', 6)
+    const seed = 1337
+    const structure = districtStructure(seed, 0, -2, 0, config)
+    const levelCy = structure.bridgeLevels[0]
+    const lowerCy = levelCy - 1
+    const lowerMeshes = []
+    const upperMeshes = []
+    const holes = new Set()
+    let horizontalCeiling = 0
+    let horizontalFloor = 0
+    let actualFascia = 0
+    for (const { cx, cz } of structure.participants) {
+      const lowerData = buildChunk(seed, cx, lowerCy, cz, config)
+      const upperData = buildChunk(seed, cx, levelCy, cz, config)
+      expect(upperData.multilevelDown).toEqual(lowerData.multilevelUp)
+      for (const { lx, lz } of lowerData.multilevelUp.voidCells) {
+        holes.add(`${cx * CHUNK + lx},${cz * CHUNK + lz}`)
+      }
+      const lower = buildChunkMeshes(
+        lowerData,
+        geom,
+        all,
+        cx * CHUNK_WORLD,
+        layerY(lowerCy),
+        cz * CHUNK_WORLD
+      )
+      const upper = buildChunkMeshes(
+        upperData,
+        geom,
+        all,
+        cx * CHUNK_WORLD,
+        layerY(levelCy),
+        cz * CHUNK_WORLD
+      )
+      lowerMeshes.push(lower)
+      upperMeshes.push(upper)
+      horizontalCeiling += horizontalArea(lower.group.children[1].geometry, -1)
+      horizontalFloor += horizontalArea(upper.group.children[0].geometry, 1)
+      actualFascia += fasciaArea(lower.group.children[1].geometry)
+    }
+    const expectedArea =
+      2 * CHUNK_WORLD * CHUNK_WORLD - holes.size * CELL * CELL
+    expect(horizontalCeiling).toBeCloseTo(expectedArea, 6)
+    expect(horizontalFloor).toBeCloseTo(expectedArea, 6)
 
-    const lower = buildChunkMeshes(lowerData, geom, all, 0, 0, 0)
-    const upper = buildChunkMeshes(upperData, geom, all, 0, LAYER_H, 0)
-    const expectedArea = CHUNK_WORLD * CHUNK_WORLD - room.voidCells.length * CELL * CELL
-    expect(horizontalArea(lower.group.children[1].geometry, -1)).toBeCloseTo(expectedArea, 6)
-    expect(horizontalArea(upper.group.children[0].geometry, 1)).toBeCloseTo(expectedArea, 6)
-
-    // Each hole/solid cell edge owns one vertical slab fascia. Bridge sides
-    // count as solid boundaries, proving the two void lobes were not collapsed
-    // into the old bounding rectangle.
-    const holes = new Set(room.voidCells.map(({ lx, lz }) => `${lx},${lz}`))
+    // Count boundaries in GLOBAL coordinates. No edge at the participant seam
+    // is counted when the void continues on its other side.
     let boundaryEdges = 0
-    for (const { lx, lz } of room.voidCells) {
+    for (const key of holes) {
+      const [gx, gz] = key.split(',').map(Number)
       for (const [dx, dz] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
-        if (!holes.has(`${lx + dx},${lz + dz}`)) boundaryEdges++
+        if (!holes.has(`${gx + dx},${gz + dz}`)) boundaryEdges++
       }
     }
-    const ceiling = lower.group.children[1].geometry
-    const p = ceiling.attributes.position
-    const n = ceiling.attributes.normal
-    let fasciaArea = 0
-    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3()
-    const ab = new THREE.Vector3(), ac = new THREE.Vector3()
-    for (let i = 0; i < p.count; i += 3) {
-      if (Math.abs(n.getY(i)) > 1e-6) continue
-      a.fromBufferAttribute(p, i); b.fromBufferAttribute(p, i + 1); c.fromBufferAttribute(p, i + 2)
-      fasciaArea += ab.subVectors(b, a).cross(ac.subVectors(c, a)).length() * 0.5
-    }
-    expect(fasciaArea).toBeCloseTo(boundaryEdges * CELL * SLAB_T, 4)
+    expect(actualFascia).toBeCloseTo(boundaryEdges * CELL * SLAB_T, 4)
 
-    lower.dispose(); upper.dispose(); disposeGeometries(geom); material.dispose()
+    for (const mesh of [...lowerMeshes, ...upperMeshes]) mesh.dispose()
+    disposeGeometries(geom)
+    material.dispose()
   })
 
   it('replaces feature walls with window openings and low bridge guards', () => {
@@ -173,9 +242,26 @@ describe('3D chunk mesh / slab ownership', () => {
       panelDead: surface,
       exit: surface,
     }
-    const data = buildChunk(1337, 2, 1, -7, DEFAULT_WORLD_CONFIG)
+    const config = structureConfig('bridged', 6)
+    const seed = 1337
+    const structure = districtStructure(seed, 0, -2, 0, config)
+    const levelCy = structure.bridgeLevels[0]
+    const host = structure.participants.find(({ cx, cz }) => {
+      const data = buildChunk(seed, cx, levelCy, cz, config)
+      return data.wallFeatureV.includes(WALL_WINDOW) &&
+        (data.wallFeatureV.includes(WALL_RAIL) || data.wallFeatureH.includes(WALL_RAIL))
+    })
+    expect(host).toBeTruthy()
+    const data = buildChunk(seed, host.cx, levelCy, host.cz, config)
     expect(data.multilevelDown).not.toBeNull()
-    const mesh = buildChunkMeshes(data, geom, all, 0, LAYER_H, 0)
+    const mesh = buildChunkMeshes(
+      data,
+      geom,
+      all,
+      host.cx * CHUNK_WORLD,
+      layerY(levelCy),
+      host.cz * CHUNK_WORLD
+    )
     const walls = mesh.group.children.find((child) => child.isInstancedMesh && child.material === wallpaper)
     expect(walls).toBeTruthy()
 
@@ -219,5 +305,60 @@ describe('3D chunk mesh / slab ownership', () => {
     expect(railHeights[0]).toBeCloseTo(BRIDGE_GUARD_H, 5)
 
     mesh.dispose(); disposeGeometries(geom); wallpaper.dispose(); trim.dispose(); surface.dispose()
+  })
+
+  it('continues both support beams across the chunk seam and omits them for open shafts', () => {
+    const geom = createGeometries()
+    const { material, all } = materials()
+    const seed = 771
+    const bridgedConfig = structureConfig('bridged', 6)
+    const bridged = districtStructure(seed, -1, 1, 0, bridgedConfig)
+    const lowerCy = bridged.bridgeLevels[0] - 1
+    let beams = 0
+    let alongLength = 0
+
+    for (const { cx, cz } of bridged.participants) {
+      const data = buildChunk(seed, cx, lowerCy, cz, bridgedConfig)
+      const mesh = buildChunkMeshes(data, geom, all, 0, layerY(lowerCy), 0)
+      const walls = mesh.group.children.find((child) => child.isInstancedMesh)
+      const matrix = new THREE.Matrix4()
+      const position = new THREE.Vector3()
+      const quaternion = new THREE.Quaternion()
+      const scale = new THREE.Vector3()
+      for (let i = 0; i < walls.count; i++) {
+        walls.getMatrixAt(i, matrix)
+        matrix.decompose(position, quaternion, scale)
+        if (Math.abs(scale.y - BRIDGE_BEAM_H) > 1e-6) continue
+        const cross = bridged.bridgeAxis === 'x' ? scale.z : scale.x
+        if (Math.abs(cross - BRIDGE_BEAM_W) > 1e-6) continue
+        beams++
+        alongLength += bridged.bridgeAxis === 'x' ? scale.x : scale.z
+      }
+      mesh.dispose()
+    }
+    expect(beams).toBe(4)
+    expect(alongLength).toBeCloseTo(bridged.longSpan * CELL * 2, 6)
+
+    const openConfig = structureConfig('openVoid', 6)
+    const open = districtStructure(seed, 1, -2, 0, openConfig)
+    for (const { cx, cz } of open.participants) {
+      const data = buildChunk(seed, cx, open.baseCy, cz, openConfig)
+      const mesh = buildChunkMeshes(data, geom, all, 0, layerY(open.baseCy), 0)
+      const walls = mesh.group.children.find((child) => child.isInstancedMesh)
+      const matrix = new THREE.Matrix4()
+      const position = new THREE.Vector3()
+      const quaternion = new THREE.Quaternion()
+      const scale = new THREE.Vector3()
+      let found = 0
+      for (let i = 0; i < walls.count; i++) {
+        walls.getMatrixAt(i, matrix)
+        matrix.decompose(position, quaternion, scale)
+        if (Math.abs(scale.y - BRIDGE_BEAM_H) < 1e-6) found++
+      }
+      expect(found).toBe(0)
+      mesh.dispose()
+    }
+    disposeGeometries(geom)
+    material.dispose()
   })
 })

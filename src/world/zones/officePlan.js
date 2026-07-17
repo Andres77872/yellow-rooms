@@ -305,12 +305,11 @@ function collectStairLobbies(plan, seed, config, context) {
   return out
 }
 
-// Reserve multilevel-room circulation before BSP allocation. The physical
-// stamp still owns slab holes/windows/guards, but both office floors now plan
-// their approaches around one shared vertical contract: the lower floor keeps
-// the wide hall open; the upper floor keeps its gallery ring and bridge deck
-// out of ordinary rooms. Opposite bridge banks become mandatory circulation
-// endpoints on both levels.
+// Reserve tall-structure circulation before BSP allocation. Each floor plans
+// one local slice of the global two-chunk footprint: the bottom keeps its open
+// hall, while higher levels keep the gallery ring and the current floor's
+// bridge (if any) out of ordinary rooms. Global endpoint cells become routed
+// approaches; bridge-less galleries use the same two axial ring entries.
 function collectMultilevelLobbies(plan, seed, config, context) {
   const ctx = layerContext(seed, context)
   const n = officePlanConfig(config).districtChunks
@@ -323,44 +322,60 @@ function collectMultilevelLobbies(plan, seed, config, context) {
       const cx = plan.dx * n + localCx
       const cz = plan.dz * n + localCz
       const contracts = chunkMultilevelRooms(ctx.rootSeed, cx, cz, ctx.cy, config)
-      for (const kind of ['up', 'down']) {
-        const room = contracts[kind]
-        if (!room.hasRoom) continue
-        const { x0, z0, x1, z1 } = room.bounds
-        const cells = []
-        const add = (lx, lz) => {
-          if (lx < 0 || lx >= CHUNK || lz < 0 || lz >= CHUNK) return
-          const i = idx(plan.size, chunkX0 + lx, chunkZ0 + lz)
-          if (plan.active[i]) cells.push(i)
-        }
-        if (kind === 'up') {
-          for (let lz = z0 - 1; lz <= z1 + 1; lz++) {
-            for (let lx = x0 - 1; lx <= x1 + 1; lx++) add(lx, lz)
-          }
-        } else {
-          // Upper gallery: reserve the perimeter ring and bridge, never the
-          // non-walkable void cells themselves.
-          for (let lz = z0 - 1; lz <= z1 + 1; lz++) {
-            for (let lx = x0 - 1; lx <= x1 + 1; lx++) {
-              const ring = lx < x0 || lx > x1 || lz < z0 || lz > z1
-              const bridge = room.bridgeAxis === 'x'
-                ? lz === room.bridgeLine && lx >= x0 && lx <= x1
-                : lx === room.bridgeLine && lz >= z0 && lz <= z1
-              if (ring || bridge) add(lx, lz)
-            }
-          }
-        }
-        const mouths = room.bridgeAxis === 'x'
-          ? [
-              { x: chunkX0 + x0 - 1, z: chunkZ0 + room.bridgeLine },
-              { x: chunkX0 + x1 + 1, z: chunkZ0 + room.bridgeLine },
-            ]
-          : [
-              { x: chunkX0 + room.bridgeLine, z: chunkZ0 + z0 - 1 },
-              { x: chunkX0 + room.bridgeLine, z: chunkZ0 + z1 + 1 },
-            ]
-        out.push({ kind, cx, cy: ctx.cy, cz, cells: [...new Set(cells)], mouths, room })
+      const { structure } = contracts
+      if (!structure.hasRoom) continue
+      const room = contracts.down.hasRoom ? contracts.down : contracts.up
+      const { x0, z0, x1, z1 } = room.localBounds
+      const cells = []
+      const add = (lx, lz) => {
+        if (lx < 0 || lx >= CHUNK || lz < 0 || lz >= CHUNK) return
+        const i = idx(plan.size, chunkX0 + lx, chunkZ0 + lz)
+        if (plan.active[i]) cells.push(i)
       }
+      const bottom = ctx.cy === structure.baseCy
+      for (let lz = z0 - 1; lz <= z1 + 1; lz++) {
+        for (let lx = x0 - 1; lx <= x1 + 1; lx++) {
+          const ring = lx < x0 || lx > x1 || lz < z0 || lz > z1
+          const bridge = room.bridgeCells.some(
+            (cell) => cell.lx === lx && cell.lz === lz
+          )
+          if (bottom || ring || bridge) add(lx, lz)
+        }
+      }
+
+      const global = structure.globalBounds
+      const approachLine = room.globalBridgeLine ?? structure.centerLines[0] ?? (
+        structure.bridgeAxis === 'x'
+          ? Math.floor((global.z0 + global.z1) / 2)
+          : Math.floor((global.x0 + global.x1) / 2)
+      )
+      const globalMouths = structure.bridgeAxis === 'x'
+        ? [
+            { gx: global.x0 - 1, gz: approachLine },
+            { gx: global.x1 + 1, gz: approachLine },
+          ]
+        : [
+            { gx: approachLine, gz: global.z0 - 1 },
+            { gx: approachLine, gz: global.z1 + 1 },
+          ]
+      const mouths = []
+      for (const mouth of globalMouths) {
+        const lx = mouth.gx - cx * CHUNK
+        const lz = mouth.gz - cz * CHUNK
+        if (lx < 0 || lx >= CHUNK || lz < 0 || lz >= CHUNK) continue
+        const x = chunkX0 + lx
+        const z = chunkZ0 + lz
+        if (plan.active[idx(plan.size, x, z)]) mouths.push({ x, z })
+      }
+      out.push({
+        kind: bottom ? 'bottom' : room.bridgeCells.length ? 'bridge' : 'gallery',
+        cx,
+        cy: ctx.cy,
+        cz,
+        cells: [...new Set(cells)],
+        mouths,
+        room,
+      })
     }
   }
   return out

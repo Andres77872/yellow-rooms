@@ -9,7 +9,11 @@ import { countChunkComponents } from '../topology.js'
 const CFG = DEFAULT_WORLD_CONFIG
 
 // Force stairs everywhere so every chunk exercises both stamps.
-const denseCfg = (base = CFG) => ({ ...base, stairs: { ...base.stairs, chance: 1 } })
+const denseCfg = (base = CFG) => ({
+  ...base,
+  stairs: { ...base.stairs, chance: 1 },
+  multilevel: { ...base.multilevel, enabled: false },
+})
 
 const horizontal = (dir) => dir === STAIR_E || dir === STAIR_W
 

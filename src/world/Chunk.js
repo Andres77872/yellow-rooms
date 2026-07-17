@@ -27,6 +27,7 @@ export class Chunk {
     this.exitWorld = mesh.exitWorld
     this._mesh = mesh
     this.stairCells = buildStairCells(this.data, cx, cy, cz)
+    this.multilevelStructure = this.data.multilevelStructure
 
     // Vertical openings through this chunk's CEILING (slab cy). Stairs expose
     // a point-like centre; multilevel rooms expose the exact two void lobes on
@@ -56,16 +57,24 @@ export class Chunk {
       const maxX = cx * CHUNK_WORLD + (x1 + 1) * CELL
       const minZ = cz * CHUNK_WORLD + z0 * CELL
       const maxZ = cz * CHUNK_WORLD + (z1 + 1) * CELL
-      const split = room.bridgeLine
-      const regions = room.bridgeAxis === 'x'
-        ? [
-            { minX, maxX, minZ, maxZ: cz * CHUNK_WORLD + split * CELL },
-            { minX, maxX, minZ: cz * CHUNK_WORLD + (split + 1) * CELL, maxZ },
-          ]
-        : [
-            { minX, maxX: cx * CHUNK_WORLD + split * CELL, minZ, maxZ },
-            { minX: cx * CHUNK_WORLD + (split + 1) * CELL, maxX, minZ, maxZ },
-          ]
+      let regions
+      if (room.globalBridgeLine === null) {
+        regions = [{ minX, maxX, minZ, maxZ }]
+      } else if (room.bridgeAxis === 'x') {
+        const split0 = cz * CHUNK_WORLD + room.bridgeLine * CELL
+        const split1 = split0 + CELL
+        regions = [
+          { minX, maxX, minZ, maxZ: split0 },
+          { minX, maxX, minZ: split1, maxZ },
+        ].filter((region) => region.minZ < region.maxZ)
+      } else {
+        const split0 = cx * CHUNK_WORLD + room.bridgeLine * CELL
+        const split1 = split0 + CELL
+        regions = [
+          { minX, maxX: split0, minZ, maxZ },
+          { minX: split1, maxX, minZ, maxZ },
+        ].filter((region) => region.minX < region.maxX)
+      }
       this.apertures.push({
         kind: 'multilevel',
         id: room.id,
@@ -76,7 +85,10 @@ export class Chunk {
         minZ,
         maxZ,
         regions,
-        lowerCy: room.baseCy,
+        lowerCy: room.lowerCy,
+        baseCy: room.baseCy,
+        topCy: room.topCy,
+        structureKind: room.kind,
       })
     }
   }

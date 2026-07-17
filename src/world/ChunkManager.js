@@ -22,11 +22,79 @@ import {
 } from './constants.js'
 import { DEFAULT_WORLD_CONFIG } from './config.js'
 import { slabContract } from './slab.js'
-import { multilevelContract } from './multilevel.js'
+import { chunkMultilevelRooms } from './multilevel.js'
 import { Chunk } from './Chunk.js'
 import { wallFeatureSeesThrough } from './mapTypes.js'
 
 const HUB = (CHUNK / 2) | 0
+
+function structureParticipants(structure) {
+  const participants = structure?.participants ?? structure?.participantChunks
+  if (!Array.isArray(participants)) return []
+  return participants.filter(
+    (participant) =>
+      Number.isInteger(participant?.cx) && Number.isInteger(participant?.cz)
+  )
+}
+
+// Runtime structure descriptors come from deterministic generation, but queue
+// entries can live across floor/position changes. Validate all fields used by
+// streaming before allowing a tagged request to widen the ordinary load box.
+function validStructure(structure) {
+  return !!(
+    structure &&
+    structure.hasRoom !== false &&
+    (Number.isInteger(structure.id) ||
+      (typeof structure.id === 'string' && structure.id.length > 0)) &&
+    Number.isInteger(structure.baseCy) &&
+    Number.isInteger(structure.topCy) &&
+    structure.topCy >= structure.baseCy &&
+    structureParticipants(structure).length
+  )
+}
+
+function structureSpansFloor(structure, cy) {
+  return validStructure(structure) && cy >= structure.baseCy && cy <= structure.topCy
+}
+
+function structureHasParticipant(structure, cx, cz) {
+  return structureParticipants(structure).some(
+    (participant) => participant?.cx === cx && participant?.cz === cz
+  )
+}
+
+function chunkStructure(chunk) {
+  return chunk?.multilevelStructure ?? chunk?.data?.multilevelStructure ?? null
+}
+
+function chunkSharesStructure(chunk, cy) {
+  const structure = chunkStructure(chunk)
+  return !!(
+    structureSpansFloor(structure, cy) &&
+    chunk.cy >= structure.baseCy &&
+    chunk.cy <= structure.topCy &&
+    structureHasParticipant(structure, chunk.cx, chunk.cz)
+  )
+}
+
+function tagStructureRequest(request, structure) {
+  request.structureRequest = true
+  request.structure = structure
+  return request
+}
+
+function clearStructureRequest(request) {
+  delete request.structureRequest
+  delete request.structure
+  return request
+}
+
+function apertureRegistryKey(cx, cy, cz, aperture) {
+  const lowerCy = Number.isInteger(aperture.lowerCy) ? aperture.lowerCy : cy
+  // Tall structures reuse one id on every slab and in both participant chunks;
+  // both coordinates and the owning slab therefore belong to the identity.
+  return `${aperture.kind}:${aperture.id}:${cx},${lowerCy},${cz}`
+}
 
 // Streaming priority is intentionally a tuple rather than relying on loop /
 // stable-sort insertion order. Close chunks build first; at equal effective
@@ -41,7 +109,7 @@ function prioritizeRequest(request, seed, config, pcx, pcy, pcz) {
   const lowerCy = Math.min(request.cy, pcy)
   const verticalOpening = dy === 1 && (
     slabContract(seed, request.cx, request.cz, lowerCy, config).hasStair ||
-    multilevelContract(seed, request.cx, request.cz, lowerCy, config).hasRoom
+    chunkMultilevelRooms(seed, request.cx, request.cz, lowerCy, config).up.hasRoom
   )
 
   request.d = xzDistance + (dy !== 0 && !verticalOpening ? 2 : 0)
@@ -83,6 +151,11 @@ export class ChunkManager {
     // Last visibility inputs (re-applied to newly built chunks).
     this._visCy = 0
     this._visStair = null
+    // Current streaming origin. _buildNext() uses this while prewarm drains
+    // transitively-added tall-structure work.
+    this._streamPcx = null
+    this._streamPcy = null
+    this._streamPcz = null
   }
 
   setSeed(seed) {
@@ -112,6 +185,130 @@ export class ChunkManager {
     // floor change.
     this._visCy = 0
     this._visStair = null
+    this._streamPcx = null
+    this._streamPcy = null
+    this._streamPcz = null
+  }
+
+  _normalRequestRelevant(request, pcx, pcy, pcz) {
+    return (
+      Math.abs(request.cx - pcx) <= LOAD_RADIUS &&
+      Math.abs(request.cz - pcz) <= LOAD_RADIUS &&
+      Math.abs(request.cy - pcy) <= LOAD_RADIUS_Y
+    )
+  }
+
+  // A structure tag widens only the vertical load radius, plus the one-chunk
+  // XZ hysteresis needed when the second participant lies just outside the
+  // normal load box. It is never trusted without matching the immutable
+  // descriptor's range and participant list.
+  _structureRequestRelevant(request, pcx, pcy, pcz) {
+    const structure = request.structure
+    return !!(
+      request.structureRequest === true &&
+      structureSpansFloor(structure, pcy) &&
+      request.cy >= structure.baseCy &&
+      request.cy <= structure.topCy &&
+      structureHasParticipant(structure, request.cx, request.cz) &&
+      Math.abs(request.cx - pcx) <= UNLOAD_RADIUS &&
+      Math.abs(request.cz - pcz) <= UNLOAD_RADIUS
+    )
+  }
+
+  _reconcileQueue(pcx, pcy, pcz) {
+    const retained = new Map()
+    for (const request of this.queue) {
+      if (
+        !request ||
+        !Number.isInteger(request.cx) ||
+        !Number.isInteger(request.cy) ||
+        !Number.isInteger(request.cz)
+      ) continue
+      request.key = chunkKey3(request.cx, request.cy, request.cz)
+      if (this.chunks.has(request.key)) continue
+      const normal = this._normalRequestRelevant(request, pcx, pcy, pcz)
+      const structure = this._structureRequestRelevant(request, pcx, pcy, pcz)
+      if (request.structureRequest && !structure) clearStructureRequest(request)
+      if (!normal && !structure) continue
+
+      const prior = retained.get(request.key)
+      if (prior) {
+        // Defensively merge a relevant structure tag before collapsing a
+        // duplicate. This preserves the stronger lifetime regardless of the
+        // stale queue's insertion order.
+        if (structure) tagStructureRequest(prior, request.structure)
+        continue
+      }
+      retained.set(
+        request.key,
+        prioritizeRequest(request, this.seed, this.config, pcx, pcy, pcz)
+      )
+    }
+    this.queue = [...retained.values()]
+    this.queued = new Set(retained.keys())
+  }
+
+  _enqueueStructureRequests(structure) {
+    const pcx = this._streamPcx
+    const pcy = this._streamPcy
+    const pcz = this._streamPcz
+    if (
+      !Number.isInteger(pcx) ||
+      !Number.isInteger(pcy) ||
+      !Number.isInteger(pcz) ||
+      !structureSpansFloor(structure, pcy)
+    ) return 0
+
+    const participants = [...structureParticipants(structure)].sort(
+      (a, b) => a.cz - b.cz || a.cx - b.cx
+    )
+    let added = 0
+    for (let cy = structure.baseCy; cy <= structure.topCy; cy++) {
+      for (const participant of participants) {
+        const { cx, cz } = participant
+        const key = chunkKey3(cx, cy, cz)
+        if (this.chunks.has(key)) continue
+
+        const existing = this.queue.find((request) => request.key === key)
+        if (existing) {
+          tagStructureRequest(existing, structure)
+          prioritizeRequest(existing, this.seed, this.config, pcx, pcy, pcz)
+          this.queued.add(key)
+          continue
+        }
+
+        const request = tagStructureRequest({ cx, cy, cz, key }, structure)
+        if (!this._structureRequestRelevant(request, pcx, pcy, pcz)) continue
+        this.queue.push(prioritizeRequest(
+          request,
+          this.seed,
+          this.config,
+          pcx,
+          pcy,
+          pcz
+        ))
+        this.queued.add(key)
+        added++
+      }
+    }
+    this.queue.sort(compareRequests)
+    return added
+  }
+
+  _discoverStructureRequests(pcy) {
+    const seen = new Set()
+    for (const chunk of this.chunks.values()) {
+      const structure = chunkStructure(chunk)
+      if (!structureSpansFloor(structure, pcy)) continue
+      const participantKey = structureParticipants(structure)
+        .map(({ cx, cz }) => `${cx},${cz}`)
+        .sort()
+        .join(';')
+      const key = `${structure.id}:${structure.baseCy}:${structure.topCy}:${participantKey}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      this._enqueueStructureRequests(structure)
+    }
   }
 
   // Per-frame streaming around the player. `pcy` is the player's floor index;
@@ -119,29 +316,21 @@ export class ChunkManager {
   update(px, pz, pcy = 0) {
     const pcx = worldToChunk(px)
     const pcz = worldToChunk(pz)
+    this._streamPcx = pcx
+    this._streamPcy = pcy
+    this._streamPcz = pcz
 
     // A request may wait across many frames. Reconcile the queue with the
     // CURRENT load box before adding work: teleports and floor handoffs must
     // not spend the build budget on the old location. Rebuilding `queued`
     // from the retained array also repairs stale membership and defensively
     // collapses duplicate requests.
-    const queue = []
-    const queued = new Set()
-    for (const request of this.queue) {
-      if (
-        Math.abs(request.cx - pcx) > LOAD_RADIUS ||
-        Math.abs(request.cz - pcz) > LOAD_RADIUS ||
-        Math.abs(request.cy - pcy) > LOAD_RADIUS_Y ||
-        this.chunks.has(request.key) ||
-        queued.has(request.key)
-      ) {
-        continue
-      }
-      queue.push(prioritizeRequest(request, this.seed, this.config, pcx, pcy, pcz))
-      queued.add(request.key)
-    }
-    this.queue = queue
-    this.queued = queued
+    this._reconcileQueue(pcx, pcy, pcz)
+
+    // Resident structure chunks rediscover their complete vertical volume on
+    // every update. This re-tags ordinary overlaps and makes floor changes
+    // inside a retained structure self-healing without globally widening Y.
+    this._discoverStructureRequests(pcy)
 
     // Queue missing chunks within the load box (nearest first; the player's
     // own floor first — off-floor chunks only jump the penalty queue when a
@@ -170,11 +359,12 @@ export class ChunkManager {
     // Unload beyond the hysteresis radii.
     let aperturesChanged = false
     for (const [key, c] of this.chunks) {
-      if (
+      const outsideXZ =
         Math.abs(c.cx - pcx) > UNLOAD_RADIUS ||
-        Math.abs(c.cz - pcz) > UNLOAD_RADIUS ||
-        Math.abs(c.cy - pcy) > UNLOAD_RADIUS_Y
-      ) {
+        Math.abs(c.cz - pcz) > UNLOAD_RADIUS
+      const outsideY = Math.abs(c.cy - pcy) > UNLOAD_RADIUS_Y
+      const retainedStructure = !outsideXZ && chunkSharesStructure(c, pcy)
+      if (outsideXZ || (outsideY && !retainedStructure)) {
         for (const a of c.apertures) {
           this.apertures.delete(a.key)
           aperturesChanged = true
@@ -213,10 +403,15 @@ export class ChunkManager {
     )
     this.root.add(chunk.group)
     this.chunks.set(key, chunk)
+    // Discovery is intentionally build-driven: ordinary streaming stays at
+    // LOAD_RADIUS_Y, but encountering a structure that contains the current
+    // player floor schedules its whole participant volume. Sorting inside the
+    // helper keeps both steady-state builds and synchronous prewarm stable.
+    this._enqueueStructureRequests(chunkStructure(chunk))
     for (const a of chunk.apertures) {
-      const key = `${cx},${cz},${a.lowerCy},${a.kind},${a.id}`
-      a.key = key
-      this.apertures.set(key, { cx, cz, ...a })
+      const apertureKey = apertureRegistryKey(cx, cy, cz, a)
+      a.key = apertureKey
+      this.apertures.set(apertureKey, { cx, cz, ...a })
     }
     this._applyVisibility(chunk)
     // A NEW aperture can make already-loaded off-floor neighbours visible
@@ -255,6 +450,10 @@ export class ChunkManager {
     if (c.cy === pcy) return true
     const st = this._visStair
     if (st && (c.cy === st.baseCy || c.cy === st.baseCy + 1)) return true
+    // Every streamed slice of the same continuous atrium/shaft must render:
+    // looking up or down the void can expose walls and bridges many storeys
+    // away. Descriptor validation keeps unrelated far floors gated.
+    if (chunkSharesStructure(c, pcy)) return true
     if (Math.abs(c.cy - pcy) !== 1) return false
     const lowerCy = Math.min(c.cy, pcy)
     for (const a of this.apertures.values()) {
@@ -361,19 +560,22 @@ export class ChunkManager {
   // Lit-lamp world positions within LAMP_QUERY_R of (px,pz). Reuses `out`
   // (cleared in place) to avoid per-refresh allocation.
   //
-  // `pcy` (null = legacy unfiltered) applies the v8 cross-floor policy: lamps
-  // on the player's floor always qualify; lamps exactly one floor away qualify
-  // only within LIGHT_SPILL_R of a stair or multilevel opening between the floors (the
-  // slab physically blocks everything else — lamps are shadowless, so this
-  // assignment filter is what stops light bleeding through floors); lamps two
-  // or more floors away never qualify.
+  // `pcy` (null = legacy unfiltered) applies the cross-floor policy: lamps on
+  // the player's floor always qualify; adjacent lamps retain the aperture
+  // proximity rule; farther lamps qualify only in a continuous tall structure
+  // containing pcy, and only while their layer separation is within the real
+  // light range. The shader/lightAt still apply authoritative true-3D falloff.
   collectLampsNear(px, pz, out, pcy = null) {
     out.length = 0
     const r2 = LAMP_QUERY_R * LAMP_QUERY_R
     for (const c of this.chunks.values()) {
       const lamps = c.lamps
       if (!lamps || !lamps.length) continue
-      if (pcy !== null && Math.abs(c.cy - pcy) > 1) continue
+      const floorDelta = pcy === null ? 0 : Math.abs(c.cy - pcy)
+      const structureCandidate = pcy !== null && floorDelta !== 0 &&
+        chunkSharesStructure(c, pcy) &&
+        Math.abs(layerY(c.cy) - layerY(pcy)) <= LIGHT_RANGE
+      if (pcy !== null && floorDelta > 1 && !structureCandidate) continue
       // Chunk-AABB prune: skip chunks whose nearest edge is beyond the query
       // radius. Exact for any radius; still culls most of the loaded chunks'
       // lamp arrays each call (called per-frame by lightAt + AI).
@@ -388,7 +590,11 @@ export class ChunkManager {
         const dx = v.x - px
         const dz = v.z - pz
         if (dx * dx + dz * dz > r2) continue
-        if (offFloor && !this._lampSpills(v, Math.min(v.cy, pcy))) continue
+        const adjacentSpill = floorDelta === 1 &&
+          this._lampSpills(v, Math.min(v.cy, pcy))
+        const structureSpill = structureCandidate &&
+          this._lampSpillsThroughStructure(v, c, pcy)
+        if (offFloor && !structureSpill && !adjacentSpill) continue
         out.push(v)
       }
     }
@@ -414,14 +620,45 @@ export class ChunkManager {
     return false
   }
 
+  // Tall-structure membership proves vertical continuity, but not that a lamp
+  // is actually near the void: a participant chunk is much wider than the
+  // footprint. Gate each lamp against the canonical global cell bounds, just
+  // as adjacent stair spill gates against its aperture region.
+  _lampSpillsThroughStructure(v, chunk, pcy) {
+    if (!chunkSharesStructure(chunk, pcy)) return false
+    const lampCy = Number.isInteger(v.cy) ? v.cy : chunk.cy
+    if (Math.abs(layerY(lampCy) - layerY(pcy)) > LIGHT_RANGE) return false
+    const structure = chunkStructure(chunk)
+    const bounds = structure.globalBounds ?? structure.bounds
+    if (
+      !bounds ||
+      !Number.isFinite(bounds.x0) ||
+      !Number.isFinite(bounds.z0) ||
+      !Number.isFinite(bounds.x1) ||
+      !Number.isFinite(bounds.z1) ||
+      bounds.x1 < bounds.x0 ||
+      bounds.z1 < bounds.z0
+    ) return false
+
+    const minX = bounds.x0 * CELL
+    const maxX = (bounds.x1 + 1) * CELL
+    const minZ = bounds.z0 * CELL
+    const maxZ = (bounds.z1 + 1) * CELL
+    const nearestX = Math.max(minX, Math.min(maxX, v.x))
+    const nearestZ = Math.max(minZ, Math.min(maxZ, v.z))
+    const dx = v.x - nearestX
+    const dz = v.z - nearestZ
+    return dx * dx + dz * dz <= LIGHT_SPILL_R * LIGHT_SPILL_R
+  }
+
   // Scalar light level (0..1) at a world XZ point on layer `cy`, summed from
   // nearby LIT lamps with the same windowed falloff the lighting shader uses
   // (the cubic lampAtt window in render/shaders/common.js). Used by the entity
   // AI to move faster in the dark and crawl under lamps — kept curve-identical
   // for same-floor lamps so the AI's light sense tracks the pools the player
-  // actually sees; spill lamps from adjacent floors use true 3D distance (the
-  // pool at the bottom of a stairwell is dimmer, as rendered). Uses a private
-  // scratch so it never clobbers the LightField's candidate buffer.
+  // actually sees; spill lamps from other floors use true 3D distance (the
+  // pool at the bottom of a stairwell or tall void is dimmer, as rendered).
+  // Uses a private scratch so it never clobbers the LightField's candidate buffer.
   lightAt(wx, wz, cy = null) {
     const lamps = this.collectLampsNear(wx, wz, (this._litScratch ||= []), cy)
     let acc = STALKER_AMBIENT

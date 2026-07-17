@@ -11,15 +11,14 @@ function stairHoleAt(stair, lx, lz) {
   return !!stair?.run?.some((cell) => cell.lx === lx && cell.lz === lz)
 }
 
-// Multilevel rooms retain one straight bridge deck inside their rectangular
-// footprint. Every other footprint cell is open slab. This is deliberately
-// derived from the canonical descriptor rather than copied into another mask,
-// so independently generated floor halves cannot drift.
+// Each multilevel slab descriptor carries its exact chunk-local void mask.
+// Tall structures can use a different bridge line on every storey (or no
+// bridge at all), so a rectangle-minus-one-line shortcut is no longer enough.
+// Keeping the mask on the canonical descriptor still lets independently
+// generated floor halves derive identical holes without another mutable raster.
 function multilevelHoleAt(room, lx, lz) {
   if (!room?.hasRoom) return false
-  const { x0, z0, x1, z1 } = room.bounds
-  if (lx < x0 || lx > x1 || lz < z0 || lz > z1) return false
-  return room.bridgeAxis === 'x' ? lz !== room.bridgeLine : lx !== room.bridgeLine
+  return room.voidCells.some((cell) => cell.lx === lx && cell.lz === lz)
 }
 
 // Plain, serializable chunk state — the thin-wall model. No THREE here, so the
@@ -65,9 +64,14 @@ export class ChunkData {
     // (slab cy-1). Shape: {dir, landing:{lx,lz}, run:[{..},{..}], exit:{lx,lz}}.
     this.stairUp = null
     this.stairDown = null
-    // Canonical two-floor room halves. `multilevelUp` belongs to this layer's
-    // ceiling (the wide lower hall); `multilevelDown` belongs to this layer's
-    // floor (the void, bridge and observation gallery over the hall).
+    // Global immutable descriptor for the tall structure intersecting this
+    // chunk/floor, if any. Runtime streaming uses its participant chunks and
+    // inclusive vertical range without widening the world's normal Y radius.
+    this.multilevelStructure = null
+    // Canonical per-slab slices of a possibly tall structure. `multilevelUp`
+    // describes this layer's ceiling and `multilevelDown` its floor. Middle
+    // storeys legitimately own both, and their masks may retain different
+    // bridge decks.
     this.multilevelUp = null
     this.multilevelDown = null
     // Edges the stair stamp owns (guard walls AND mouths). Transient — not

@@ -22,9 +22,10 @@ export const LAYER_H = WALL_H + SLAB_T // 3.6 — floor-to-floor height
 // --- Streaming ---
 export const LOAD_RADIUS = 4 // chunks loaded around the player (Chebyshev)
 export const UNLOAD_RADIUS = 5 // hysteresis: dispose only beyond this
-// Vertical radii are small: another floor is only visible through a stair
-// aperture, and only cy±1 is reachable before a floor handoff re-centres the
-// load box. UNLOAD_RADIUS_Y 2 means oscillating on a staircase never rebuilds.
+// Ordinary vertical streaming stays small: stairs expose only cy±1 before a
+// floor handoff re-centres the load box. A discovered tall-structure contract
+// selectively requests and retains its complete base..top stack instead.
+// UNLOAD_RADIUS_Y 2 means oscillating on a staircase never rebuilds.
 export const LOAD_RADIUS_Y = 1 // layers loaded above/below the player
 export const UNLOAD_RADIUS_Y = 2 // vertical hysteresis
 export const MAX_BUILDS_PER_FRAME = 4 // amortise generation across frames (27-chunk rows with 3 layers)
@@ -119,17 +120,18 @@ export const LIGHT_INTENSITY = 3.0 // per-lamp warm contribution (linear, pre-gr
 // the shader, so set-membership changes are invisible rather than a pop.
 export const LAMP_QUERY_R = 60
 export const LAMP_FADE_BAND = 12
-// Cross-floor lamp policy (v8). Lamps are shadowless, so an unfiltered lamp on
+// Cross-floor lamp policy. Lamps are shadowless, so an unfiltered lamp on
 // another floor would shine straight through the slab (LIGHT_RANGE 11 >>
 // LAYER_H 3.6). The pool is therefore floor-FILTERED: same-floor lamps always
 // count; cy±1 lamps count only within LIGHT_SPILL_R of a stair aperture (so
 // light visibly spills down stairwells — a beacon, and physically plausible);
-// farther floors never. A lamp beyond LIGHT_RANGE of the hole couldn't reach
+// farther floors count only through one continuous tall structure and within
+// physical range. A lamp beyond LIGHT_RANGE of an opening could not reach
 // through it anyway, so spill radius = LIGHT_RANGE loses nothing.
 export const LIGHT_SPILL_R = LIGHT_RANGE
-// Off-floor chunks render only within this Chebyshev ring of a chunk column
-// holding a stair aperture to the player's floor (plus a full-floor override
-// while the player is inside a stair footprint). See ChunkManager visibility.
+// Ordinary off-floor chunks render only within this Chebyshev ring of a stair
+// aperture (plus the stair-footprint override). A discovered tall structure
+// renders its complete participating stack. See ChunkManager visibility.
 export const APERTURE_VIS_CHUNKS = 1
 
 // Cel ramp for the per-lamp N·L banding (see render/gradientRamp.js). CEL_BANDS
@@ -312,9 +314,10 @@ export const OUTLINE_FADE_FAR = 0.95
 
 // --- Thin-wall model (refactor) ---------------------------------------
 // World-gen version: bump whenever the algorithm changes the bytes a seed
-// produces. Guards the golden determinism test. v10: shared two-floor atrium
-// contracts, structural bridge decks, and multilevel-only observation windows.
-export const WORLD_GEN_VERSION = 10
+// produces. Guards the golden determinism test. v11: deterministic two-chunk,
+// 4–10-level void structures with bridged and bridge-less variants, complete
+// vertical streaming, and perimeter observation windows above a solid base.
+export const WORLD_GEN_VERSION = 11
 
 // Interior zones, selected by the low-frequency region field. The registry in
 // zones/index.js maps these ids to generator modules.

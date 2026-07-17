@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { buildChunk } from '../pipeline.js'
-import { vBorder, hBorder, vBorderContract, hBorderContract } from '../border.js'
+import { vBorderContract, hBorderContract } from '../border.js'
 import { DEFAULT_WORLD_CONFIG as CFG } from '../config.js'
 import { CHUNK, ZONE_OFFICE, ZONE_PILLARS, WORLD_GEN_VERSION } from '../constants.js'
 import { fmix32, hash2i } from '../core/hash.js'
@@ -10,6 +10,7 @@ import {
   CELL_LOBBY,
   PASSAGE_OPEN,
   PASSAGE_WIDE,
+  WALL_PLAIN,
 } from '../mapTypes.js'
 import { countChunkComponents } from '../topology.js'
 import { layerSeed } from '../pipeline.js'
@@ -21,6 +22,31 @@ function digest(d) {
   let h = 0x9e3779b1 | 0
   const fold = (v) => {
     h = fmix32((h ^ v) | 0) | 0
+  }
+  const foldMaybeInt = (v) => {
+    if (!Number.isInteger(v)) {
+      fold(0)
+      return
+    }
+    fold(1)
+    fold(v)
+  }
+  const foldBounds = (bounds) => {
+    if (!bounds) {
+      fold(0)
+      return
+    }
+    fold(1)
+    for (const key of ['x0', 'z0', 'x1', 'z1']) fold(bounds[key])
+  }
+  const foldAxis = (axis) => fold(axis === 'x' ? 1 : axis === 'z' ? 2 : 0)
+  const foldKind = (kind) => fold(kind === 'bridged' ? 1 : kind === 'openVoid' ? 2 : 0)
+  const foldCells = (cells, xKey = 'lx', zKey = 'lz') => {
+    fold(cells.length)
+    for (const cell of cells) {
+      fold(cell[xKey])
+      fold(cell[zKey])
+    }
   }
   fold(d.version)
   fold(d.cx)
@@ -73,20 +99,70 @@ function digest(d) {
       return
     }
     fold(1)
+    fold(room.hasRoom ? 1 : 0)
     fold(room.id)
     fold(room.baseCy)
-    fold(room.zone)
-    fold(room.bridgeAxis === 'x' ? 1 : 2)
-    fold(room.bridgeLine)
-    for (const key of ['x0', 'z0', 'x1', 'z1']) fold(room.bounds[key])
-    for (const cells of [room.voidCells, room.bridgeCells]) {
-      fold(cells.length)
-      for (const c of cells) {
-        fold(c.lx)
-        fold(c.lz)
+    fold(room.topCy)
+    fold(room.lowerCy)
+    fold(room.levelCy)
+    foldKind(room.kind)
+    foldAxis(room.bridgeAxis)
+    // Keep both aliases in the digest: changing either coordinate contract is
+    // observable generator drift even when the other remains intact.
+    foldBounds(room.bounds)
+    foldBounds(room.localBounds)
+    foldBounds(room.globalBounds)
+    foldMaybeInt(room.bridgeLine)
+    foldMaybeInt(room.globalBridgeLine)
+    foldCells(room.voidCells)
+    foldCells(room.bridgeCells)
+  }
+  const foldStructure = (structure) => {
+    if (!structure) {
+      fold(0)
+      return
+    }
+    fold(1)
+    fold(structure.hasRoom ? 1 : 0)
+    fold(structure.id)
+    foldKind(structure.kind)
+    fold(structure.district.x)
+    fold(structure.district.z)
+    fold(structure.district.size)
+    fold(structure.bandIndex)
+    fold(structure.baseCy)
+    fold(structure.bottomCy)
+    fold(structure.topCy)
+    fold(structure.levelCount)
+    fold(structure.height)
+    foldAxis(structure.bridgeAxis)
+    fold(structure.longSpan)
+    fold(structure.shortSpan)
+    fold(structure.anchor.cx)
+    fold(structure.anchor.cz)
+    for (const participants of [structure.participants, structure.participantChunks]) {
+      fold(participants.length)
+      for (const participant of participants) {
+        fold(participant.cx)
+        fold(participant.cz)
       }
     }
+    foldBounds(structure.bounds)
+    foldBounds(structure.globalBounds)
+    fold(structure.centerLines.length)
+    for (const line of structure.centerLines) fold(line)
+    fold(structure.bridgeLevels.length)
+    for (const level of structure.bridgeLevels) fold(level)
+    fold(structure.decks.length)
+    for (const deck of structure.decks) {
+      fold(deck.levelCy)
+      fold(deck.lowerCy)
+      fold(deck.globalBridgeLine)
+      foldBounds(deck.globalBounds)
+      foldCells(deck.globalCells, 'gx', 'gz')
+    }
   }
+  foldStructure(d.multilevelStructure)
   foldMultilevel(d.multilevelUp)
   foldMultilevel(d.multilevelDown)
   return (h >>> 0).toString(16).padStart(8, '0')
@@ -94,17 +170,24 @@ function digest(d) {
 
 // Re-pinned whenever WORLD_GEN_VERSION changes. Coordinates cover all three
 // zones AND multiple layers; the digest includes semantic passages, spaces,
-// repair metadata and the v9 plan-aware stair descriptors.
+// repair metadata, plan-aware stairs, and representative v11 tall structures
+// (bridged/open, bottom/middle/top, and both participant chunks).
 const GOLDEN = {
-  '0,0,0': 'd17aff84',
-  '3,0,-2': '49bf340b',
-  '12,0,12': '9d9ab7b7',
-  '-10,0,10': 'ad60f5e3',
-  '0,1,0': 'e7ecc1c0',
-  '3,-1,-2': '5a061e3e',
-  '12,2,12': '4a0cba0a',
-  '3,-2,-12': '3f090bb1',
-  '3,-1,-12': '8da5215c',
+  '0,0,0': 'a029216a',
+  '3,0,-2': '30010329',
+  '12,0,12': 'e6d934a5',
+  '-10,0,10': '4d1f501e',
+  '0,1,0': '0219d33d',
+  '3,-1,-2': '16370f4b',
+  '12,2,12': 'a7eeb4c8',
+  '3,-2,-12': 'f21ba776',
+  '3,-1,-12': '7e4c884b',
+  '1,0,-2': '16d30bd0',
+  '2,1,-2': 'd5549c91',
+  '1,7,-2': '062ee1bc',
+  '-1,0,2': 'bb33b60d',
+  '-1,3,3': '9635b36e',
+  '-7,9,-8': '663b3ba7',
 }
 
 const SEEDS = [1, 42, 0xbeef, 1234567, 0x5a5a5a]
@@ -138,6 +221,7 @@ describe('determinism', () => {
         expect(a.repairs).toEqual(b.repairs)
         expect(a.stairUp).toEqual(b.stairUp)
         expect(a.stairDown).toEqual(b.stairDown)
+        expect(a.multilevelStructure).toEqual(b.multilevelStructure)
         expect(a.multilevelUp).toEqual(b.multilevelUp)
         expect(a.multilevelDown).toEqual(b.multilevelDown)
       }
@@ -145,10 +229,12 @@ describe('determinism', () => {
   })
 
   it('matches pinned golden digests', () => {
-    for (const [key, want] of Object.entries(GOLDEN)) {
+    const actual = {}
+    for (const key of Object.keys(GOLDEN)) {
       const [cx, cy, cz] = key.split(',').map(Number)
-      expect(digest(buildChunk(12345, cx, cy, cz, CFG))).toBe(want)
+      actual[key] = digest(buildChunk(12345, cx, cy, cz, CFG))
     }
+    expect(actual).toEqual(GOLDEN)
   })
 
   it('layer 0 uses the root seed; other layers get decorrelated seeds', () => {
@@ -167,22 +253,118 @@ describe('determinism', () => {
 })
 
 describe('seam consistency', () => {
-  it('a neighbour stores the identical shared border (vertical + horizontal)', () => {
+  const inBounds = (bounds, gx, gz) =>
+    gx >= bounds.x0 && gx <= bounds.x1 && gz >= bounds.z0 && gz <= bounds.z1
+
+  const participantsInclude = (structure, chunk) => structure.participants.some(
+    ({ cx, cz }) => cx === chunk.cx && cz === chunk.cz
+  )
+
+  const sharedStructure = (a, b, axis) => {
+    const structure = a.multilevelStructure
+    if (
+      !structure ||
+      structure.id !== b.multilevelStructure?.id ||
+      structure.bridgeAxis !== axis ||
+      a.cy !== b.cy ||
+      a.cy < structure.baseCy ||
+      a.cy > structure.topCy ||
+      !participantsInclude(structure, a) ||
+      !participantsInclude(structure, b)
+    ) return null
+    return structure
+  }
+
+  const ownsVSeamCell = (west, east, z) => {
+    const structure = sharedStructure(west, east, 'x')
+    if (!structure) return false
+    const carve = {
+      x0: structure.globalBounds.x0 - 1,
+      z0: structure.globalBounds.z0 - 1,
+      x1: structure.globalBounds.x1 + 1,
+      z1: structure.globalBounds.z1 + 1,
+    }
+    const gx = east.cx * CHUNK
+    const gz = east.cz * CHUNK + z
+    return inBounds(carve, gx - 1, gz) && inBounds(carve, gx, gz)
+  }
+
+  const ownsHSeamCell = (north, south, x) => {
+    const structure = sharedStructure(north, south, 'z')
+    if (!structure) return false
+    const carve = {
+      x0: structure.globalBounds.x0 - 1,
+      z0: structure.globalBounds.z0 - 1,
+      x1: structure.globalBounds.x1 + 1,
+      z1: structure.globalBounds.z1 + 1,
+    }
+    const gx = south.cx * CHUNK + x
+    const gz = south.cz * CHUNK
+    return inBounds(carve, gx, gz - 1) && inBounds(carve, gx, gz)
+  }
+
+  it('stores the canonical shared border outside exact tall-structure cuts', () => {
     for (const s of SEEDS) {
       for (const [cx, cy, cz] of COORDS) {
         const ls = layerSeed(s, cy)
         const layerCtx = { rootSeed: s, layerSeed: ls, cy }
         // East seam of (cx,cz): the chunk to the east stores it as its West line 0.
+        const west = buildChunk(s, cx, cy, cz, CFG)
         const east = buildChunk(s, cx + 1, cy, cz, CFG)
-        const vb = vBorder(cx, cz, ls, CFG, layerCtx)
-        for (let z = 0; z < CHUNK; z++) expect(east.vAt(0, z)).toBe(vb[z])
+        const vb = vBorderContract(cx, cz, ls, CFG, layerCtx)
+        for (let z = 0; z < CHUNK; z++) {
+          if (ownsVSeamCell(west, east, z)) continue
+          expect(east.vAt(0, z)).toBe(vb.walls[z])
+          expect(east.passageVAt(0, z)).toBe(vb.passages[z])
+        }
 
         // South seam of (cx,cz): the chunk to the south stores it as its North line 0.
+        const north = west
         const south = buildChunk(s, cx, cy, cz + 1, CFG)
-        const hb = hBorder(cx, cz, ls, CFG, layerCtx)
-        for (let x = 0; x < CHUNK; x++) expect(south.hAt(x, 0)).toBe(hb[x])
+        const hb = hBorderContract(cx, cz, ls, CFG, layerCtx)
+        for (let x = 0; x < CHUNK; x++) {
+          if (ownsHSeamCell(north, south, x)) continue
+          expect(south.hAt(x, 0)).toBe(hb.walls[x])
+          expect(south.passageHAt(x, 0)).toBe(hb.passages[x])
+        }
       }
     }
+  })
+
+  it('opens every structure-owned shared seam cell as one protected wide cut', () => {
+    let owned = 0
+    let changedFromCanonical = 0
+    for (const s of SEEDS) {
+      for (const [cx, cy, cz] of COORDS) {
+        const ls = layerSeed(s, cy)
+        const layerCtx = { rootSeed: s, layerSeed: ls, cy }
+        const west = buildChunk(s, cx, cy, cz, CFG)
+        const east = buildChunk(s, cx + 1, cy, cz, CFG)
+        const vb = vBorderContract(cx, cz, ls, CFG, layerCtx)
+        for (let z = 0; z < CHUNK; z++) {
+          if (!ownsVSeamCell(west, east, z)) continue
+          owned++
+          if (east.vAt(0, z) !== vb.walls[z]) changedFromCanonical++
+          expect(east.vAt(0, z)).toBe(0)
+          expect(east.passageVAt(0, z)).toBe(PASSAGE_WIDE)
+          expect(east.wallFeatureVAt(0, z)).toBe(WALL_PLAIN)
+        }
+
+        const north = west
+        const south = buildChunk(s, cx, cy, cz + 1, CFG)
+        const hb = hBorderContract(cx, cz, ls, CFG, layerCtx)
+        for (let x = 0; x < CHUNK; x++) {
+          if (!ownsHSeamCell(north, south, x)) continue
+          owned++
+          if (south.hAt(x, 0) !== hb.walls[x]) changedFromCanonical++
+          expect(south.hAt(x, 0)).toBe(0)
+          expect(south.passageHAt(x, 0)).toBe(PASSAGE_WIDE)
+          expect(south.wallFeatureHAt(x, 0)).toBe(WALL_PLAIN)
+        }
+      }
+    }
+    expect(owned).toBeGreaterThan(0)
+    expect(changedFromCanonical).toBeGreaterThan(0)
   })
 })
 

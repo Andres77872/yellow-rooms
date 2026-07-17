@@ -132,21 +132,27 @@ export const DEFAULT_WORLD_CONFIG = {
     fallbackSalt: 0xfa11, // fallback-chunk election stream
   },
 
-  // Two-floor atria ("deep rooms"). Eligible even-numbered slabs retain a
-  // wide open volume with a one-cell bridge deck on the upper floor. A sparse
-  // hash gate plus one eligible fallback host per 4x4 district keeps the
-  // feature discoverable without turning every floor into holes. Contracts
-  // reject layer-zone changes, transition halls, stairs on either room layer,
-  // and the layer-0 spawn chunk before any geometry is stamped.
+  // Tall atria / shafts (v11). One canonical structure is elected per 4x4 XZ
+  // district and 12-floor vertical band. Its 22x6-cell footprint crosses one
+  // chunk seam, and its inclusive height varies from 4 to 10 storeys. Bridged
+  // variants retain long decks on alternating levels; openVoid variants keep
+  // every intermediate slab open. The structure plan has priority over stair
+  // placement, so all consumers derive one conflict-free vertical volume.
   multilevel: {
     enabled: true,
-    chance: 0.04,
     districtChunks: 4,
-    longSpan: 8,
+    longSpan: 22,
     shortSpan: 6,
+    minLevels: 4,
+    maxLevels: 10,
+    verticalPeriod: 12,
+    bridgeChance: 0.68,
     salt: 0x6d75,
     posSalt: 0xb71d,
     fallbackSalt: 0xfa17,
+    heightSalt: 0x71e7,
+    kindSalt: 0xb21d,
+    deckSalt: 0xd3c5,
   },
 
   // Exit / spawn clearing radius (cells).

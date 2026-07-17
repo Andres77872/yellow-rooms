@@ -2,8 +2,13 @@ import { describe, it, expect } from 'vitest'
 import { slabContract, stairStrip, chunkStairs, stairConfig, STAIR_E, STAIR_W, STAIR_DX, STAIR_DZ } from '../slab.js'
 import { DEFAULT_WORLD_CONFIG } from '../config.js'
 import { LOAD_RADIUS } from '../constants.js'
+import { multilevelConfig, multilevelContract } from '../multilevel.js'
 
 const CFG = DEFAULT_WORLD_CONFIG
+const STAIR_ONLY = {
+  ...CFG,
+  multilevel: { ...CFG.multilevel, enabled: false },
+}
 const SEEDS = [12345, 0xdeadbeef >>> 0, 7, 999999937]
 const COORDS = [
   [0, 0],
@@ -43,8 +48,9 @@ describe('slab contracts', () => {
             expect(cells[i].lz - cells[i - 1].lz).toBe(STAIR_DZ[c.dir])
           }
         }
-        const even = slabContract(seed, cx, cz, 0, { ...CFG, stairs: { ...CFG.stairs, chance: 1 } })
-        const odd = slabContract(seed, cx, cz, 1, { ...CFG, stairs: { ...CFG.stairs, chance: 1 } })
+        const dense = { ...STAIR_ONLY, stairs: { ...CFG.stairs, chance: 1 } }
+        const even = slabContract(seed, cx, cz, 0, dense)
+        const odd = slabContract(seed, cx, cz, 1, dense)
         expect(even.dir % 2).not.toBe(odd.dir % 2)
       }
     }
@@ -98,7 +104,7 @@ describe('slab contracts', () => {
   })
 
   it('varies the transformed stair family between XZ chunk columns', () => {
-    const cfg = { ...CFG, stairs: { ...CFG.stairs, chance: 1 } }
+    const cfg = { ...STAIR_ONLY, stairs: { ...CFG.stairs, chance: 1 } }
     const directions = new Set()
     const footprints = new Set()
     for (let cz = -5; cz <= 5; cz++) {
@@ -125,6 +131,47 @@ describe('slab contracts', () => {
           }
           expect(count).toBeGreaterThanOrEqual(1)
         }
+      }
+    }
+  })
+
+  it('moves fallback stairs away from every slab touching a tall structure', () => {
+    const config = structuredClone(CFG)
+    config.multilevel.minLevels = 10
+    config.multilevel.maxLevels = 10
+    config.stairs.chance = 0
+    const MK = multilevelConfig(config).districtChunks
+    let structure = null
+    for (let dz = 0; dz < MK && !structure; dz++) {
+      for (let dx = 0; dx < MK; dx++) {
+        const candidate = multilevelContract(77, dx, dz, 0, config)
+        if (candidate.hasRoom) structure = candidate
+      }
+    }
+    expect(structure).not.toBeNull()
+
+    for (const participant of structure.participants) {
+      for (let slabCy = structure.baseCy - 1; slabCy <= structure.topCy; slabCy++) {
+        expect(slabContract(77, participant.cx, participant.cz, slabCy, config).hasStair)
+          .toBe(false)
+      }
+      const K = config.stairs.districtChunks
+      const districtX = Math.floor(participant.cx / K)
+      const districtZ = Math.floor(participant.cz / K)
+      for (const slabCy of [structure.baseCy - 1, structure.baseCy, structure.topCy]) {
+        let fallback = 0
+        for (let dz = 0; dz < K; dz++) {
+          for (let dx = 0; dx < K; dx++) {
+            if (slabContract(
+              77,
+              districtX * K + dx,
+              districtZ * K + dz,
+              slabCy,
+              config
+            ).hasStair) fallback++
+          }
+        }
+        expect(fallback).toBeGreaterThanOrEqual(1)
       }
     }
   })

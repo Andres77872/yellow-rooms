@@ -1,49 +1,114 @@
 # Map-generation research and implementation direction
 
-## World-gen v10: multilevel rooms, observation windows, and bridges
+## World-gen v11: tall two-chunk voids, overlooks, and bridges
 
-v10 adds a second kind of vertical architecture without weakening v9's stair,
-plan, or streaming guarantees. A multilevel room is an explicit two-floor
-volume: a wide lower hall, an open slab above it, a connected overlook on the
-upper floor, and one long one-cell bridge retained through the void.
+v11 replaces v10's isolated two-floor, one-chunk atrium with a building-scale
+structure. The shipped profile creates one deterministic structure in each 4x4
+horizontal district and 12-floor vertical band. Each footprint is 22x6 cells:
+the 22-cell axis is longer than a 14-cell chunk and therefore crosses exactly
+one chunk seam. Its height is chosen deterministically from 4 through 10 floors.
 
-- **Canonical ownership.** `multilevelContract(rootSeed,cx,cz,baseCy)` is keyed
-  by an even lower floor. Either participating layer derives the same room ID,
-  footprint, void cells, and bridge cells independently. A sparse chance plus
-  one eligible fallback host per 4x4 district makes rooms discoverable while
-  keeping them exceptional.
-- **Architectural eligibility.** A contract requires the same non-transition
-  zone on both floors, rejects the spawn column, and rejects every stair slab
-  touching either layer. The footprint stays within one chunk with a complete
-  one-cell gallery ring, so no streaming seam can bisect a void or window run.
-- **Plan-first circulation.** Office plans reserve the lower hall and the upper
-  ring/bridge before room allocation. Both opposite bridge banks are mandatory
-  circulation endpoints; BSP rooms cannot consume the bridge approach.
-- **Matched physical slab.** Every footprint cell except the bridge is both a
-  lower-ceiling hole and an upper-floor hole. The bridge is a real retained
-  slab, not a decorative mesh. Two longitudinal drop beams support its long
-  span, and protected low guards cover every deck-to-void edge.
-- **Windows only into the volume.** Collision walls and passage semantics stay
-  unchanged. A separate wall-feature raster marks observation windows only on
-  upper-gallery-to-void edges and rails only on bridge-to-void edges. Both block
-  movement/pathfinding but permit sight. Ordinary partitions can never acquire
-  a window feature. The deferred renderer uses an open pane framed by an opaque
-  sill, lintel, and jambs; true blended glass would require a separate forward
-  transparency pass and is intentionally outside the structural change.
-- **Arbitrary-hole meshing.** Slab fascia is emitted for each solid/void cell
-  boundary rather than for one bounding rectangle. This preserves the two void
-  lobes and the complete exposed edge of the retained bridge.
-- **Shared consumers.** Void cells fail placement and A*, guarded debug drops
-  fall to the real lower floor, bridge decks stay walkable, ceiling-hole lamps
-  are rejected, and room bounds participate in adjacent-floor rendering,
-  lighting, and entity sight. The minimap leaves void cells unfilled and marks
-  bridges/windows/rails explicitly.
-- **Validation.** The layered audit pairs descriptors and every slab cell,
-  validates room identity, bridge deck retention, approaches, guards, windows,
-  columns, and the window-only ownership rule, then floods only real walkable
-  surfaces. Forced/default multi-seed corpora, mutation tests, exact mesh-area
-  tests, collision-vs-sight tests, and connected 3D patch tests cover the full
-  contract.
+### Research translated into generation rules
+
+- [Infinigen Indoors (CVPR 2024)](https://openaccess.thecvf.com/content/CVPR2024/papers/Raistrick_Infinigen_Indoors_Photorealistic_Indoor_Scenes_using_Procedural_Generation_CVPR_2024_paper.pdf)
+  generates multi-room, multi-floor buildings from a room-adjacency graph and
+  evaluates such constraints as accessibility, narrow passages, room shape,
+  and staircase occupancy. Its broader arrangement system separates
+  declarative spatial constraints from the solver that realizes them. The
+  relevant lesson here is to elect one global structure and reserve its
+  circulation/clearance before local room generation, rather than asking two
+  independently generated chunks to agree after the fact.
+- Hölscher et al., [*Up the down staircase: Wayfinding strategies in multi-level
+  buildings*](https://www.sciencedirect.com/science/article/abs/pii/S0272494406000582),
+  found that experienced participants preferred a floor-first strategy and that
+  it was associated with better wayfinding performance; their architectural
+  analysis also identified staircase design as an important obstacle. The
+  paper's review discusses visual access and mutual intervisibility as ways to
+  rely on immediately visible information instead of memory alone. v11 uses a
+  tall, aligned vista as an unmistakable vertical landmark while keeping actual
+  routes and bridge approaches explicit.
+
+Those papers do not prescribe this exact atrium design. The two-chunk footprint,
+alternating decks, window language, and liminal proportions are project design
+decisions informed by their constraint-first and wayfinding observations.
+
+### Canonical structure contract
+
+- **Global election and recovery.** The root seed, district, and vertical band
+  elect one immutable descriptor: identity, `bridged`/`openVoid` kind,
+  base/top floors, axis, two participant chunks, global bounds, and every deck.
+  `multilevelContract` returns it at the canonical anchor, while
+  `multilevelStructureAt` lets either participant and any included floor recover
+  the same object. The floor-zero spawn chunk is excluded from structures whose
+  vertical range crosses floor zero.
+- **One long seam-crossing footprint.** The long dimension is normalized to be
+  greater than one chunk and less than two full chunks, with an exterior gallery
+  ring. The generator owns bounds and bridge lines in global cell coordinates;
+  per-chunk slices are merely projections. This makes seam openings, masks,
+  beams, windows, and bridge continuation derivable without generation order.
+- **Structure before stairs and rooms.** Every slab intersected by a structure
+  suppresses stair placement. Office plans reserve the bottom hall, every
+  upper gallery ring, current bridge deck, and axial approaches before rooms are
+  allocated, so local partitions cannot consume the landmark or its entrances.
+- **Separated stable random streams.** Height, kind, axis/position, participant
+  pair, and alternating bridge line have independent salts. Changing bridge
+  frequency therefore does not silently move or resize structures.
+
+### Physical and visual semantics
+
+- **Bottom hall.** The base floor is solid and walkable while its ceiling opens
+  across the footprint. It has no observation windows and no rails. Looking up
+  reveals the aligned void through every higher slab instead of a false pane or
+  one-floor cap.
+- **Bridged atrium.** Long one-cell decks cross the complete 22-cell span on
+  alternating upper levels (at least two decks). Successive decks alternate
+  between the two center lines. Each is retained in both the floor and ceiling
+  masks, has real collision and navigation surface, opens cleanly through the
+  participant seam, carries low guards on both void-facing flanks, and receives
+  two continuous structural beams. Non-deck levels remain completely open.
+- **Bridge-less open void.** `openVoid` removes every intermediate slab cell in
+  the footprint. It emits no bridge cells, bridge rails, or support beams; this
+  gives the generator a quieter shaft/courtyard landmark instead of making
+  every tall volume read as the same crossing puzzle.
+- **Windows beside the void.** On every upper floor, every actual perimeter wall
+  between the gallery and owning void becomes an observation window. Bridge
+  endpoints are open approaches rather than fake windows, and bridge flanks are
+  rails. Windows/rails remain movement-blocking but sight-permitting. Ordinary
+  walls and the bottom hall cannot acquire these features.
+- **Exact holes and fascia.** Each slab slice carries explicit local void and
+  bridge cell sets. Floor and ceiling masks match, while fascia is emitted only
+  at true solid/void boundaries; the chunk seam is not capped and the two lobes
+  beside a bridge retain their exact outlines.
+
+### Streaming, consumers, and validation
+
+- Ordinary streaming still loads only nearby vertical floors. Discovering a
+  tall structure queues both participant chunks from base through top, retains
+  that stack while its vertical range is relevant, and renders the whole shaft
+  instead of clipping the view at `cy +/- 1`. Light spill is accepted only near
+  the shared footprint, avoiding chunk-wide illumination leaks.
+- Void cells remain invalid for placement and planar A*. Bridge cells stay
+  walkable. Ground resolution can fall through the aligned slab holes of a
+  complete ten-floor structure to the actual bottom surface. Ceiling fixtures
+  are excluded from open cells, and the minimap/debug map distinguish void,
+  bridge, window, and rail.
+- The layered audit validates matching halves and holes for every slab, exact
+  upper windows/rails, the window-free bottom, consistent global descriptors,
+  complete participant slices, and open bridge seams. The World debug tool
+  reports the visible/current structure ID, kind, base/top, floor count, and
+  bridge levels; selecting one expands the audit from the old fixed three-floor
+  sample to its complete 4–10-floor span and both participant chunks.
+
+### Liminal-design intent
+
+The structure is simultaneously coherent and uncanny: one repeated global
+skeleton makes the building believable, while seed-selected height, orientation,
+bridge cadence, and the possibility of a bridge-less void prevent it from
+becoming a recognizable prefab. Full-height sightlines reveal floors that are
+not immediately reachable, windows turn circulation into layered observation,
+and the empty bottom hall exaggerates scale. This supplies a memorable landmark
+without resolving the surrounding office/warehouse maze into an ordinary,
+fully legible building.
 
 ## World-gen v9: plan-aware vertical architecture
 

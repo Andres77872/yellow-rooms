@@ -6,8 +6,8 @@ import { LIGHT_MAX, EYE_H, layerY } from '../world/constants.js'
 // array the lighting shader loops over. Unlike the old forward LightPool (capped
 // at 8 real PointLights), this shades up to LIGHT_MAX lamps in one pass.
 //
-// v8: candidates are FLOOR-FILTERED by ChunkManager (same-floor lamps plus
-// cy±1 lamps near stair apertures — the slab blocks everything else), and the
+// Candidates are FLOOR-FILTERED by ChunkManager (same-floor lamps, cy±1 lamps
+// near stairs, and physically reachable lamps inside one tall structure), and the
 // nearest-N sort uses true 3D distance to the eye, so off-floor spill lamps
 // (>= 3.6u of dy) naturally rank behind same-floor lamps for the shadow-march
 // and volumetric budgets, which take the head of this array.

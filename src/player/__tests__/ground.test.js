@@ -47,7 +47,11 @@ function worldSlice(seed, cx, cz, cy, cfg) {
   }
 }
 
-const CFG = { ...DEFAULT_WORLD_CONFIG, stairs: { ...DEFAULT_WORLD_CONFIG.stairs, chance: 1 } }
+const CFG = {
+  ...DEFAULT_WORLD_CONFIG,
+  stairs: { ...DEFAULT_WORLD_CONFIG.stairs, chance: 1 },
+  multilevel: { ...DEFAULT_WORLD_CONFIG.multilevel, enabled: false },
+}
 
 // A simplified copy of the Controller's per-substep vertical resolve + handoff.
 function verticalStep(cm, st, dt = 0.01 / 5) {
@@ -111,6 +115,16 @@ describe('groundHeightAt', () => {
       }
     }
   })
+
+  it('falls through a ten-level aligned shaft to its real bottom support', () => {
+    const shaft = {
+      stairAt: () => null,
+      floorHoleAt: (_gx, _gz, floor) => floor >= 1 && floor <= 9,
+    }
+    expect(groundHeightAt(shaft, CELL / 2, CELL / 2, 9)).toBe(layerY(0))
+    expect(groundHeightAt(shaft, CELL / 2, CELL / 2, 5)).toBe(layerY(0))
+    expect(groundHeightAt(shaft, CELL / 2, CELL / 2, 0)).toBe(layerY(0))
+  })
 })
 
 describe('stair transit (real generator bytes + real collider)', () => {
@@ -129,7 +143,7 @@ describe('stair transit (real generator bytes + real collider)', () => {
 
   for (const [seed, cx, cz, cy] of cases) {
     it(`ascends and descends seed=${seed} chunk=(${cx},${cz}) slab=${cy}`, () => {
-      const cfg = { ...DEFAULT_WORLD_CONFIG, stairs: { ...DEFAULT_WORLD_CONFIG.stairs, chance: 1 } }
+      const cfg = CFG
       const cm = worldSlice(seed, cx, cz, cy, cfg)
       const c = slabContract(seed, cx, cz, cy, cfg)
       expect(c.hasStair).toBe(true)
