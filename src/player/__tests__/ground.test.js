@@ -116,13 +116,13 @@ describe('groundHeightAt', () => {
     }
   })
 
-  it('falls through a ten-level aligned shaft to its real bottom support', () => {
+  it('falls through all 14 apertures of a 15-storey shaft to its bottom support', () => {
     const shaft = {
       stairAt: () => null,
-      floorHoleAt: (_gx, _gz, floor) => floor >= 1 && floor <= 9,
+      floorHoleAt: (_gx, _gz, floor) => floor >= 1 && floor <= 14,
     }
-    expect(groundHeightAt(shaft, CELL / 2, CELL / 2, 9)).toBe(layerY(0))
-    expect(groundHeightAt(shaft, CELL / 2, CELL / 2, 5)).toBe(layerY(0))
+    expect(groundHeightAt(shaft, CELL / 2, CELL / 2, 14)).toBe(layerY(0))
+    expect(groundHeightAt(shaft, CELL / 2, CELL / 2, 7)).toBe(layerY(0))
     expect(groundHeightAt(shaft, CELL / 2, CELL / 2, 0)).toBe(layerY(0))
   })
 })

@@ -120,7 +120,7 @@ const ZONE_TINT = {
   [ZONE_WAREHOUSE]: 'rgba(120,110,60,.06)',
 }
 
-// World-gen top-down map for the thin-wall model, one floor (v11 layer) at a
+// World-gen top-down map for the thin-wall model, one floor (v13 layer) at a
 // time. Draws wall edges, columns, border openings, lamps (lit/dead), stair
 // glyphs, the exit and live entities. LIVE reads loaded chunks; EXPLORE
 // regenerates any floor for an arbitrary seed (generation is a pure function
@@ -654,7 +654,7 @@ export class WorldMapTool {
       // selected structure, seed/source, and live resident count stay
       // unchanged; drawing still runs every frame without rebuilding thousands
       // of graph nodes. Selecting a multilevel volume expands Y to its complete
-      // canonical base..top span (up to ten floors).
+      // canonical base..top span (up to 15 floors).
       const integrityKey = [
         this.source,
         this.source === 0 ? this.engine.cm.seed : this.previewSeed,

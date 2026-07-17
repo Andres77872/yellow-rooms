@@ -132,9 +132,11 @@ export const DEFAULT_WORLD_CONFIG = {
     fallbackSalt: 0xfa11, // fallback-chunk election stream
   },
 
-  // Tall atria / shafts (v11). One canonical structure is elected per 4x4 XZ
-  // district and 12-floor vertical band. Its 22x6-cell footprint crosses one
-  // chunk seam, and its inclusive height varies from 4 to 10 storeys. Bridged
+  // Tall atria / shafts (v13). One canonical structure is elected per 4x4 XZ
+  // district and 17-floor vertical band, with a deterministic district-specific
+  // base phase instead of every landmark starting on floor 0. Its 22x6-cell
+  // footprint crosses one chunk seam, and its inclusive height varies from 4
+  // to 15 storeys; landmark top floors are capped at cy 64. Bridged
   // variants retain long decks on alternating levels; openVoid variants keep
   // every intermediate slab open. The structure plan has priority over stair
   // placement, so all consumers derive one conflict-free vertical volume.
@@ -144,10 +146,12 @@ export const DEFAULT_WORLD_CONFIG = {
     longSpan: 22,
     shortSpan: 6,
     minLevels: 4,
-    maxLevels: 10,
-    verticalPeriod: 12,
+    maxLevels: 15,
+    verticalPeriod: 17,
+    maxTopCy: 64,
     bridgeChance: 0.68,
     salt: 0x6d75,
+    baseSalt: 0xba5e,
     posSalt: 0xb71d,
     fallbackSalt: 0xfa17,
     heightSalt: 0x71e7,

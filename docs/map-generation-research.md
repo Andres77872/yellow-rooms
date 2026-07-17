@@ -1,5 +1,41 @@
 # Map-generation research and implementation direction
 
+## World-gen v13: phased landmark bases and a floor-64 ceiling
+
+v13 keeps v12's 4–15-storey geometry and 17-floor cadence, but no longer pins
+every horizontal district's landmark bases to global multiples of 17. A new
+independent, root-seeded base stream elects one phase per XZ district. Valid
+bases are `phase + k * 17`, so different landmarks can meet floor 0 as a bottom
+hall, an upper gallery, or no structure at all. The phase is constant through
+the district's vertical bands, preserving two clear floors between maximum
+15-storey stacks and allowing any participant slice—including negative
+floors—to recover the same descriptor without generation-order state.
+
+Landmark descriptors are accepted only when their inclusive `topCy` is at most
+64. A candidate that would cross floor 64 is rejected whole rather than
+truncated, preserving its height, slab, bridge, and audit contracts. This is a
+multilevel-landmark ceiling, not a world boundary: ordinary chunks, stairs, and
+streaming remain unbounded on the vertical `cy` axis (world-space Y). World Z
+remains the horizontal north/south axis.
+
+## World-gen v12: 15-storey landmarks
+
+v12 extends the v11 atrium/open-void contract without changing its reviewed
+two-chunk footprint, inward-facing windows, bridge cadence, or perimeter
+ownership. The shipped profile now chooses structures from 4 through 15
+storeys and uses a 17-floor vertical period. A maximum-height structure spans
+`baseCy` through `baseCy + 14`, leaving two clear floors before the next band;
+ordinary world floors remain vertically unbounded.
+
+Configuration normalization accepts 3 through 15 levels and requires a custom
+vertical period of at least `maxLevels + 1`; the default is deliberately 17.
+At maximum height, a bridged atrium has seven decks at offsets 1, 3, 5, 7, 9,
+11, and 13, while `openVoid` retains the same full-height shaft with no decks,
+rails, beams, or seam fascia. Ground support, streaming, full-shaft sight,
+minimap rendering, and layered audits all consume the complete 15-storey
+extent. Because the expanded range and default period intentionally alter
+seeded layouts, deterministic output is repinned at `WORLD_GEN_VERSION = 12`.
+
 ## World-gen v11: tall two-chunk voids, overlooks, and bridges
 
 v11 replaces v10's isolated two-floor, one-chunk atrium with a building-scale

@@ -328,10 +328,10 @@ export const OUTLINE_FADE_FAR = 0.95
 
 // --- Thin-wall model (refactor) ---------------------------------------
 // World-gen version: bump whenever the algorithm changes the bytes a seed
-// produces. Guards the golden determinism test. v11: deterministic two-chunk,
-// 4–10-level void structures with bridged and bridge-less variants, complete
-// vertical streaming, and perimeter observation windows above a solid base.
-export const WORLD_GEN_VERSION = 11
+// produces. Guards the golden determinism test. v13 randomizes each horizontal
+// district's landmark base phase and caps landmark top floors at cy 64 while
+// retaining v12's 4–15-storey geometry and descriptor-driven consumers.
+export const WORLD_GEN_VERSION = 13
 
 // Interior zones, selected by the low-frequency region field. The registry in
 // zones/index.js maps these ids to generator modules.

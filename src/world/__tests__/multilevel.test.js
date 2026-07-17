@@ -6,6 +6,8 @@ import { layerSeed, SALT_LAYER } from '../layerSeed.js'
 import {
   chunkMultilevelRooms,
   DEFAULT_MULTILEVEL_CONFIG,
+  MAX_MULTILEVEL_TOP_CY,
+  multilevelBandBase,
   multilevelConfig,
   multilevelContract,
   multilevelStructureAt,
@@ -20,7 +22,7 @@ function testConfig(multilevel = {}) {
   return config
 }
 
-function districtStructure(seed, districtX, districtZ, baseCy, config) {
+function districtContractAtBase(seed, districtX, districtZ, baseCy, config) {
   const K = multilevelConfig(config).districtChunks
   const found = []
   for (let dz = 0; dz < K; dz++) {
@@ -31,8 +33,28 @@ function districtStructure(seed, districtX, districtZ, baseCy, config) {
       if (structure.hasRoom) found.push(structure)
     }
   }
-  expect(found).toHaveLength(1)
-  return found[0]
+  expect(found.length).toBeLessThanOrEqual(1)
+  return found[0] ?? null
+}
+
+function districtStructure(seed, districtX, districtZ, levelCy, config) {
+  const K = multilevelConfig(config).districtChunks
+  const baseCy = multilevelBandBase(
+    seed,
+    districtX * K,
+    districtZ * K,
+    levelCy,
+    config
+  )
+  const structure = districtContractAtBase(
+    seed,
+    districtX,
+    districtZ,
+    baseCy,
+    config
+  )
+  expect(structure).not.toBeNull()
+  return structure
 }
 
 const globalKey = ({ gx, gz }) => `${gx},${gz}`
@@ -55,9 +77,13 @@ describe('canonical tall multilevel structures', () => {
     expect(SALT_LAYER).toBe(0x4c59)
   })
 
-  it('normalizes cross-chunk spans, 3..10 levels, period, kinds and mutable configs', () => {
-    expect(multilevelConfig(structuredClone(DEFAULT_WORLD_CONFIG)))
-      .toEqual(DEFAULT_MULTILEVEL_CONFIG)
+  it('normalizes cross-chunk spans, 3..15 levels, period, kinds and mutable configs', () => {
+    const defaults = multilevelConfig(structuredClone(DEFAULT_WORLD_CONFIG))
+    expect(defaults).toEqual(DEFAULT_MULTILEVEL_CONFIG)
+    expect(defaults.minLevels).toBe(4)
+    expect(defaults.maxLevels).toBe(15)
+    expect(defaults.verticalPeriod).toBe(17)
+    expect(defaults.maxTopCy).toBe(64)
     expect(normalizeMultilevelConfig).toBe(multilevelConfig)
 
     const config = testConfig({
@@ -67,18 +93,22 @@ describe('canonical tall multilevel structures', () => {
       minLevels: 99,
       maxLevels: -4,
       verticalPeriod: 2,
+      maxTopCy: 999,
       bridgeChance: Infinity,
       salt: NaN,
+      baseSalt: NaN,
     })
     const normalized = multilevelConfig(config)
     expect(normalized.districtChunks).toBe(2)
     expect(normalized.longSpan).toBe(CHUNK + 1)
     expect(normalized.shortSpan).toBe(4)
     expect(normalized.minLevels).toBe(3)
-    expect(normalized.maxLevels).toBe(10)
-    expect(normalized.verticalPeriod).toBe(11)
+    expect(normalized.maxLevels).toBe(15)
+    expect(normalized.verticalPeriod).toBe(16)
+    expect(normalized.maxTopCy).toBe(MAX_MULTILEVEL_TOP_CY)
     expect(normalized.bridgeChance).toBe(DEFAULT_MULTILEVEL_CONFIG.bridgeChance)
     expect(normalized.salt).toBe(DEFAULT_MULTILEVEL_CONFIG.salt)
+    expect(normalized.baseSalt).toBe(DEFAULT_MULTILEVEL_CONFIG.baseSalt)
     expect(multilevelConfig(config)).toBe(normalized)
 
     config.multilevel.districtChunks = LOAD_RADIUS + 99
@@ -93,23 +123,153 @@ describe('canonical tall multilevel structures', () => {
     const config = testConfig()
     const period = multilevelConfig(config).verticalPeriod
     for (const seed of SEEDS) {
-      for (const baseCy of [-period, 0, period]) {
+      for (const levelCy of [-period, 0, period]) {
         for (const [districtX, districtZ] of [[-2, -1], [0, 0], [3, -4]]) {
-          const first = districtStructure(seed, districtX, districtZ, baseCy, config)
-          expect(districtStructure(seed, districtX, districtZ, baseCy, config)).toBe(first)
+          const first = districtStructure(seed, districtX, districtZ, levelCy, config)
+          expect(districtStructure(seed, districtX, districtZ, levelCy, config)).toBe(first)
+          const K = multilevelConfig(config).districtChunks
+          const baseCy = multilevelBandBase(
+            seed,
+            districtX * K,
+            districtZ * K,
+            levelCy,
+            config
+          )
           expect(first.baseCy).toBe(baseCy)
           expect(first.participants).toHaveLength(2)
-          if (baseCy === 0 && districtX === 0 && districtZ === 0) {
+          if (first.baseCy <= 0 && first.topCy >= 0 && districtX === 0 && districtZ === 0) {
             expect(first.participants).not.toContainEqual({ cx: 0, cz: 0 })
           }
+          expect(districtStructure(
+            seed,
+            districtX,
+            districtZ,
+            levelCy + period,
+            config
+          ).baseCy).toBe(baseCy + period)
+          expect(multilevelContract(
+            seed,
+            first.anchor.cx,
+            first.anchor.cz,
+            baseCy + 1,
+            config
+          )).toEqual({ baseCy: baseCy + 1, hasRoom: false })
         }
       }
     }
-    expect(multilevelContract(7, 0, 0, 1, config)).toEqual({ baseCy: 1, hasRoom: false })
+  })
+
+  it('randomizes the base phase so floor 0 can be a bottom, upper floor, or clear', () => {
+    const seed = 12345
+    const config = testConfig()
+    const K = multilevelConfig(config).districtChunks
+    const states = new Set()
+    const bases = new Set()
+
+    for (let districtZ = -8; districtZ <= 8; districtZ++) {
+      for (let districtX = -8; districtX <= 8; districtX++) {
+        const baseCy = multilevelBandBase(
+          seed,
+          districtX * K,
+          districtZ * K,
+          0,
+          config
+        )
+        bases.add(baseCy)
+        const structure = districtContractAtBase(
+          seed,
+          districtX,
+          districtZ,
+          baseCy,
+          config
+        )
+        expect(structure).not.toBeNull()
+        const participant = structure.participants[0]
+        const atUser = multilevelStructureAt(
+          seed,
+          participant.cx,
+          participant.cz,
+          0,
+          config
+        )
+        states.add(atUser.hasRoom ? (baseCy === 0 ? 'bottom' : 'upper') : 'clear')
+      }
+    }
+
+    expect(bases.size).toBeGreaterThan(8)
+    expect(states).toEqual(new Set(['bottom', 'upper', 'clear']))
+  })
+
+  it('caps landmark top floors at cy 64 without limiting ordinary floors', () => {
+    const seed = 9876
+    const config = testConfig({ minLevels: 15, maxLevels: 15, maxTopCy: 999 })
+    const normalized = multilevelConfig(config)
+    const K = normalized.districtChunks
+    let accepted = 0
+    let rejected = 0
+    let highestTop = -Infinity
+    let acceptedAt64 = null
+    let rejectedAt65 = false
+
+    for (let districtZ = -10; districtZ <= 10; districtZ++) {
+      for (let districtX = -10; districtX <= 10; districtX++) {
+        const originCx = districtX * K
+        const originCz = districtZ * K
+        const baseCy = multilevelBandBase(seed, originCx, originCz, 64, config)
+        const structure = districtContractAtBase(
+          seed,
+          districtX,
+          districtZ,
+          baseCy,
+          config
+        )
+        if (structure) {
+          accepted++
+          highestTop = Math.max(highestTop, structure.topCy)
+          expect(structure.topCy).toBeLessThanOrEqual(64)
+          if (baseCy === 50) acceptedAt64 = structure
+        } else {
+          rejected++
+          if (baseCy === 51) rejectedAt65 = true
+        }
+        expect(districtContractAtBase(
+          seed,
+          districtX,
+          districtZ,
+          baseCy + normalized.verticalPeriod,
+          config
+        )).toBeNull()
+        expect(multilevelStructureAt(seed, originCx, originCz, 65, config).hasRoom)
+          .toBe(false)
+      }
+    }
+
+    expect(normalized.maxTopCy).toBe(64)
+    expect(accepted).toBeGreaterThan(0)
+    expect(rejected).toBeGreaterThan(0)
+    expect(highestTop).toBe(64)
+    expect(acceptedAt64?.topCy).toBe(64)
+    expect(rejectedAt65).toBe(true)
+  })
+
+  it('invalidates cached phase and cap normalization when mutable config changes', () => {
+    const config = testConfig()
+    const first = multilevelConfig(config)
+    const firstBase = multilevelBandBase(7, 0, 0, 0, config)
+    config.multilevel.baseSalt = 0
+    const phaseChanged = multilevelConfig(config)
+    expect(phaseChanged).not.toBe(first)
+    expect(phaseChanged.baseSalt).toBe(0)
+    expect(multilevelBandBase(7, 0, 0, 0, config)).not.toBe(firstBase)
+
+    config.multilevel.maxTopCy = 32.9
+    const capChanged = multilevelConfig(config)
+    expect(capChanged).not.toBe(phaseChanged)
+    expect(capChanged.maxTopCy).toBe(32)
   })
 
   it('uses a globally bounded footprint longer than one chunk with an exterior ring', () => {
-    const config = testConfig({ minLevels: 4, maxLevels: 10 })
+    const config = testConfig({ minLevels: 4, maxLevels: 15 })
     const axes = new Set()
     for (const seed of SEEDS) {
       const structure = districtStructure(seed, -1, 2, 0, config)
@@ -123,7 +283,7 @@ describe('canonical tall multilevel structures', () => {
       ])
       expect(Math.max(width, depth)).toBeGreaterThan(CHUNK)
       expect(structure.levelCount).toBeGreaterThanOrEqual(4)
-      expect(structure.levelCount).toBeLessThanOrEqual(10)
+      expect(structure.levelCount).toBeLessThanOrEqual(15)
 
       const [a, b] = structure.participants
       expect(Math.abs(a.cx - b.cx) + Math.abs(a.cz - b.cz)).toBe(1)
@@ -146,12 +306,14 @@ describe('canonical tall multilevel structures', () => {
     expect(axes).toEqual(new Set(['x', 'z']))
   })
 
-  it('builds several continuous multi-chunk decks on alternating upper levels', () => {
-    const config = testConfig({ bridgeChance: 1, minLevels: 10, maxLevels: 10 })
-    const structure = districtStructure(12345, -2, 1, -12, config)
+  it('builds seven continuous multi-chunk decks on alternating levels of a maximum stack', () => {
+    const config = testConfig({ bridgeChance: 1, minLevels: 15, maxLevels: 15 })
+    const structure = districtStructure(12345, -2, 1, -17, config)
     expect(structure.kind).toBe('bridged')
-    expect(structure.levelCount).toBe(10)
-    expect(structure.bridgeLevels.length).toBeGreaterThanOrEqual(2)
+    expect(structure.levelCount).toBe(15)
+    expect(structure.bridgeLevels).toEqual(
+      [1, 3, 5, 7, 9, 11, 13].map((offset) => structure.baseCy + offset)
+    )
     expect(structure.decks).toHaveLength(structure.bridgeLevels.length)
     expect(Object.isFrozen(structure)).toBe(true)
     expect(Object.isFrozen(structure.decks[0].globalCells)).toBe(true)
@@ -176,8 +338,8 @@ describe('canonical tall multilevel structures', () => {
   })
 
   it('supports a bridge-less shaft with a complete aperture on every slab', () => {
-    const config = testConfig({ bridgeChance: 0, minLevels: 6, maxLevels: 6 })
-    const structure = districtStructure(7, 2, -3, -12, config)
+    const config = testConfig({ bridgeChance: 0, minLevels: 15, maxLevels: 15 })
+    const structure = districtStructure(7, 2, -3, -17, config)
     expect(structure.kind).toBe('openVoid')
     expect(structure.decks).toEqual([])
     expect(structure.bridgeLevels).toEqual([])
@@ -199,9 +361,9 @@ describe('canonical tall multilevel structures', () => {
   })
 
   it('partitions every slab globally and mirrors up(cy) as down(cy+1)', () => {
-    const config = testConfig({ bridgeChance: 1, minLevels: 7, maxLevels: 7 })
+    const config = testConfig({ bridgeChance: 1, minLevels: 15, maxLevels: 15 })
     const seed = 0xdeadbeef >>> 0
-    const structure = districtStructure(seed, -3, -2, -12, config)
+    const structure = districtStructure(seed, -3, -2, -17, config)
     const expectedFootprint = new Set()
     for (let gz = structure.globalBounds.z0; gz <= structure.globalBounds.z1; gz++) {
       for (let gx = structure.globalBounds.x0; gx <= structure.globalBounds.x1; gx++) {

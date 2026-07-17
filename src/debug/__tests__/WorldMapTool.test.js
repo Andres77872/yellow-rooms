@@ -11,9 +11,9 @@ const structure = Object.freeze({
   hasRoom: true,
   kind: 'bridged',
   baseCy: -12,
-  topCy: -3,
-  levelCount: 10,
-  bridgeLevels: [-11, -9, -7, -5, -3],
+  topCy: 2,
+  levelCount: 15,
+  bridgeLevels: [-11, -9, -7, -5, -3, -1, 1],
   participants: [
     { cx: -5, cz: 2 },
     { cx: -4, cz: 2 },
@@ -22,13 +22,13 @@ const structure = Object.freeze({
 })
 
 describe('WorldMapTool multilevel diagnostics', () => {
-  it('audits a selected ten-level structure from canonical base through top', () => {
+  it('audits a selected 15-storey structure from canonical base through top', () => {
     expect(multilevelAuditBox(structure, -2, 2, -1, 1, -7)).toEqual({
       x0: -5,
       y0: -12,
       z0: -1,
       nx: 8,
-      ny: 10,
+      ny: 15,
       nz: 4,
     })
   })
@@ -47,17 +47,17 @@ describe('WorldMapTool multilevel diagnostics', () => {
   it('selects only a footprint cell on one of the structure floors', () => {
     expect(structureAtCell([structure], -60, 33, -7)).toBe(structure)
     expect(structureAtCell([structure], -70, 33, -7)).toBeNull()
-    expect(structureAtCell([structure], -60, 33, -2)).toBeNull()
+    expect(structureAtCell([structure], -60, 33, 3)).toBeNull()
   })
 
   it('shows identity, kind, full height, bridge levels, and audit counters', () => {
     expect(formatMultilevelStructure([structure], structure, 'cursor')).toBe(
-      'visible 1 · cursor #173 bridged · cy -12…-3 · 10 levels · bridges -11,-9,-7,-5,-3'
+      'visible 1 · cursor #173 bridged · cy -12…2 · 15 levels · bridges -11,-9,-7,-5,-3,-1,1'
     )
     expect(formatMultilevelAudit({
       multilevelStructures: 1,
-      multilevelPairs: 18,
-      multilevelSlices: 36,
+      multilevelPairs: 28,
+      multilevelSlices: 56,
       mismatchedMultilevelDescriptors: 0,
       invalidMultilevelRooms: 0,
       invalidMultilevelStructures: 0,
@@ -66,7 +66,7 @@ describe('WorldMapTool multilevel diagnostics', () => {
       missingMultilevelSlices: 0,
       closedBridgeSeams: 0,
     })).toBe(
-      'struct 1 · pairs 18 · slices 36 · mismatch 0 · bad room/struct 0/0 · orphan 0 · stray 0 · missing 0 · seams 0'
+      'struct 1 · pairs 28 · slices 56 · mismatch 0 · bad room/struct 0/0 · orphan 0 · stray 0 · missing 0 · seams 0'
     )
   })
 })

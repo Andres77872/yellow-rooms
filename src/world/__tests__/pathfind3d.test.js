@@ -95,6 +95,7 @@ function generatedFallbackPatch(seed = 7331) {
   const config = structuredClone(DEFAULT_WORLD_CONFIG)
   config.stairs.chance = 0
   config.stairs.districtChunks = 4
+  config.multilevel.enabled = false
   config.zoneBands = [{ id: ZONE_WAREHOUSE, max: 1.01 }]
   config.warehouse.columns.chance = 0
   config.warehouse.fragments.chance = 0

@@ -30,12 +30,12 @@ function cameraAt(from, at) {
 
 const feet = (x, cy, z) => ({ x, y: cy * LAYER_H, z })
 
-// A realistic two-chunk aperture registry for a ten-storey structure. Each
+// A realistic two-chunk aperture registry for a 15-storey structure. Each
 // slab is represented by two local descriptors (the same shape Chunk emits),
 // so sight must join them at the x=42 chunk seam before evaluating the shaft.
 function tallStack({
   baseCy = 0,
-  topCy = 9,
+  topCy = 14,
   id = 'atrium:a',
   missingCy = null,
   mismatchedCy = null,
@@ -85,48 +85,48 @@ describe('sightGate floor gating', () => {
     expect(sightGate(cm, cam, ent, 2, player, 0, 60)).toBe(false)
   })
 
-  it('sees bottom-to-top through a complete ten-level two-chunk shaft', () => {
+  it('sees bottom-to-top through all 14 apertures of a 15-storey shaft', () => {
     const low = feet(3, 0, 6)
-    const high = feet(63, 9, 6)
+    const high = feet(63, 14, 6)
     const cam = cameraAt(
       { x: low.x, y: low.y + 1.7, z: low.z },
       { x: high.x, y: high.y + 1.6, z: high.z }
     )
-    expect(sightGate(makeCM(tallStack()), cam, high, 9, low, 0, 120)).toBe(true)
+    expect(sightGate(makeCM(tallStack()), cam, high, 14, low, 0, 120)).toBe(true)
   })
 
   it('rejects a tall shaft with any missing intervening slab aperture', () => {
     const low = feet(3, 0, 6)
-    const high = feet(63, 9, 6)
+    const high = feet(63, 14, 6)
     const cam = cameraAt(
       { x: low.x, y: low.y + 1.7, z: low.z },
       { x: high.x, y: high.y + 1.6, z: high.z }
     )
     expect(
-      sightGate(makeCM(tallStack({ missingCy: 4 })), cam, high, 9, low, 0, 120)
+      sightGate(makeCM(tallStack({ missingCy: 7 })), cam, high, 14, low, 0, 120)
     ).toBe(false)
   })
 
   it('rejects aperture slices spliced from different structure ids', () => {
     const low = feet(3, 0, 6)
-    const high = feet(63, 9, 6)
+    const high = feet(63, 14, 6)
     const cam = cameraAt(
       { x: low.x, y: low.y + 1.7, z: low.z },
       { x: high.x, y: high.y + 1.6, z: high.z }
     )
     expect(
-      sightGate(makeCM(tallStack({ mismatchedCy: 4 })), cam, high, 9, low, 0, 120)
+      sightGate(makeCM(tallStack({ mismatchedCy: 7 })), cam, high, 14, low, 0, 120)
     ).toBe(false)
   })
 
   it('rejects actors away from the tall opening', () => {
     const outside = feet(3, 0, -20)
-    const high = feet(63, 9, 6)
+    const high = feet(63, 14, 6)
     const cam = cameraAt(
       { x: outside.x, y: outside.y + 1.7, z: outside.z },
       { x: high.x, y: high.y + 1.6, z: high.z }
     )
-    expect(sightGate(makeCM(tallStack()), cam, high, 9, outside, 0, 120)).toBe(false)
+    expect(sightGate(makeCM(tallStack()), cam, high, 14, outside, 0, 120)).toBe(false)
   })
 
   it('rejects a vertical sight ray beside the shaft even when both actors are nearby', () => {
@@ -134,18 +134,18 @@ describe('sightGate floor gating', () => {
     // proximity allowance), but the eye-to-eye ray never enters z=3..9. Every
     // intervening slab is therefore solid along the rendered sight line.
     const low = feet(3, 0, -1)
-    const high = feet(3.2, 9, -1)
+    const high = feet(3.2, 14, -1)
     const cam = cameraAt(
       { x: low.x, y: low.y + 1.7, z: low.z },
       { x: high.x, y: high.y + 1.6, z: high.z }
     )
     expect(STAIR_SIGHT_R).toBeGreaterThan(4)
-    expect(sightGate(makeCM(tallStack()), cam, high, 9, low, 0, 120)).toBe(false)
+    expect(sightGate(makeCM(tallStack()), cam, high, 14, low, 0, 120)).toBe(false)
   })
 
   it('rejects a complete id chain with no unobstructed vertical column', () => {
     const low = feet(3, 0, 0)
-    const high = feet(63, 9, 0)
+    const high = feet(63, 14, 0)
     const cam = cameraAt(
       { x: low.x, y: low.y + 1.7, z: low.z },
       { x: high.x, y: high.y + 1.6, z: high.z }
@@ -155,7 +155,7 @@ describe('sightGate floor gating', () => {
         ? { minX: 0, maxX: 66, minZ: -9, maxZ: -3 }
         : { minX: 0, maxX: 66, minZ: 3, maxZ: 9 },
     })
-    expect(sightGate(makeCM(alternating), cam, high, 9, low, 0, 120)).toBe(false)
+    expect(sightGate(makeCM(alternating), cam, high, 14, low, 0, 120)).toBe(false)
   })
 
   it('one floor apart: blind without an aperture, visible near a shared one', () => {

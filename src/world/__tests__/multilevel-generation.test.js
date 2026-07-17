@@ -13,12 +13,16 @@ import {
   WALL_RAIL,
   WALL_WINDOW,
 } from '../mapTypes.js'
-import { multilevelConfig, multilevelContract } from '../multilevel.js'
+import {
+  multilevelBandBase,
+  multilevelConfig,
+  multilevelContract,
+} from '../multilevel.js'
 import { countChunkComponents } from '../topology.js'
 
 const key3 = (cx, cy, cz) => `${cx},${cy},${cz}`
 
-function forcedConfig({ kind = 'bridged', levels = 10 } = {}) {
+function forcedConfig({ kind = 'bridged', levels = 15 } = {}) {
   const config = structuredClone(DEFAULT_WORLD_CONFIG)
   config.multilevel.bridgeChance = kind === 'bridged' ? 1 : 0
   config.multilevel.minLevels = levels
@@ -26,8 +30,15 @@ function forcedConfig({ kind = 'bridged', levels = 10 } = {}) {
   return config
 }
 
-function districtStructure(seed, districtX, districtZ, baseCy, config) {
+function districtStructure(seed, districtX, districtZ, levelCy, config) {
   const K = multilevelConfig(config).districtChunks
+  const baseCy = multilevelBandBase(
+    seed,
+    districtX * K,
+    districtZ * K,
+    levelCy,
+    config
+  )
   for (let dz = 0; dz < K; dz++) {
     for (let dx = 0; dx < K; dx++) {
       const room = multilevelContract(
@@ -198,12 +209,16 @@ function expectSurfaceEdges(chunks, structure, cy) {
 }
 
 describe('generated tall structures', () => {
-  it('stamps a ten-level, two-chunk bridge stack with exact holes and semantics', () => {
+  it('stamps a 15-storey, two-chunk bridge stack with exact holes and semantics', () => {
     const seed = 1337
-    const config = forcedConfig({ kind: 'bridged', levels: 10 })
+    const config = forcedConfig({ kind: 'bridged', levels: 15 })
     const structure = districtStructure(seed, 0, -2, 0, config)
     const chunks = generateStructure(seed, structure, config)
     const footprintArea = structure.longSpan * structure.shortSpan
+    expect(structure.levelCount).toBe(15)
+    expect(structure.topCy).toBe(structure.baseCy + 14)
+    expect(structure.decks).toHaveLength(7)
+    expect(chunks.size).toBe(30)
 
     for (const { cx, cz } of structure.participants) {
       const bottom = get(chunks, cx, structure.baseCy, cz)
@@ -218,6 +233,7 @@ describe('generated tall structures', () => {
       rails: 0,
     })
 
+    let matchingSlabPairs = 0
     for (let lowerCy = structure.baseCy; lowerCy < structure.topCy; lowerCy++) {
       let slabCells = 0
       for (const { cx, cz } of structure.participants) {
@@ -235,7 +251,9 @@ describe('generated tall structures', () => {
         slabCells += lower.multilevelUp.voidCells.length + lower.multilevelUp.bridgeCells.length
       }
       expect(slabCells).toBe(footprintArea)
+      matchingSlabPairs++
     }
+    expect(matchingSlabPairs).toBe(14)
 
     const bounds = structure.globalBounds
     for (let cy = structure.baseCy; cy <= structure.topCy; cy++) {
@@ -245,6 +263,7 @@ describe('generated tall structures', () => {
           const { data, lx, lz } = cellData(chunks, gx, gz, cy)
           expect(data.colAt(lx, lz)).toBe(0)
           expect(data.spaceId[cIdx(lx, lz)]).toBe(structure.id)
+          if (cy === structure.topCy) expect(data.hasCeilHole(lx, lz)).toBe(false)
           if (cy === structure.baseCy) {
             expect(data.cellKind[cIdx(lx, lz)]).toBe(CELL_ATRIUM)
             expect(data.hasFloorHole(lx, lz)).toBe(false)
@@ -263,8 +282,8 @@ describe('generated tall structures', () => {
 
   it('keeps every bridge continuous through the owned chunk seam', () => {
     const seed = 27
-    const config = forcedConfig({ kind: 'bridged', levels: 8 })
-    const structure = districtStructure(seed, -2, 2, -12, config)
+    const config = forcedConfig({ kind: 'bridged', levels: 15 })
+    const structure = districtStructure(seed, -2, 2, -17, config)
     const chunks = generateStructure(seed, structure, config)
 
     for (const deck of structure.decks) {
@@ -283,9 +302,9 @@ describe('generated tall structures', () => {
     }
   })
 
-  it('creates a ten-level open shaft with all perimeter windows and no bridge artifacts', () => {
+  it('creates a 15-storey open shaft with all perimeter windows and no bridge artifacts', () => {
     const seed = 8128
-    const config = forcedConfig({ kind: 'openVoid', levels: 10 })
+    const config = forcedConfig({ kind: 'openVoid', levels: 15 })
     const structure = districtStructure(seed, 1, -1, 0, config)
     const chunks = generateStructure(seed, structure, config)
     expect(structure.decks).toEqual([])
@@ -306,8 +325,8 @@ describe('generated tall structures', () => {
 
   it('keeps one uninterrupted sight shaft from the windowless bottom to the solid top ceiling', () => {
     const seed = 144
-    const config = forcedConfig({ kind: 'bridged', levels: 10 })
-    const structure = districtStructure(seed, -1, -1, -12, config)
+    const config = forcedConfig({ kind: 'bridged', levels: 15 })
+    const structure = districtStructure(seed, -1, -1, -17, config)
     const chunks = generateStructure(seed, structure, config)
     const gx = structure.globalBounds.x0
     const gz = structure.globalBounds.z0
@@ -330,7 +349,7 @@ describe('generated tall structures', () => {
 
   it('is generation-order independent across chunks and all floors', () => {
     const seed = 99991
-    const config = forcedConfig({ kind: 'bridged', levels: 6 })
+    const config = forcedConfig({ kind: 'bridged', levels: 15 })
     const structure = districtStructure(seed, 2, 1, 0, config)
     const requests = []
     for (let cy = structure.baseCy; cy <= structure.topCy; cy++) {
@@ -371,42 +390,44 @@ describe('generated tall structures', () => {
 })
 
 describe('tall-structure audit integration', () => {
-  it('accepts a complete generated structure patch', () => {
-    const seed = 404
-    const config = forcedConfig({ kind: 'bridged', levels: 6 })
-    const structure = districtStructure(seed, 1, 2, 0, config)
-    const { chunks, x0, z0, size } = generateStructureDistrict(
-      seed,
-      structure,
-      config
-    )
-    const audit = auditLayeredPatch(
-      (cx, cy, cz) => get(chunks, cx, cy, cz),
-      x0,
-      structure.baseCy,
-      z0,
-      size,
-      structure.levelCount,
-      size
-    )
-    expect(audit.mismatchedMultilevelDescriptors).toBe(0)
-    expect(audit.orphanedMultilevelHalves).toBe(0)
-    expect(audit.holeMismatches).toBe(0)
-    expect(audit.invalidMultilevelRooms).toBe(0)
-    expect(audit.strayWallFeatures).toBe(0)
-    expect(audit.multilevelStructures).toBe(1)
-    expect(audit.multilevelSlices).toBe(4 * (structure.levelCount - 1))
-    expect(audit.invalidMultilevelStructures).toBe(0)
-    expect(audit.missingMultilevelSlices).toBe(0)
-    expect(audit.closedBridgeSeams).toBe(0)
-    expect(audit.connected).toBe(true)
-    expect(audit.ok).toBe(true)
+  it('accepts complete maximum-height bridged and open-void patches', () => {
+    for (const [kind, seed] of [['bridged', 404], ['openVoid', 406]]) {
+      const config = forcedConfig({ kind, levels: 15 })
+      const structure = districtStructure(seed, 1, 2, 0, config)
+      const { chunks, x0, z0, size } = generateStructureDistrict(
+        seed,
+        structure,
+        config
+      )
+      const audit = auditLayeredPatch(
+        (cx, cy, cz) => get(chunks, cx, cy, cz),
+        x0,
+        structure.baseCy,
+        z0,
+        size,
+        structure.levelCount,
+        size
+      )
+      expect(audit.mismatchedMultilevelDescriptors).toBe(0)
+      expect(audit.orphanedMultilevelHalves).toBe(0)
+      expect(audit.holeMismatches).toBe(0)
+      expect(audit.invalidMultilevelRooms).toBe(0)
+      expect(audit.strayWallFeatures).toBe(0)
+      expect(audit.multilevelStructures).toBe(1)
+      expect(audit.multilevelPairs).toBe(28)
+      expect(audit.multilevelSlices).toBe(56)
+      expect(audit.invalidMultilevelStructures).toBe(0)
+      expect(audit.missingMultilevelSlices).toBe(0)
+      expect(audit.closedBridgeSeams).toBe(0)
+      expect(audit.connected).toBe(true)
+      expect(audit.ok).toBe(true)
+    }
   })
 
   it('detects a missing loaded slice, a damaged window, and a closed bridge seam', () => {
     const seed = 405
     const config = forcedConfig({ kind: 'bridged', levels: 8 })
-    const structure = districtStructure(seed, -2, 1, -12, config)
+    const structure = districtStructure(seed, -2, 1, -17, config)
 
     {
       const chunks = generateStructure(seed, structure, config)

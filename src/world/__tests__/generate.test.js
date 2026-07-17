@@ -14,6 +14,11 @@ import {
 } from '../mapTypes.js'
 import { countChunkComponents } from '../topology.js'
 import { layerSeed } from '../pipeline.js'
+import {
+  multilevelBandBase,
+  multilevelConfig,
+  multilevelContract,
+} from '../multilevel.js'
 
 // Stable fold over a chunk's full state — pins the generator output so any
 // accidental algorithm drift fails CI (intentional changes bump WORLD_GEN_VERSION
@@ -170,24 +175,42 @@ function digest(d) {
 
 // Re-pinned whenever WORLD_GEN_VERSION changes. Coordinates cover all three
 // zones AND multiple layers; the digest includes semantic passages, spaces,
-// repair metadata, plan-aware stairs, and representative v11 tall structures
-// (bridged/open, bottom/middle/top, and both participant chunks).
+// repair metadata, plan-aware stairs, and representative v13 structures. The
+// final twelve entries pin bottom/middle/top in both chunks of deterministic
+// maximum-height bridged and open-void structures.
 const GOLDEN = {
-  '0,0,0': 'a029216a',
-  '3,0,-2': '30010329',
-  '12,0,12': 'e6d934a5',
-  '-10,0,10': '4d1f501e',
-  '0,1,0': '0219d33d',
-  '3,-1,-2': '16370f4b',
-  '12,2,12': 'a7eeb4c8',
-  '3,-2,-12': 'f21ba776',
-  '3,-1,-12': '7e4c884b',
-  '1,0,-2': '16d30bd0',
-  '2,1,-2': 'd5549c91',
-  '1,7,-2': '062ee1bc',
-  '-1,0,2': 'bb33b60d',
-  '-1,3,3': '9635b36e',
-  '-7,9,-8': '663b3ba7',
+  '0,0,0': '3f7e50cb',
+  '3,0,-2': '026a98a0',
+  '12,0,12': 'a0b8fa75',
+  '-10,0,10': '0c86dffc',
+  '0,1,0': 'af590c30',
+  '3,-1,-2': '519c131a',
+  '12,2,12': 'e521877c',
+  '3,-2,-12': 'c4c3ae3a',
+  '3,-1,-12': '4eda62a9',
+  '1,0,-2': '755fcc9f',
+  '2,1,-2': 'a8c8485c',
+  '1,7,-2': '57a89ebb',
+  '-1,0,2': 'ba63055c',
+  '-1,3,3': 'e708ed4e',
+  '-7,9,-8': '85e14710',
+  '-3,-15,-1': '99905d6a',
+  '-2,-15,-1': '5657370e',
+  '-3,-8,-1': '85ac2e20',
+  '-2,-8,-1': '2b35b3ac',
+  '-3,-1,-1': '47046d4e',
+  '-2,-1,-1': 'd77b093f',
+  '-10,0,8': '3588f414',
+  '-10,0,9': 'fe209aa8',
+  '-10,7,8': 'dc813e47',
+  '-10,7,9': '3a970027',
+  '-10,14,8': '3e0e5691',
+  '-10,14,9': '8e7e4bea',
+}
+
+const MAX_HEIGHT_GOLDEN = {
+  bridged: ['-3,-15,-1', '-2,-15,-1', '-3,-8,-1', '-2,-8,-1', '-3,-1,-1', '-2,-1,-1'],
+  openVoid: ['-10,0,8', '-10,0,9', '-10,7,8', '-10,7,9', '-10,14,8', '-10,14,9'],
 }
 
 const SEEDS = [1, 42, 0xbeef, 1234567, 0x5a5a5a]
@@ -199,6 +222,30 @@ const COORDS = [
   [12, -1, 12],
   [-7, 2, -9],
 ]
+
+function districtStructure(seed, districtX, districtZ, levelCy = 0) {
+  const K = multilevelConfig(CFG).districtChunks
+  const baseCy = multilevelBandBase(
+    seed,
+    districtX * K,
+    districtZ * K,
+    levelCy,
+    CFG
+  )
+  for (let dz = 0; dz < K; dz++) {
+    for (let dx = 0; dx < K; dx++) {
+      const structure = multilevelContract(
+        seed,
+        districtX * K + dx,
+        districtZ * K + dz,
+        baseCy,
+        CFG
+      )
+      if (structure.hasRoom) return structure
+    }
+  }
+  throw new Error('expected deterministic multilevel structure')
+}
 
 describe('determinism', () => {
   it('regenerates byte-identical chunks', () => {
@@ -235,6 +282,18 @@ describe('determinism', () => {
       actual[key] = digest(buildChunk(12345, cx, cy, cz, CFG))
     }
     expect(actual).toEqual(GOLDEN)
+
+    for (const [kind, keys] of Object.entries(MAX_HEIGHT_GOLDEN)) {
+      for (const key of keys) {
+        const [cx, cy, cz] = key.split(',').map(Number)
+        const structure = buildChunk(12345, cx, cy, cz, CFG).multilevelStructure
+        expect(structure?.kind).toBe(kind)
+        expect(structure?.levelCount).toBe(15)
+        expect(structure?.topCy - structure?.baseCy).toBe(14)
+        expect(cy).toBeGreaterThanOrEqual(structure.baseCy)
+        expect(cy).toBeLessThanOrEqual(structure.topCy)
+      }
+    }
   })
 
   it('layer 0 uses the root seed; other layers get decorrelated seeds', () => {
@@ -249,6 +308,14 @@ describe('determinism', () => {
       if (digest(a) !== digest(b)) differing++
     }
     expect(differing).toBe(COORDS.length)
+  })
+
+  it('keeps ordinary chunk generation available above the cy-64 landmark cap', () => {
+    const data = buildChunk(12345, 0, 65, 0, CFG)
+    expect(data.version).toBe(WORLD_GEN_VERSION)
+    expect(data.cy).toBe(65)
+    expect(data.multilevelStructure).toBeNull()
+    expect(data.wallV.length).toBeGreaterThan(0)
   })
 })
 
@@ -335,31 +402,34 @@ describe('seam consistency', () => {
     let owned = 0
     let changedFromCanonical = 0
     for (const s of SEEDS) {
-      for (const [cx, cy, cz] of COORDS) {
+      for (const [districtX, districtZ] of [[-2, -1], [1, 2]]) {
+        const structure = districtStructure(s, districtX, districtZ)
+        const cy = structure.baseCy
         const ls = layerSeed(s, cy)
         const layerCtx = { rootSeed: s, layerSeed: ls, cy }
-        const west = buildChunk(s, cx, cy, cz, CFG)
-        const east = buildChunk(s, cx + 1, cy, cz, CFG)
-        const vb = vBorderContract(cx, cz, ls, CFG, layerCtx)
-        for (let z = 0; z < CHUNK; z++) {
-          if (!ownsVSeamCell(west, east, z)) continue
-          owned++
-          if (east.vAt(0, z) !== vb.walls[z]) changedFromCanonical++
-          expect(east.vAt(0, z)).toBe(0)
-          expect(east.passageVAt(0, z)).toBe(PASSAGE_WIDE)
-          expect(east.wallFeatureVAt(0, z)).toBe(WALL_PLAIN)
-        }
-
-        const north = west
-        const south = buildChunk(s, cx, cy, cz + 1, CFG)
-        const hb = hBorderContract(cx, cz, ls, CFG, layerCtx)
-        for (let x = 0; x < CHUNK; x++) {
-          if (!ownsHSeamCell(north, south, x)) continue
-          owned++
-          if (south.hAt(x, 0) !== hb.walls[x]) changedFromCanonical++
-          expect(south.hAt(x, 0)).toBe(0)
-          expect(south.passageHAt(x, 0)).toBe(PASSAGE_WIDE)
-          expect(south.wallFeatureHAt(x, 0)).toBe(WALL_PLAIN)
+        const [first, second] = structure.participants.map(({ cx, cz }) =>
+          buildChunk(s, cx, cy, cz, CFG)
+        )
+        if (structure.bridgeAxis === 'x') {
+          const vb = vBorderContract(first.cx, first.cz, ls, CFG, layerCtx)
+          for (let z = 0; z < CHUNK; z++) {
+            if (!ownsVSeamCell(first, second, z)) continue
+            owned++
+            if (second.vAt(0, z) !== vb.walls[z]) changedFromCanonical++
+            expect(second.vAt(0, z)).toBe(0)
+            expect(second.passageVAt(0, z)).toBe(PASSAGE_WIDE)
+            expect(second.wallFeatureVAt(0, z)).toBe(WALL_PLAIN)
+          }
+        } else {
+          const hb = hBorderContract(first.cx, first.cz, ls, CFG, layerCtx)
+          for (let x = 0; x < CHUNK; x++) {
+            if (!ownsHSeamCell(first, second, x)) continue
+            owned++
+            if (second.hAt(x, 0) !== hb.walls[x]) changedFromCanonical++
+            expect(second.hAt(x, 0)).toBe(0)
+            expect(second.passageHAt(x, 0)).toBe(PASSAGE_WIDE)
+            expect(second.wallFeatureHAt(x, 0)).toBe(WALL_PLAIN)
+          }
         }
       }
     }

@@ -2,6 +2,8 @@ import { CHUNK, LOAD_RADIUS, fmod } from './constants.js'
 import { DEFAULT_WORLD_CONFIG } from './config.js'
 import { hash3f, hash3i } from './core/hash.js'
 
+export const MAX_MULTILEVEL_TOP_CY = 64
+
 // Canonical multi-floor structures are planned in horizontal districts and
 // vertical bands. A structure always occupies exactly two adjacent chunks and
 // never depends on generated ChunkData (or on stairs/slabs), so either chunk
@@ -12,10 +14,12 @@ export const DEFAULT_MULTILEVEL_CONFIG = Object.freeze({
   longSpan: CHUNK + 8,
   shortSpan: 6,
   minLevels: 4,
-  maxLevels: 10,
-  verticalPeriod: 12,
+  maxLevels: 15,
+  verticalPeriod: 17,
+  maxTopCy: MAX_MULTILEVEL_TOP_CY,
   bridgeChance: 0.68,
   salt: 0x6d75,
+  baseSalt: 0xba5e,
   posSalt: 0xb71d,
   fallbackSalt: 0xfa17,
   heightSalt: 0x71e7,
@@ -24,7 +28,7 @@ export const DEFAULT_MULTILEVEL_CONFIG = Object.freeze({
 })
 
 const MIN_LEVELS = 3
-const MAX_LEVELS = 10
+const MAX_LEVELS = 15
 const MIN_LONG_SPAN = CHUNK + 1
 const MAX_LONG_SPAN = CHUNK * 2 - 2
 // A bridge must have open void on both flanks. Four cells is the smallest
@@ -47,8 +51,10 @@ const CONFIG_INPUT_FIELDS = Object.freeze([
   'minLevels',
   'maxLevels',
   'verticalPeriod',
+  'maxTopCy',
   'bridgeChance',
   'salt',
+  'baseSalt',
   'posSalt',
   'fallbackSalt',
   'heightSalt',
@@ -75,10 +81,11 @@ function sameConfigInputs(hit, raw) {
 // Normalized fields:
 // - districtChunks: horizontal election district (at least 2, so a pair fits)
 // - longSpan/shortSpan: cell footprint; longSpan necessarily crosses one seam
-// - minLevels/maxLevels: inclusive structure height range, clamped to 3..10
-// - verticalPeriod: distance between band bases, with at least one clear floor
+// - minLevels/maxLevels: inclusive structure height range, clamped to 3..15
+// - verticalPeriod: distance between randomized bases, with at least one clear floor
+// - maxTopCy: inclusive landmark ceiling, hard-capped at floor 64
 // - bridgeChance: selects `bridged`; the complement selects `openVoid`
-// - salts: independent stable streams for identity, layout, height, kind/decks
+// - salts: independent stable streams for base, identity, layout, height, kind/decks
 //
 // The cache records every raw input used below. Designer/test configs are often
 // mutated in place, so an object-identity-only WeakMap would return stale data.
@@ -135,12 +142,18 @@ export function multilevelConfig(config) {
     minLevels,
     maxLevels,
     verticalPeriod: Math.max(maxLevels + 1, requestedPeriod),
+    maxTopCy: clamp(
+      Math.floor(finite(raw.maxTopCy, DEFAULT_MULTILEVEL_CONFIG.maxTopCy)),
+      Number.MIN_SAFE_INTEGER,
+      MAX_MULTILEVEL_TOP_CY
+    ),
     bridgeChance: clamp(
       finite(raw.bridgeChance, DEFAULT_MULTILEVEL_CONFIG.bridgeChance),
       0,
       1
     ),
     salt: finite(raw.salt, DEFAULT_MULTILEVEL_CONFIG.salt) | 0,
+    baseSalt: finite(raw.baseSalt, DEFAULT_MULTILEVEL_CONFIG.baseSalt) | 0,
     posSalt: finite(raw.posSalt, DEFAULT_MULTILEVEL_CONFIG.posSalt) | 0,
     fallbackSalt: finite(
       raw.fallbackSalt,
@@ -163,12 +176,58 @@ export function multilevelConfig(config) {
 
 export const normalizeMultilevelConfig = multilevelConfig
 
-function isValidBandBase(baseCy, normalized) {
-  return Number.isInteger(baseCy) && fmod(baseCy, normalized.verticalPeriod) === 0
-}
-
 function districtCoordinate(chunkCoordinate, districtChunks) {
   return Math.floor(chunkCoordinate / districtChunks)
+}
+
+function verticalPhase(seed, districtX, districtZ, normalized) {
+  return hash3i(
+    (seed ^ normalized.baseSalt) | 0,
+    districtX,
+    0,
+    districtZ
+  ) % normalized.verticalPeriod
+}
+
+function bandBaseAtLevel(seed, districtX, districtZ, levelCy, normalized) {
+  const phase = verticalPhase(seed, districtX, districtZ, normalized)
+  return phase + Math.floor(
+    (levelCy - phase) / normalized.verticalPeriod
+  ) * normalized.verticalPeriod
+}
+
+function bandIndexAtBase(seed, districtX, districtZ, baseCy, normalized) {
+  if (!Number.isInteger(baseCy)) return null
+  const phase = verticalPhase(seed, districtX, districtZ, normalized)
+  const delta = baseCy - phase
+  if (fmod(delta, normalized.verticalPeriod) !== 0) return null
+  return delta / normalized.verticalPeriod
+}
+
+// Recover the randomized canonical base at or below an arbitrary floor in one
+// XZ district. The phase is stable for the district across all vertical bands,
+// keeping adjacent stacks separated by `verticalPeriod` even for negative cy.
+export function multilevelBandBase(
+  seed,
+  cx,
+  cz,
+  levelCy,
+  config = DEFAULT_WORLD_CONFIG
+) {
+  const normalized = multilevelConfig(config)
+  if (
+    !normalized.enabled ||
+    !Number.isInteger(cx) ||
+    !Number.isInteger(cz) ||
+    !Number.isInteger(levelCy)
+  ) return null
+  return bandBaseAtLevel(
+    seed,
+    districtCoordinate(cx, normalized.districtChunks),
+    districtCoordinate(cz, normalized.districtChunks),
+    levelCy,
+    normalized
+  )
 }
 
 function participantKey(cx, cz) {
@@ -274,8 +333,15 @@ function globalDeckCells(bridgeAxis, globalBounds, globalBridgeLine) {
 }
 
 function buildStructureForDistrict(seed, districtX, districtZ, baseCy, normalized) {
-  if (!normalized.enabled || !isValidBandBase(baseCy, normalized)) return null
-  const bandIndex = baseCy / normalized.verticalPeriod
+  if (!normalized.enabled) return null
+  const bandIndex = bandIndexAtBase(
+    seed,
+    districtX,
+    districtZ,
+    baseCy,
+    normalized
+  )
+  if (bandIndex === null) return null
   const levelRange = normalized.maxLevels - normalized.minLevels + 1
   const levelCount = normalized.minLevels + (
     hash3i(
@@ -286,6 +352,7 @@ function buildStructureForDistrict(seed, districtX, districtZ, baseCy, normalize
     ) % levelRange
   )
   const topCy = baseCy + levelCount - 1
+  if (topCy > normalized.maxTopCy) return null
   const bridgeAxis = hash3i(
     (seed ^ normalized.posSalt) | 0,
     districtX,
@@ -405,9 +472,12 @@ function buildStructureForDistrict(seed, districtX, districtZ, baseCy, normalize
 
 // Stair fallback election and office planning ask for the same district/band
 // descriptor many times. Cache the immutable canonical object by normalized
-// config identity so those pure lookups stay cheap even for ten-storey shafts.
+// config identity so those pure lookups stay cheap even for 15-storey shafts.
 function structureForDistrict(seed, districtX, districtZ, baseCy, normalized) {
-  if (!normalized.enabled || !isValidBandBase(baseCy, normalized)) return null
+  if (
+    !normalized.enabled ||
+    bandIndexAtBase(seed, districtX, districtZ, baseCy, normalized) === null
+  ) return null
   let cache = STRUCTURE_CACHE.get(normalized)
   if (!cache) {
     cache = new Map()
@@ -451,11 +521,14 @@ export function multilevelContract(
     !normalized.enabled ||
     !Number.isInteger(cx) ||
     !Number.isInteger(cz) ||
-    !isValidBandBase(baseCy, normalized)
+    !Number.isInteger(baseCy)
   ) return noContract(baseCy)
 
   const districtX = districtCoordinate(cx, normalized.districtChunks)
   const districtZ = districtCoordinate(cz, normalized.districtChunks)
+  if (
+    bandIndexAtBase(seed, districtX, districtZ, baseCy, normalized) === null
+  ) return noContract(baseCy)
   const structure = structureForDistrict(
     seed,
     districtX,
@@ -490,10 +563,15 @@ export function multilevelStructureAt(
     !Number.isInteger(levelCy)
   ) return noStructure(levelCy)
 
-  const baseCy = Math.floor(levelCy / normalized.verticalPeriod) *
-    normalized.verticalPeriod
   const districtX = districtCoordinate(cx, normalized.districtChunks)
   const districtZ = districtCoordinate(cz, normalized.districtChunks)
+  const baseCy = bandBaseAtLevel(
+    seed,
+    districtX,
+    districtZ,
+    levelCy,
+    normalized
+  )
   const structure = structureForDistrict(
     seed,
     districtX,

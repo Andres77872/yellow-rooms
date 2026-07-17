@@ -25,7 +25,11 @@ import {
   officeDistrictCoords,
 } from '../zones/officePlan.js'
 import { warehouseWallH, warehouseWallV } from '../warehouseStructure.js'
-import { multilevelConfig, multilevelContract } from '../multilevel.js'
+import {
+  multilevelBandBase,
+  multilevelConfig,
+  multilevelContract,
+} from '../multilevel.js'
 
 function forcedZone(zone) {
   const cfg = structuredClone(CFG)
@@ -378,10 +382,11 @@ describe('multi-chunk office district plan', () => {
     structureCfg.multilevel.minLevels = 4
     structureCfg.multilevel.maxLevels = 4
     const K = multilevelConfig(structureCfg).districtChunks
+    const baseCy = multilevelBandBase(rootSeed, 0, 0, 0, structureCfg)
     let structure = null
     for (let dz = 0; dz < K && !structure; dz++) {
       for (let dx = 0; dx < K; dx++) {
-        const candidate = multilevelContract(rootSeed, dx, dz, 0, structureCfg)
+        const candidate = multilevelContract(rootSeed, dx, dz, baseCy, structureCfg)
         if (candidate.hasRoom) structure = candidate
       }
     }

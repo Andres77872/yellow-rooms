@@ -22,7 +22,7 @@ export function groundHeightAt(cm, wx, wz, cy) {
   // A guarded shaft normally cannot be entered. If debug teleportation or
   // malformed external state puts a body there, fall through every aligned
   // aperture to the first real deck/bottom hall instead of inventing a floor
-  // one storey below. The generator hard-caps structures at ten levels.
+  // one storey below. The generator hard-caps structures at 15 levels.
   if (!s) {
     let supportCy = cy
     let remaining = DEFAULT_MULTILEVEL_CONFIG.maxLevels

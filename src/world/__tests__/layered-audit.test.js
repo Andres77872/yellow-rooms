@@ -8,6 +8,7 @@ import { STAIR_DX, STAIR_DZ } from '../slab.js'
 const denseConfig = () => ({
   ...DEFAULT_WORLD_CONFIG,
   stairs: { ...DEFAULT_WORLD_CONFIG.stairs, enabled: true, chance: 1 },
+  multilevel: { ...DEFAULT_WORLD_CONFIG.multilevel, enabled: false },
 })
 
 const key = (cx, cy, cz) => `${cx},${cy},${cz}`

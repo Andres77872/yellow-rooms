@@ -29,7 +29,14 @@ function buildPatch(seed, X0, Z0, NX, NZ, config = CFG) {
     if (!c) return 1
     return c.hAt(gx - cx * CHUNK, lineGZ - cz * CHUNK) === 1
   }
-  return { chunks, vWall, hWall }
+  const floorHole = (gx, gz) => {
+    const cx = Math.floor(gx / CHUNK)
+    const cz = Math.floor(gz / CHUNK)
+    const c = chunks.get(chunkKey(cx, cz))
+    if (!c) return true
+    return c.hasFloorHole(gx - cx * CHUNK, gz - cz * CHUNK)
+  }
+  return { chunks, vWall, hWall, floorHole }
 }
 
 describe('multi-chunk connectivity (no sealed pockets)', () => {
@@ -41,9 +48,11 @@ describe('multi-chunk connectivity (no sealed pockets)', () => {
 
   for (const seed of seeds) {
     it(`9x9 patch is fully connected (seed ${seed})`, () => {
-      const { vWall, hWall } = buildPatch(seed, X0, Z0, N, N)
+      const { vWall, hWall, floorHole } = buildPatch(seed, X0, Z0, N, N)
+      const blocked = (x, z) => floorHole(X0 * CHUNK + x, Z0 * CHUNK + z)
       // Local patch cell (lx,lz) -> global cell.
       const canPass = (ax, az, bx, bz) => {
+        if (blocked(ax, az) || blocked(bx, bz)) return false
         const gxa = X0 * CHUNK + ax
         const gza = Z0 * CHUNK + az
         if (bx === ax + 1) return !vWall(gxa + 1, gza) // east
@@ -51,11 +60,25 @@ describe('multi-chunk connectivity (no sealed pockets)', () => {
         if (bz === az + 1) return !hWall(gxa, gza + 1) // south
         return !hWall(gxa, gza) // north
       }
-      const seen = floodReachable((W / 2) | 0, (W / 2) | 0, W, W, canPass)
+      let start = null
+      let walkable = 0
+      for (let z = 0; z < W; z++) {
+        for (let x = 0; x < W; x++) {
+          if (blocked(x, z)) continue
+          walkable++
+          if (!start) start = [x, z]
+        }
+      }
+      const seen = floodReachable(start[0], start[1], W, W, canPass)
       let reached = 0
-      for (const v of seen) reached += v
-      // Every cell in the patch must be reachable: zero sealed pockets.
-      expect(reached).toBe(W * W)
+      for (let z = 0; z < W; z++) {
+        for (let x = 0; x < W; x++) {
+          if (!blocked(x, z)) reached += seen[z * W + x]
+        }
+      }
+      // Every solid-floor cell must be reachable; upper atrium voids are not
+      // navigation cells and therefore are intentionally absent from the fill.
+      expect(reached).toBe(walkable)
     })
   }
 })

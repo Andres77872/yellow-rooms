@@ -12,6 +12,7 @@ import { DEFAULT_WORLD_CONFIG } from '../config.js'
 import { slabContract } from '../slab.js'
 import {
   chunkMultilevelRooms,
+  multilevelBandBase,
   multilevelConfig,
   multilevelContract,
 } from '../multilevel.js'
@@ -24,15 +25,22 @@ function ordinaryConfig() {
   return config
 }
 
-function tallConfig(levels = 10) {
+function tallConfig(levels = 15) {
   const config = structuredClone(DEFAULT_WORLD_CONFIG)
   config.multilevel.minLevels = levels
   config.multilevel.maxLevels = levels
   return config
 }
 
-function findStructure(seed, config, baseCy = 0, districtX = 1, districtZ = -1) {
+function findStructure(seed, config, levelCy = 0, districtX = 1, districtZ = -1) {
   const K = multilevelConfig(config).districtChunks
+  const baseCy = multilevelBandBase(
+    seed,
+    districtX * K,
+    districtZ * K,
+    levelCy,
+    config
+  )
   for (let dz = 0; dz < K; dz++) {
     for (let dx = 0; dx < K; dx++) {
       const structure = multilevelContract(
@@ -216,9 +224,9 @@ describe('ChunkManager streaming queue', () => {
     )
   })
 
-  it('loads, retains and renders both chunks across every floor of a 10-level structure', () => {
+  it('loads, retains and renders exactly 30 chunks across a 15-storey structure', () => {
     const seed = 0x51ea7
-    const config = tallConfig(10)
+    const config = tallConfig(15)
     const structure = findStructure(seed, config)
     const playerChunk = structure.participants[0]
     const px = (playerChunk.cx + 0.5) * CHUNK_WORLD
@@ -238,7 +246,7 @@ describe('ChunkManager streaming queue', () => {
         expect(chunk?.group.visible).toBe(true)
       }
     }
-    expect(structureKeys).toHaveLength(20)
+    expect(structureKeys).toHaveLength(30)
 
     // A subsequent steady-state update must not apply ordinary Y hysteresis
     // to slices of the same continuous structure.
@@ -262,7 +270,7 @@ describe('ChunkManager streaming queue', () => {
 
   it('unloads and hides unrelated far floors while leaving a visible structure intact', () => {
     const seed = 0x51ea8
-    const config = tallConfig(10)
+    const config = tallConfig(15)
     const structure = findStructure(seed, config)
     const playerChunk = structure.participants[0]
     const px = (playerChunk.cx + 0.5) * CHUNK_WORLD

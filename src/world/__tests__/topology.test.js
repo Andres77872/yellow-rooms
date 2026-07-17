@@ -63,7 +63,9 @@ describe('generation topology validation and repair', () => {
       }
       const blocked = (gx, gz) => {
         const c = at(gx, gz)
-        return !c.data || c.data.colAt(c.x, c.z) === 1
+        return !c.data ||
+          c.data.colAt(c.x, c.z) === 1 ||
+          c.data.hasFloorHole(c.x, c.z)
       }
       const canPass = (gx, gz, nx, nz) => {
         if (blocked(nx, nz)) return false

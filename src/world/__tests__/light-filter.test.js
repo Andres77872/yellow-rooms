@@ -4,7 +4,11 @@ import { ChunkManager } from '../ChunkManager.js'
 import { buildChunk } from '../pipeline.js'
 import { buildStairCells } from '../stairCells.js'
 import { slabContract } from '../slab.js'
-import { multilevelConfig, multilevelContract } from '../multilevel.js'
+import {
+  multilevelBandBase,
+  multilevelConfig,
+  multilevelContract,
+} from '../multilevel.js'
 import { DEFAULT_WORLD_CONFIG } from '../config.js'
 import {
   LIGHT_RANGE,
@@ -59,8 +63,9 @@ function tallConfig(levels = 10) {
   return config
 }
 
-function findStructure(seed, config, baseCy = 0) {
+function findStructure(seed, config, levelCy = 0) {
   const K = multilevelConfig(config).districtChunks
+  const baseCy = multilevelBandBase(seed, K, -K, levelCy, config)
   for (let dz = 0; dz < K; dz++) {
     for (let dx = 0; dx < K; dx++) {
       const structure = multilevelContract(seed, K + dx, -K + dz, baseCy, config)

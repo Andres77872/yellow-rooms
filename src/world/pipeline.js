@@ -92,9 +92,9 @@ export function buildChunk(seed, cx, cy, cz, config = DEFAULT_WORLD_CONFIG, exit
   // and before L6 so anomaly carves respect protected guard edges.
   stampStairs(data, seed, cx, cy, cz, config)
 
-  // L4.6 — tall-structure stamp (v11). A root-seeded district/band contract is
+  // L4.6 — tall-structure stamp (v13). A root-seeded district/band contract is
   // sliced identically by both sides of every slab across a two-chunk, up-to-
-  // ten-storey volume. The monotone hall/gallery carve explicitly opens its
+  // 15-storey volume. The monotone hall/gallery carve explicitly opens its
   // owned chunk seam; protected windows, approaches and bridge guards survive
   // later anomalies. Lamps see the exact per-storey aperture/bridge mask.
   stampMultilevelRooms(data, seed, cx, cy, cz, config)

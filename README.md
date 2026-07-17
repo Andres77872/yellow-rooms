@@ -37,11 +37,15 @@ The world is generated reproducibly from a text seed. The headless generation
 pipeline produces thin-wall `ChunkData`; rendering, collision, AI, minimap, and
 debug tools all consume that same topology.
 
-World-gen version 11 adds tall architectural landmarks:
+World-gen version 13 extends the tall architectural landmarks:
 
 - one canonical root-seeded structure per horizontal district and vertical
-  band, with a 22x6-cell footprint that necessarily crosses exactly two
-  adjacent chunks and a deterministic height of 4–10 floors;
+  band, using a default 17-floor vertical period and a deterministic
+  district-specific base phase, so landmarks do not all begin on the player's
+  current layer; the 22x6-cell footprint necessarily crosses exactly two
+  adjacent chunks and height is chosen deterministically from 4–15 storeys;
+- landmark top floors are capped inclusively at floor 64 (`cy = 64`); ordinary
+  generated floors, stairs, and streaming remain unbounded above and below;
 - two structure kinds: **bridged** atria retain long, guarded decks on
   alternating upper floors, while **openVoid** shafts leave every intermediate
   slab open and contain no bridge or bridge rail;
@@ -56,7 +60,7 @@ World-gen version 11 adds tall architectural landmarks:
   its complete base-to-top stack available for the long vertical vista;
 - arbitrary-mask slab fascia meshing, void-aware navigation/minimaps, and
   layered audits that validate every structure slice, bridge seam, window,
-  guard, and descriptor across the complete 4–10-floor volume.
+  guard, and descriptor across the complete 4–15-storey volume.
 
 It retains the earlier hierarchical generation system:
 
@@ -88,7 +92,7 @@ are documented in [docs/map-generation-research.md](docs/map-generation-research
 - `src/world/topology.js` — wall and column-aware safety repair for open zones
 - `src/world/slab.js` — canonical vertical contracts and fallback stair election
 - `src/world/stairStamp.js` — lobby, aperture, guard-wall, and stair realization
-- `src/world/multilevel.js` — canonical two-chunk, 4–10-floor structure planning
+- `src/world/multilevel.js` — canonical two-chunk, 4–15-storey structure planning
 - `src/world/multilevelStamp.js` — halls, stacked voids, galleries, windows, rails, and bridges
 - `src/world/audit.js` — 2D seam and canonical layered-connectivity validation
 - `src/world/mapTypes.js` — semantic cell and passage vocabulary
