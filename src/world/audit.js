@@ -1,5 +1,12 @@
-import { CHUNK, cIdx } from './constants.js'
+import {
+  CHUNK,
+  ZONE_OFFICE,
+  ZONE_PILLARS,
+  ZONE_WAREHOUSE,
+  cIdx,
+} from './constants.js'
 import { STAIR_DX, STAIR_DZ } from './slab.js'
+import { multilevelTerminalOverlookLine } from './multilevel.js'
 import { PASSAGE_WALL, PASSAGE_WIDE } from './mapTypes.js'
 import {
   CELL_ATRIUM,
@@ -11,6 +18,7 @@ import {
   WALL_WINDOW,
 } from './mapTypes.js'
 import { chunksShareOfficeDistrict } from './zones/officePlan.js'
+import { roomDominanceConfig } from './regions.js'
 
 // Continuity / "isolation" audit for the thin-wall generator. THREE-free and
 // pure data, so it is shared by the property tests (continuity.test.js) and the
@@ -119,6 +127,22 @@ function record(s, line, kind, mouthMin) {
 export function auditPatch(dataAt, X0, Z0, NX, NZ, config) {
   const s = blank()
   const mouthMin = config.border.mouthWidth[0]
+  const openGrid = new Uint8Array(NX * NZ)
+  const zoneCounts = {
+    [ZONE_OFFICE]: 0,
+    [ZONE_PILLARS]: 0,
+    [ZONE_WAREHOUSE]: 0,
+  }
+  let sampledChunks = 0
+  for (let z = 0; z < NZ; z++) {
+    for (let x = 0; x < NX; x++) {
+      const data = dataAt(X0 + x, Z0 + z)
+      if (!data) continue
+      sampledChunks++
+      zoneCounts[data.zone] = (zoneCounts[data.zone] ?? 0) + 1
+      if (data.zone !== ZONE_OFFICE) openGrid[z * NX + x] = 1
+    }
+  }
 
   // Vertical seams (between cx and cx+1).
   for (let cz = Z0; cz < Z0 + NZ; cz++) {
@@ -159,6 +183,72 @@ export function auditPatch(dataAt, X0, Z0, NX, NZ, config) {
     s.mouthCoverage * 0.2 +
     s.portalCoverage * 0.1 +
     s.planVariety * 0.1
+
+  // Expressive-range guard beside the seam correctness score. Seam continuity
+  // can be nearly perfect for a kilometre-wide empty field; these metrics make
+  // room dominance and the hard landmark-size cap observable in the same audit
+  // used by tests and the World debug view.
+  let maxOpenRun = 0
+  for (let z = 0; z < NZ; z++) {
+    let run = 0
+    for (let x = 0; x < NX; x++) {
+      run = openGrid[z * NX + x] ? run + 1 : 0
+      maxOpenRun = Math.max(maxOpenRun, run)
+    }
+  }
+  for (let x = 0; x < NX; x++) {
+    let run = 0
+    for (let z = 0; z < NZ; z++) {
+      run = openGrid[z * NX + x] ? run + 1 : 0
+      maxOpenRun = Math.max(maxOpenRun, run)
+    }
+  }
+  const seen = new Uint8Array(openGrid.length)
+  let largestOpenComponent = 0
+  for (let start = 0; start < openGrid.length; start++) {
+    if (!openGrid[start] || seen[start]) continue
+    seen[start] = 1
+    const stack = [start]
+    let component = 0
+    while (stack.length) {
+      const i = stack.pop()
+      component++
+      const x = i % NX
+      const z = Math.floor(i / NX)
+      for (const [dx, dz] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+        const nx = x + dx
+        const nz = z + dz
+        if (nx < 0 || nx >= NX || nz < 0 || nz >= NZ) continue
+        const ni = nz * NX + nx
+        if (!openGrid[ni] || seen[ni]) continue
+        seen[ni] = 1
+        stack.push(ni)
+      }
+    }
+    largestOpenComponent = Math.max(largestOpenComponent, component)
+  }
+  const officeChunks = zoneCounts[ZONE_OFFICE] ?? 0
+  const dominance = roomDominanceConfig(config)
+  const maxSpan = Math.max(dominance.maxSpanChunks, dominance.heroMaxSpanChunks)
+  s.architecture = {
+    chunks: sampledChunks,
+    zoneCounts,
+    officeShare: sampledChunks ? officeChunks / sampledChunks : 1,
+    openShare: sampledChunks ? (sampledChunks - officeChunks) / sampledChunks : 0,
+    largestOpenComponent,
+    maxOpenRun,
+    openRunCap: maxSpan,
+    openComponentCap: maxSpan * maxSpan,
+  }
+  s.architecture.roomDominanceChecked =
+    dominance.enabled && NX >= dominance.districtChunks * 2 && NZ >= dominance.districtChunks * 2
+  s.architecture.roomDominant = s.architecture.officeShare >= dominance.minOfficeShare
+  s.architecture.roomMajority = s.architecture.officeShare >= 0.5
+  s.architecture.boundedOpen =
+    maxOpenRun <= maxSpan && largestOpenComponent <= s.architecture.openComponentCap
+  s.architecture.ok =
+    s.architecture.boundedOpen &&
+    (!s.architecture.roomDominanceChecked || s.architecture.roomDominant)
   return s
 }
 
@@ -780,28 +870,31 @@ function multilevelSurfaceErrors(upper, room) {
   const chunkGX = upper.cx * CHUNK
   const chunkGZ = upper.cz * CHUNK
   const bridge = room.globalBridgeLine
+  const overlook = multilevelTerminalOverlookLine(room)
 
   for (let z = bounds.z0; z <= bounds.z1; z++) {
     const gz = chunkGZ + z
     const bridgeEnd = bridge !== null && room.bridgeAxis === 'x' && gz === bridge
+    const terminalEdge = overlook !== null && room.bridgeAxis === 'x' && gz === overlook
     if (chunkGX + bounds.x0 === global.x0) {
-      ;(bridgeEnd ? expectedMouths : expectedWindows)
+      ;(bridgeEnd ? expectedMouths : terminalEdge ? expectedRails : expectedWindows)
         .add(multilevelEdgeKey('v', bounds.x0, z))
     }
     if (chunkGX + bounds.x1 === global.x1) {
-      ;(bridgeEnd ? expectedMouths : expectedWindows)
+      ;(bridgeEnd ? expectedMouths : terminalEdge ? expectedRails : expectedWindows)
         .add(multilevelEdgeKey('v', bounds.x1 + 1, z))
     }
   }
   for (let x = bounds.x0; x <= bounds.x1; x++) {
     const gx = chunkGX + x
     const bridgeEnd = bridge !== null && room.bridgeAxis === 'z' && gx === bridge
+    const terminalEdge = overlook !== null && room.bridgeAxis === 'z' && gx === overlook
     if (chunkGZ + bounds.z0 === global.z0) {
-      ;(bridgeEnd ? expectedMouths : expectedWindows)
+      ;(bridgeEnd ? expectedMouths : terminalEdge ? expectedRails : expectedWindows)
         .add(multilevelEdgeKey('h', bounds.z0, x))
     }
     if (chunkGZ + bounds.z1 === global.z1) {
-      ;(bridgeEnd ? expectedMouths : expectedWindows)
+      ;(bridgeEnd ? expectedMouths : terminalEdge ? expectedRails : expectedWindows)
         .add(multilevelEdgeKey('h', bounds.z1 + 1, x))
     }
   }
@@ -838,7 +931,7 @@ function multilevelSurfaceErrors(upper, room) {
   verifyEdges(
     expectedRails,
     { wall: 1, passage: PASSAGE_WALL, feature: WALL_RAIL },
-    'invalid bridge guard'
+    'invalid multilevel guard rail'
   )
   verifyEdges(
     expectedMouths,

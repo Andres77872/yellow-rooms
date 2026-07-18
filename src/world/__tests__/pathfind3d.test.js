@@ -47,7 +47,7 @@ function mockCM(extraStairs = null) {
   return {
     wallVAt: (gx, gz, cy) => inRange(gx, gz) && !!dataOf(cy) && dataOf(cy).vAt(gx, gz) === 1,
     wallHAt: (gx, gz, cy) => inRange(gx, gz) && !!dataOf(cy) && dataOf(cy).hAt(gx, gz) === 1,
-    columnAt: (gx, gz, cy) => inRange(gx, gz) && !!dataOf(cy) && dataOf(cy).colAt(gx, gz) === 1,
+    columnAt: (gx, gz, cy) => inRange(gx, gz) && !!dataOf(cy) && dataOf(cy).colAt(gx, gz) > 0,
     stairAt: (gx, gz, cy) => {
       if (!inRange(gx, gz) || !layers.get(cy)) return null
       return layers.get(cy).cells.get(cIdx(gx, gz)) || null
@@ -150,7 +150,7 @@ function generatedFallbackPatch(seed = 7331) {
       const cx = Math.floor(gx / CHUNK)
       const cz = Math.floor(gz / CHUNK)
       const entry = chunks.get(key(cx, cy, cz))
-      return !entry || entry.data.colAt(local(gx, cx), local(gz, cz)) === 1
+      return !entry || entry.data.colAt(local(gx, cx), local(gz, cz)) > 0
     },
     floorHoleAt(gx, gz, cy) {
       const cx = Math.floor(gx / CHUNK)

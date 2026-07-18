@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { AmbientCueDirector } from './ambientCueDirector.js'
 
 // Entirely procedural audio — no asset files. One shared AudioContext (owned by
 // the THREE.AudioListener), gated behind the Start button to satisfy the browser
@@ -12,7 +13,7 @@ export class AudioBus {
     this.voices = 0
     this.tension = 0
     this._heartT = 0
-    this._distantT = 6 + Math.random() * 8
+    this.ambientCues = new AmbientCueDirector()
     this.volume = 0.9
 
     const ctx = this.ctx
@@ -157,6 +158,11 @@ export class AudioBus {
     this.droneGain.gain.setTargetAtTime(0.12 + t * 0.5, this.ctx.currentTime, 0.4)
   }
 
+  resetLevel(worldSeed) {
+    this.ambientCues.reset(worldSeed)
+    this._heartT = 0
+  }
+
   // Scales the fluorescent hum by how close the player is to a lit lamp:
   // 0 = far (hum silent), 1 = directly under a lamp. Ramped so walking past
   // lights fades smoothly without pops.
@@ -296,14 +302,16 @@ export class AudioBus {
     thump(t + 0.16, 48)
   }
 
-  update(dt) {
+  update(dt, context = {}) {
     if (!this.started) return
-    // Random distant lowpassed events
-    this._distantT -= dt
-    if (this._distantT <= 0) {
-      this._distantEvent()
-      this._distantT = 15 + Math.random() * 45
-    }
+    // Ambient fake-outs are deterministic and calm-gated. Real danger and a
+    // genuine cross-floor footfall get an uncluttered recovery window instead
+    // of competing with an unrelated random noise.
+    const cue = this.ambientCues.update(dt, {
+      ...context,
+      tension: this.tension,
+    })
+    if (cue === 'distant') this._distantEvent()
     // Heartbeat rate scales with tension
     if (this.tension > 0.25) {
       this._heartT -= dt

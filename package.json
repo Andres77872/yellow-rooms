@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "audit:world": "node scripts/audit-worldgen.mjs",
     "lint": "oxlint",
     "preview": "vite preview",
     "test": "vitest run",

@@ -12,7 +12,7 @@ function forcedZone(zone) {
 
 describe('generation topology validation and repair', () => {
   it('repairs the known warehouse wall-loop regression', () => {
-    const data = buildChunk(933, 2, 0, 1, CFG)
+    const data = buildChunk(933, 2, 0, 1, forcedZone(ZONE_WAREHOUSE))
     expect(data.zone).toBe(ZONE_WAREHOUSE)
     expect(data.repairs.connectivity).toBeGreaterThan(0)
     expect(countChunkComponents(data)).toBe(1)
@@ -20,7 +20,7 @@ describe('generation topology validation and repair', () => {
   })
 
   it('repairs the known column-aware navigation regression', () => {
-    const data = buildChunk(104, -2, 0, 2, CFG)
+    const data = buildChunk(104, -2, 0, 2, forcedZone(ZONE_WAREHOUSE))
     expect(data.zone).toBe(ZONE_WAREHOUSE)
     expect(data.repairs.navigation + data.repairs.columns).toBeGreaterThan(0)
     expect(countChunkComponents(data, true)).toBe(1)
@@ -64,7 +64,7 @@ describe('generation topology validation and repair', () => {
       const blocked = (gx, gz) => {
         const c = at(gx, gz)
         return !c.data ||
-          c.data.colAt(c.x, c.z) === 1 ||
+          c.data.colAt(c.x, c.z) > 0 ||
           c.data.hasFloorHole(c.x, c.z)
       }
       const canPass = (gx, gz, nx, nz) => {

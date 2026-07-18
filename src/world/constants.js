@@ -328,21 +328,23 @@ export const OUTLINE_FADE_FAR = 0.95
 
 // --- Thin-wall model (refactor) ---------------------------------------
 // World-gen version: bump whenever the algorithm changes the bytes a seed
-// produces. Guards the golden determinism test. v13 randomizes each horizontal
-// district's landmark base phase and caps landmark top floors at cy 64 while
-// retaining v12's 4–15-storey geometry and descriptor-driven consumers.
-export const WORLD_GEN_VERSION = 13
+// produces. Guards the golden determinism test. v14 makes office rooms the
+// continuous world fabric, bounds open landmark pockets, and adds genuinely
+// monumental column geometry to the finite pillar halls.
+export const WORLD_GEN_VERSION = 14
 
-// Interior zones, selected by the low-frequency region field. The registry in
-// zones/index.js maps these ids to generator modules.
+// Interior archetypes. The room-dominant macro planner bounds the two open
+// styles; the registry in zones/index.js maps ids to their chunk compilers.
 export const ZONE_OFFICE = 0 // district-planned circulation, rooms, and explicit doors
-export const ZONE_PILLARS = 1 // open hall, seamless global column lattice
-export const ZONE_WAREHOUSE = 2 // big open space, sparse long wall runs
+export const ZONE_PILLARS = 1 // bounded hypostyle hall, seamless bay lattice
+export const ZONE_WAREHOUSE = 2 // bounded inner court, sparse wall fragments
 
 // Thin-wall geometry / collision tuning.
 export const THICK = 0.16 // visual wall slab thickness (world units)
 export const WALL_COL_HALF = 0.08 // collision half-thickness of a wall line
 export const COL_HALF = 0.4 // freestanding column half-width
+export const MONUMENTAL_COL_HALF = 1.1 // landmark pier half-width (2.2u square)
+export const MAX_COL_HALF = MONUMENTAL_COL_HALF
 // Lintel/transom band above a doorway. 0.8 (not 0.5) drops the clear opening
 // to DOOR_H = 2.4 — a real door height under the 3.2 ceiling instead of a
 // near-square gate — and the deeper band reads as a designed transom.

@@ -1,5 +1,45 @@
 # Map-generation research and implementation direction
 
+## World-gen v14: room-dominant fabric and bounded landmark courts
+
+v14 fixes the principal expressive-range failure left by the earlier coherent
+region field: pillar and warehouse chunks could merge into kilometre-scale open
+components even though every topology and seam audit passed. The generator now
+treats portal-planned office rooms as its continuous fabric and open archetypes
+as finite landmark pockets inside 6x6-chunk macro districts. Ordinary pockets
+span 1-2 chunks on each axis; a 30% hero roll expands an elected footprint to
+3-4 chunks. A seed-selected checkerboard parity prevents any elected pockets,
+ordinary or hero, from being cardinal neighbours. Every pocket retains an
+office margin, and the spawn's 3x3 chunk neighbourhood is always office. Under
+the shipped profile, the resulting bounds are two chunks on either ordinary
+open axis, four on a hero axis, and sixteen chunks in any connected non-office
+component.
+
+Warehouse pockets are courts with a pillar perimeter instead of raw warehouse
+meeting an office threshold. Pillar halls now use wide bays and a deterministic
+per-landmark signature: monumental grid, two-row processional axis, one broken
+center bay, or court colonnade. Real 2.2-unit pier width is shared by meshing,
+swept collision, placement, LOS/path smoothing, explored and debug maps, while
+navigation continues to conservatively block the owning cell. The signature is
+recoverable across chunk seams, but its processional axis is not yet aligned to
+the office-authored entrance mouth.
+
+The retained bridge-less multilevel shaft now culminates in two low guard rails
+on its top axial gallery. This creates a deliberate downward exposure point
+without changing the canonical void masks, slab ownership, streaming, or route
+graph. A seeded ambient-cue director adds the first pacing-system slice: fake-out
+sounds require calm recovery, yield to real vertical threat audio, and can
+abstain rather than paying off every scheduled opportunity.
+
+The patch audit now emits a separate architecture verdict beside its unchanged
+seam score: office/open share, longest open run, largest open component, and the
+normalized configured component cap. Regression tests exercise spawn density,
+landmark non-adjacency, and the structural component bound across sampled seed
+corpora. `npm run audit:world` makes the larger expressive-range corpus and its
+worst seed IDs reproducible. The broader evidence review, structure backlog,
+intensity-director direction, and validation gates live in
+[liminal-horror-design.md](liminal-horror-design.md).
+
 ## World-gen v13: phased landmark bases and a floor-64 ceiling
 
 v13 keeps v12's 4–15-storey geometry and 17-floor cadence, but no longer pins

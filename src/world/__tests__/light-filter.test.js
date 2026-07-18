@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import * as THREE from 'three'
 import { ChunkManager } from '../ChunkManager.js'
+import { ChunkData } from '../ChunkData.js'
 import { buildChunk } from '../pipeline.js'
 import { buildStairCells } from '../stairCells.js'
 import { slabContract } from '../slab.js'
@@ -20,6 +21,7 @@ import {
   CHUNK,
   chunkKey3,
 } from '../constants.js'
+import { COLUMN_MONUMENTAL, COLUMN_STANDARD } from '../mapTypes.js'
 
 // The cross-floor lamp policy, tested on the REAL ChunkManager (headless
 // THREE scene, chunks injected directly — no WebGL, no generation): lamps are
@@ -285,6 +287,31 @@ describe('isBlocked fails closed on stair geometry', () => {
     expect(cm.isBlocked(...w(c.exit), 1)).toBe(false)
     // Unloaded chunks fail closed.
     expect(cm.isBlocked(9999, 9999, 0)).toBe(true)
+  })
+
+  it('uses monumental-pier body clearance across the owning cell boundary', () => {
+    const data = new ChunkData(0, 0, 0, 0)
+    const cm = new ChunkManager(new THREE.Scene(), 1, null, null)
+    cm.chunks.set('0,0,0', {
+      cx: 0,
+      cy: 0,
+      cz: 0,
+      data,
+      stairCells: new Map(),
+      lamps: [],
+      apertures: [],
+    })
+    const gx = 5
+    const gz = 5
+    const cornerX = (gx + 0.01) * CELL
+    const cornerZ = (gz + 0.01) * CELL
+
+    data.setCol(gx, gz, COLUMN_STANDARD)
+    expect(cm.isBlocked(cornerX, cornerZ, 0)).toBe(false)
+    data.setCol(gx, gz, COLUMN_MONUMENTAL)
+    expect(cm.isBlocked((gx + 0.5) * CELL, (gz + 0.5) * CELL, 0)).toBe(true)
+    expect(cm.isBlocked(cornerX, cornerZ, 0)).toBe(true)
+    expect(cm.isBlocked((gx + 0.5) * CELL + 1.55, (gz + 0.5) * CELL, 0)).toBe(true)
   })
 })
 

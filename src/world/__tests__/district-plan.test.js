@@ -214,6 +214,7 @@ describe('multi-chunk office district plan', () => {
     const cases = [
       [cfg, 15, 3, 2],
       [cfg, 0, -50, -51],
+      [cfg, 0, 2, -4],
       [CFG, 165, 28, 17],
       [CFG, 1319, -49, 50],
       [CFG, 3058196056, 41, -1],

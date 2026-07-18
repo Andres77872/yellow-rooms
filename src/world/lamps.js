@@ -8,12 +8,10 @@ import { CELL_BRIDGE, CELL_CORRIDOR, CELL_LOBBY } from './mapTypes.js'
 // stream so lamp layout never perturbs the wall grid. Lit lamps drive the
 // dynamic light pool; some are dead/dark so the world has unlit zones.
 //
-// The grid's PHASE is per-zone (config.lamps.phase): the pillars column lattice
-// (spacing 2, phase 0) occupies every point of the phase-0 step-4 grid, so
-// without an offset nearly every pillars lamp candidate lands inside a column
-// and is rejected — pillar halls went near pitch-black. Phase is still a pure
-// function of the chunk's zone, so the grid stays global and seam-continuous
-// wherever neighbouring chunks share a zone.
+// The grid's PHASE is per-zone: the pillar bay lattice shares the phase-0
+// step-4 coordinates, so an offset keeps hall fixtures between supports rather
+// than inside them. Phase remains a pure function of zone, preserving seam
+// continuity within each bounded landmark.
 export function placeLights(data, ctx) {
   const { seed, cx, cz, zone, config } = ctx
   const {

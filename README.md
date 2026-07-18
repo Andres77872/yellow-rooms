@@ -14,6 +14,7 @@ Useful verification commands:
 
 ```bash
 npm test
+npm run audit:world
 npm run lint
 npm run build
 ```
@@ -37,7 +38,26 @@ The world is generated reproducibly from a text seed. The headless generation
 pipeline produces thin-wall `ChunkData`; rendering, collision, AI, minimap, and
 debug tools all consume that same topology.
 
-World-gen version 13 extends the tall architectural landmarks:
+World-gen version 14 makes the room network the dominant world fabric while
+retaining the tall architectural landmarks:
+
+- under the shipped profile, elected special pockets are usually 1-2 chunks on
+  each axis; a rare hero subset expands to 3-4 chunks, and only hero pockets
+  sampled as warehouse become courts. Office margins and non-adjacent election
+  cap ordinary connected non-office footprints at four chunks and hero
+  footprints at sixteen instead of allowing them to merge for kilometres;
+- the spawn's 3x3 chunk neighbourhood is always office and the deterministic
+  spawn regression requires at least 57 of its surrounding 81 chunks to remain
+  office;
+- warehouse interiors are wrapped by colonnades, and pillar halls use wide bays
+  with coherent monumental-grid, processional-axis, broken-bay, and court
+  signatures. Genuine 2.2-unit piers keep their size in rendering, collision,
+  AI sight/path smoothing, placement, and maps;
+- expressive-range diagnostics now produce a separate architectural verdict
+  from room share, longest open run, and largest open component, beside the
+  existing connectivity and seam score.
+
+The retained tall-landmark system provides:
 
 - one canonical root-seeded structure per horizontal district and vertical
   band, using a default 17-floor vertical period and a deterministic
@@ -48,7 +68,8 @@ World-gen version 13 extends the tall architectural landmarks:
   generated floors, stairs, and streaming remain unbounded above and below;
 - two structure kinds: **bridged** atria retain long, guarded decks on
   alternating upper floors, while **openVoid** shafts leave every intermediate
-  slab open and contain no bridge or bridge rail;
+  slab open and contain no bridge; their top gallery terminates in a guarded
+  axial overlook down the complete shaft;
 - matching floor/ceiling masks, seam-continuous bridge decks and support beams,
   connected galleries, and plan-aware approaches reserved before office room
   allocation;
@@ -71,8 +92,8 @@ It retains the earlier hierarchical generation system:
   up/down stamps on one floor to overlap;
 - normalized stair tuning, exact layered integrity audits, and stale-safe 3D
   streaming/navigation queues;
-- domain-warped macro regions with guaranteed pillars transitions between office
-  and warehouse styles;
+- a domain-warped field that characterizes bounded landmark courts as pillar or
+  warehouse spaces without replacing the continuous office-room fabric;
 - portal-first 3x3-chunk office districts with routed circulation, room
   allocation, explicit doors/wide passages, and plan-level validation;
 - semantic cell, space, and passage metadata instead of raster-inferred doors;
@@ -80,12 +101,19 @@ It retains the earlier hierarchical generation system:
 - independently keyed fixture/dead-lamp rolls and circulation-aware lighting;
 - deterministic plan caching with defensive public snapshots.
 
-The design rationale, primary research sources, tradeoffs, and staged follow-ups
-are documented in [docs/map-generation-research.md](docs/map-generation-research.md).
+Ambient horror pacing also has a deterministic first director slice: distant
+fake-out sounds wait for a recovery period, never compete with visible/nearby
+threat or a real cross-floor footfall, and sometimes abstain entirely. The same
+level seed reproduces the same cue opportunities without affecting generation.
+
+The generation rationale and history are documented in
+[docs/map-generation-research.md](docs/map-generation-research.md). The deeper
+liminal-horror research review, structure roadmap, dynamics, and validation
+gates are in [docs/liminal-horror-design.md](docs/liminal-horror-design.md).
 
 ## Main generation modules
 
-- `src/world/regions.js` — coherent style regions and transition buffering
+- `src/world/regions.js` — room-dominant macro fabric and bounded landmark election
 - `src/world/zones/officePlan.js` — district contracts, circulation, rooms,
   scoring, validation, and chunk compilation
 - `src/world/border.js` — canonical shared-edge ownership
@@ -100,4 +128,5 @@ are documented in [docs/map-generation-research.md](docs/map-generation-research
 
 Generation is covered by deterministic golden tests, macro-plan and seam
 invariants, multi-chunk wall/navigation flood tests, region-distribution tests,
-semantic-door checks, and lamp statistics.
+semantic-door checks, and lamp statistics. `npm run audit:world` also runs the
+reproducible large seed corpus and prints its worst seeds as JSON.

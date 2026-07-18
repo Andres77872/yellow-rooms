@@ -10,4 +10,12 @@ export const ZONES = {
   [ZONE_WAREHOUSE]: warehouse,
 }
 
-export { sampleRegionValue, selectRawZone, selectZone } from '../regions.js'
+export {
+  regionLandmark,
+  regionLandmarkAt,
+  regionLandmarkContains,
+  roomDominanceConfig,
+  sampleRegionValue,
+  selectRawZone,
+  selectZone,
+} from '../regions.js'

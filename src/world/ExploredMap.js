@@ -2,6 +2,8 @@ import {
   CELL,
   CHUNK,
   MAP_REVEAL_R,
+  COL_HALF,
+  MONUMENTAL_COL_HALF,
   cIdx,
   chunkKey3,
   worldToCell,
@@ -9,7 +11,7 @@ import {
 import { hasLineOfSight } from '../player/collision.js'
 import { generateChunk } from './generate.js'
 import { buildStairCells } from './stairCells.js'
-import { wallFeatureSeesThrough } from './mapTypes.js'
+import { COLUMN_MONUMENTAL, wallFeatureSeesThrough } from './mapTypes.js'
 
 // Player-explored fog-of-war state for the HUD minimap. Pure data/logic (no
 // THREE), so it stays unit-testable like ChunkData / collision.
@@ -145,7 +147,17 @@ export class ExploredMap {
     const cz = Math.floor(gz / CHUNK)
     const d = this.dataAt(cx, cy, cz)
     if (!d) return false
-    return d.colAt(gx - cx * CHUNK, gz - cz * CHUNK) === 1
+    return d.colAt(gx - cx * CHUNK, gz - cz * CHUNK) > 0
+  }
+
+  columnHalfAt(gx, gz, cy = 0) {
+    const cx = Math.floor(gx / CHUNK)
+    const cz = Math.floor(gz / CHUNK)
+    const d = this.dataAt(cx, cy, cz)
+    if (!d) return 0
+    const kind = d.colAt(gx - cx * CHUNK, gz - cz * CHUNK)
+    if (!kind) return 0
+    return kind === COLUMN_MONUMENTAL ? MONUMENTAL_COL_HALF : COL_HALF
   }
 
   // Canonical stair descriptor mirror (for the minimap's stair glyphs).

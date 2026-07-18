@@ -1,4 +1,11 @@
-import { CELL, PLAYER_R, WALL_COL_HALF, COL_HALF, worldToCell } from '../world/constants.js'
+import {
+  CELL,
+  PLAYER_R,
+  WALL_COL_HALF,
+  COL_HALF,
+  MAX_COL_HALF,
+  worldToCell,
+} from '../world/constants.js'
 
 const SKIN = 0.001
 
@@ -98,16 +105,54 @@ function colHasWallH(cm, lineZ, gx0, gx1, cy) {
   return false
 }
 
+// Runtime ChunkManager exposes exact column half-widths. Small test doubles and
+// older callers only expose the boolean query, for which the original width is
+// the compatible fallback.
+function columnHalfAt(cm, gx, gz, cy) {
+  if (cm.columnHalfAt) return cm.columnHalfAt(gx, gz, cy) || 0
+  return cm.columnAt(gx, gz, cy) ? COL_HALF : 0
+}
+
+// Exact segment-vs-column AABB test for cells crossed by the LOS DDA. The DDA
+// alone only knows which cell a ray visits; this slab test preserves clear rays
+// through the generous bays around a pier while preventing the new 2.2u
+// monumental supports from becoming invisible to AI, fog reveal, or path
+// smoothing.
+function segmentHitsColumn(cm, gx, gz, cy, x0, z0, x1, z1) {
+  const half = columnHalfAt(cm, gx, gz, cy)
+  if (!half) return false
+  const cx = (gx + 0.5) * CELL
+  const cz = (gz + 0.5) * CELL
+  const dx = x1 - x0
+  const dz = z1 - z0
+  let near = 0
+  let far = 1
+  const clip = (origin, delta, lo, hi) => {
+    if (Math.abs(delta) < 1e-9) return origin > lo && origin < hi
+    let a = (lo - origin) / delta
+    let b = (hi - origin) / delta
+    if (a > b) [a, b] = [b, a]
+    near = Math.max(near, a)
+    far = Math.min(far, b)
+    return near < far
+  }
+  return clip(x0, dx, cx - half, cx + half) &&
+    clip(z0, dz, cz - half, cz + half) &&
+    far > 1e-6 && near < 1 - 1e-6
+}
+
 // AABB-vs-column resolution along one axis (axisX = true -> push on X).
 function resolveColumns(cm, pos, r, axisX, d, hit, cy) {
-  const reach = r + COL_HALF
-  const cgx0 = worldToCell(pos.x - reach)
-  const cgx1 = worldToCell(pos.x + reach)
-  const cgz0 = worldToCell(pos.z - reach)
-  const cgz1 = worldToCell(pos.z + reach)
+  const scanReach = r + MAX_COL_HALF
+  const cgx0 = worldToCell(pos.x - scanReach)
+  const cgx1 = worldToCell(pos.x + scanReach)
+  const cgz0 = worldToCell(pos.z - scanReach)
+  const cgz1 = worldToCell(pos.z + scanReach)
   for (let cz = cgz0; cz <= cgz1; cz++) {
     for (let cx = cgx0; cx <= cgx1; cx++) {
-      if (!cm.columnAt(cx, cz, cy)) continue
+      const half = columnHalfAt(cm, cx, cz, cy)
+      if (!half) continue
+      const reach = r + half
       const ccx = (cx + 0.5) * CELL
       const ccz = (cz + 0.5) * CELL
       if (Math.abs(pos.x - ccx) >= reach || Math.abs(pos.z - ccz) >= reach) continue
@@ -133,7 +178,7 @@ function resolveColumns(cm, pos, r, axisX, d, hit, cy) {
 function depenetrate(cm, pos, hit, cy) {
   const r = PLAYER_R
   const m = r + WALL_COL_HALF
-  const reach = r + COL_HALF
+  const scanReach = r + MAX_COL_HALF
   for (let iter = 0; iter < 4; iter++) {
     let best = SKIN
     let axis = 0 // 1 = push X, 2 = push Z
@@ -168,9 +213,11 @@ function depenetrate(cm, pos, hit, cy) {
     }
 
     // Freestanding columns (AABB) — eject along the shallower-overlap axis (MTV).
-    for (let cz = worldToCell(pos.z - reach); cz <= worldToCell(pos.z + reach); cz++) {
-      for (let cx = worldToCell(pos.x - reach); cx <= worldToCell(pos.x + reach); cx++) {
-        if (!cm.columnAt(cx, cz, cy)) continue
+    for (let cz = worldToCell(pos.z - scanReach); cz <= worldToCell(pos.z + scanReach); cz++) {
+      for (let cx = worldToCell(pos.x - scanReach); cx <= worldToCell(pos.x + scanReach); cx++) {
+        const half = columnHalfAt(cm, cx, cz, cy)
+        if (!half) continue
+        const reach = r + half
         const ccx = (cx + 0.5) * CELL
         const ccz = (cz + 0.5) * CELL
         const ox = reach - Math.abs(pos.x - ccx)
@@ -215,7 +262,12 @@ export function hasLineOfSight(cm, x0, z0, x1, z1, cy = 0) {
   let tMaxZ =
     dz !== 0 ? (sz > 0 ? (gz + 1) * CELL - z0 : z0 - gz * CELL) / Math.abs(dz) : Infinity
   let guard = 0
+  let startCell = true
   while ((gx !== gxe || gz !== gze) && guard++ < 4096) {
+    // Match the historical endpoint policy: the observer and target cells are
+    // not self-occluding. Every intermediate cell is tested at true pier size.
+    if (!startCell && segmentHitsColumn(cm, gx, gz, cy, x0, z0, x1, z1)) return false
+    startCell = false
     if (tMaxX < tMaxZ) {
       const line = sx > 0 ? gx + 1 : gx
       if (cm.opaqueVAt ? cm.opaqueVAt(line, gz, cy) : cm.wallVAt(line, gz, cy)) return false

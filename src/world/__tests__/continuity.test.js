@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { buildChunk } from '../pipeline.js'
 import { DEFAULT_WORLD_CONFIG as CFG } from '../config.js'
-import { CHUNK, chunkKey } from '../constants.js'
+import { CHUNK, ZONE_WAREHOUSE, chunkKey } from '../constants.js'
 import {
   auditPatch,
   classifySeam,
@@ -197,5 +197,90 @@ describe('chunk continuity (not isolated boxes)', () => {
     expect(sum('mouth', 'n')).toBeGreaterThan(0)
     expect(sum('office', 'n')).toBeGreaterThan(0)
     expect(sum('planned', 'n')).toBeGreaterThan(0)
+  })
+
+  it('reports room dominance and rejects the old unbounded-open failure mode', () => {
+    const maxSpan = Math.max(
+      CFG.region.roomDominance.maxSpanChunks,
+      CFG.region.roomDominance.heroMaxSpanChunks
+    )
+    for (const a of audits) {
+      expect(a.architecture.officeShare).toBeGreaterThan(0.7)
+      expect(a.architecture.maxOpenRun).toBeLessThanOrEqual(maxSpan)
+      expect(a.architecture.largestOpenComponent).toBeLessThanOrEqual(maxSpan * maxSpan)
+      expect(a.architecture.roomDominant).toBe(true)
+      expect(a.architecture.roomDominanceChecked).toBe(true)
+      expect(a.architecture.boundedOpen).toBe(true)
+      expect(a.architecture.ok).toBe(true)
+    }
+  })
+
+  it('flags a continuous all-open custom patch even when its seam score is high', () => {
+    const config = structuredClone(CFG)
+    config.zoneBands = [{ id: ZONE_WAREHOUSE, max: 1.01 }]
+    config.stairs.enabled = false
+    config.multilevel.enabled = false
+    const size = 6
+    const chunks = new Map()
+    for (let cz = 0; cz < size; cz++) {
+      for (let cx = 0; cx < size; cx++) {
+        chunks.set(chunkKey(cx, cz), buildChunk(77, cx, 0, cz, config))
+      }
+    }
+    const audit = auditPatch(
+      (cx, cz) => chunks.get(chunkKey(cx, cz)) ?? null,
+      0,
+      0,
+      size,
+      size,
+      config
+    )
+    expect(audit.score).toBeGreaterThan(0.8)
+    expect(audit.architecture.officeShare).toBe(0)
+    expect(audit.architecture.largestOpenComponent).toBe(size * size)
+    expect(audit.architecture.boundedOpen).toBe(false)
+    expect(audit.architecture.ok).toBe(false)
+  })
+
+  it('flags a skinny open run even when its area fits the component cap', () => {
+    const openChunk = { zone: ZONE_WAREHOUSE, vAt: () => 0, hAt: () => 0 }
+    const width = 16
+    const audit = auditPatch(
+      (cx, cz) => cx >= 0 && cx < width && cz === 0 ? openChunk : null,
+      0,
+      0,
+      width,
+      1,
+      CFG
+    )
+    expect(audit.architecture.largestOpenComponent).toBe(16)
+    expect(audit.architecture.openComponentCap).toBe(16)
+    expect(audit.architecture.maxOpenRun).toBe(16)
+    expect(audit.architecture.openRunCap).toBe(4)
+    expect(audit.architecture.boundedOpen).toBe(false)
+    expect(audit.architecture.ok).toBe(false)
+  })
+
+  it('derives audit caps from normalized span configuration', () => {
+    const config = structuredClone(CFG)
+    config.region.roomDominance.minSpanChunks = 4
+    config.region.roomDominance.maxSpanChunks = 1
+    config.region.roomDominance.heroMinSpanChunks = 4
+    config.region.roomDominance.heroMaxSpanChunks = 1
+    const openChunk = { zone: ZONE_WAREHOUSE, vAt: () => 0, hAt: () => 0 }
+    const audit = auditPatch(
+      (cx, cz) => cx >= 0 && cx < 4 && cz >= 0 && cz < 4 ? openChunk : null,
+      0,
+      0,
+      4,
+      4,
+      config
+    )
+    expect(audit.architecture.openComponentCap).toBe(16)
+    expect(audit.architecture.maxOpenRun).toBe(4)
+    expect(audit.architecture.openRunCap).toBe(4)
+    expect(audit.architecture.boundedOpen).toBe(true)
+    expect(audit.architecture.roomDominanceChecked).toBe(false)
+    expect(audit.architecture.ok).toBe(true)
   })
 })

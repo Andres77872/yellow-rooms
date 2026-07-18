@@ -11,9 +11,9 @@ import {
 export const DEFAULT_WORLD_CONFIG = {
   version: WORLD_GEN_VERSION,
 
-  // Domain-warped macro regions keep each style coherent across several chunks.
-  // Warehouse cells touching a raw office sample become pillars, making the
-  // middle style a guaranteed transition rather than a statistical hope.
+  // A domain-warped field characterizes finite macro landmarks; the nested
+  // room-dominance contract decides their bounded placement inside the
+  // continuous office fabric.
   region: {
     scale: 11,
     salt: 0x5a5a,
@@ -22,6 +22,31 @@ export const DEFAULT_WORLD_CONFIG = {
     lacunarity: 2,
     gain: 0.35,
     bufferTransitions: true,
+    // The office plan is the world's continuous "background architecture".
+    // Open styles are finite landmark pockets inside 6x6-chunk districts,
+    // never another unbounded terrain biome. Ordinary halls span only 1-2
+    // chunks; rare hero courts may span 3-4. A one-chunk district margin and a
+    // thinned checkerboard election prevent cardinally adjacent landmarks and
+    // hard-cap even the exceptional volumes.
+    roomDominance: {
+      enabled: true,
+      districtChunks: 6,
+      marginChunks: 1,
+      minSpanChunks: 1,
+      maxSpanChunks: 2,
+      heroMinSpanChunks: 3,
+      heroMaxSpanChunks: 4,
+      heroChance: 0.3,
+      chance: 0.8,
+      minOfficeShare: 0.75,
+      spawnOfficeRadius: 1,
+      salt: 0x4c41,
+      spanSalt: 0x5350,
+      heroSalt: 0x4845,
+      signatureSalt: 0x5347,
+      positionSalt: 0x504f,
+      shapeSalt: 0x5348,
+    },
   },
   zoneBands: [
     { id: ZONE_OFFICE, max: 0.48 },
@@ -79,7 +104,17 @@ export const DEFAULT_WORLD_CONFIG = {
       salt: 0x25d7,
     },
   },
-  pillars: { spacing: 2, phase: 0 },
+  pillars: {
+    // Landmark halls use a much wider structural bay than the old dense
+    // every-other-cell lattice. Shipped macro landmarks choose a coherent
+    // monumental-grid, processional-aisle, broken-bay, or court-colonnade
+    // signature. `monumentalChance` remains the fallback for forced/custom
+    // pillar-only profiles that have no macro descriptor.
+    spacing: 4,
+    phase: 0,
+    monumentalChance: 0.78,
+    monumentalSalt: 0x5049,
+  },
   warehouse: {
     columns: { spacing: 6, chance: 0.45, salt: 0x2c91, phaseSalt: 0x19e3 },
     // Sparse straight partitions generated from global edge coordinates. Runs
@@ -88,10 +123,9 @@ export const DEFAULT_WORLD_CONFIG = {
   },
 
   // Fluorescent ceiling lamps on a GLOBAL module grid (seam-continuous).
-  // `phase` offsets the accepted grid per zone: pillars columns sit on every
-  // even global coordinate (pillars.spacing 2, phase 0), which covers the whole
-  // phase-0 step-4 lamp grid — phase 1 puts pillars lamps on odd coordinates,
-  // between the columns, so pillar halls actually get light.
+  // `phase` offsets the accepted grid per zone. The pillar bay lattice and
+  // phase-0 step-4 lamp grid share coordinates, so phase 1 puts pillar-hall
+  // fixtures between supports rather than inside them.
   lamps: {
     step: 4,
     salt: 0x6c61,

@@ -2,12 +2,21 @@ import { describe, it, expect } from 'vitest'
 import { buildChunk } from '../pipeline.js'
 import { vBorderContract, hBorderContract } from '../border.js'
 import { DEFAULT_WORLD_CONFIG as CFG } from '../config.js'
-import { CHUNK, ZONE_OFFICE, ZONE_PILLARS, WORLD_GEN_VERSION } from '../constants.js'
+import {
+  CHUNK,
+  ZONE_OFFICE,
+  ZONE_PILLARS,
+  WORLD_GEN_VERSION,
+  fmod,
+} from '../constants.js'
 import { fmix32, hash2i } from '../core/hash.js'
 import {
   CELL_BRIDGE,
   CELL_CORRIDOR,
   CELL_LOBBY,
+  COLUMN_NONE,
+  COLUMN_MONUMENTAL,
+  COLUMN_STANDARD,
   PASSAGE_OPEN,
   PASSAGE_WIDE,
   WALL_PLAIN,
@@ -19,6 +28,12 @@ import {
   multilevelConfig,
   multilevelContract,
 } from '../multilevel.js'
+import { pillarColumnKindAt } from '../zones/pillars.js'
+import {
+  regionLandmark,
+  regionLandmarkAt,
+  regionLandmarkContains,
+} from '../regions.js'
 
 // Stable fold over a chunk's full state — pins the generator output so any
 // accidental algorithm drift fails CI (intentional changes bump WORLD_GEN_VERSION
@@ -179,33 +194,33 @@ function digest(d) {
 // final twelve entries pin bottom/middle/top in both chunks of deterministic
 // maximum-height bridged and open-void structures.
 const GOLDEN = {
-  '0,0,0': '3f7e50cb',
-  '3,0,-2': '026a98a0',
-  '12,0,12': 'a0b8fa75',
-  '-10,0,10': '0c86dffc',
-  '0,1,0': 'af590c30',
-  '3,-1,-2': '519c131a',
-  '12,2,12': 'e521877c',
-  '3,-2,-12': 'c4c3ae3a',
-  '3,-1,-12': '4eda62a9',
-  '1,0,-2': '755fcc9f',
-  '2,1,-2': 'a8c8485c',
-  '1,7,-2': '57a89ebb',
-  '-1,0,2': 'ba63055c',
-  '-1,3,3': 'e708ed4e',
-  '-7,9,-8': '85e14710',
-  '-3,-15,-1': '99905d6a',
-  '-2,-15,-1': '5657370e',
-  '-3,-8,-1': '85ac2e20',
-  '-2,-8,-1': '2b35b3ac',
-  '-3,-1,-1': '47046d4e',
-  '-2,-1,-1': 'd77b093f',
-  '-10,0,8': '3588f414',
-  '-10,0,9': 'fe209aa8',
-  '-10,7,8': 'dc813e47',
-  '-10,7,9': '3a970027',
-  '-10,14,8': '3e0e5691',
-  '-10,14,9': '8e7e4bea',
+  '0,0,0': 'cc43476e',
+  '3,0,-2': '57f5510d',
+  '12,0,12': 'fa5ce098',
+  '-10,0,10': '1251d631',
+  '0,1,0': '046d92d9',
+  '3,-1,-2': '7908734c',
+  '12,2,12': '1caff78b',
+  '3,-2,-12': 'a5088eff',
+  '3,-1,-12': '8ac5d518',
+  '1,0,-2': '0a67b5a3',
+  '2,1,-2': '23dc2b4b',
+  '1,7,-2': '4ca6ed87',
+  '-1,0,2': 'cf54d113',
+  '-1,3,3': '3fb818a0',
+  '-7,9,-8': '45682846',
+  '-3,-15,-1': '7bb3ba2c',
+  '-2,-15,-1': '9d260457',
+  '-3,-8,-1': 'cd12c9e6',
+  '-2,-8,-1': '790d987b',
+  '-3,-1,-1': '6dc6a474',
+  '-2,-1,-1': 'ad037cbf',
+  '-10,0,8': '963cd9a5',
+  '-10,0,9': '35086b04',
+  '-10,7,8': 'a1605cb3',
+  '-10,7,9': 'd42b31bb',
+  '-10,14,8': 'b5550b31',
+  '-10,14,9': '849828da',
 }
 
 const MAX_HEIGHT_GOLDEN = {
@@ -513,18 +528,21 @@ describe('lamp regularity', () => {
     }
   })
 
-  // Regression: the pillars column lattice (spacing 2, phase 0) used to cover
-  // the whole phase-0 lamp grid, rejecting nearly every candidate — pillar
-  // halls averaged ~0.3 lamps/chunk vs office ~8.5 and were pitch-black. The
-  // per-zone phase offset must keep pillars lamp coverage comparable to office.
+  // Regression: a pillar lattice sharing the phase-0 lamp grid rejects nearly
+  // every fixture candidate. The per-zone offset must keep bounded hypostyle
+  // halls deliberately lit rather than accidentally pitch-black.
   it('pillars chunks get real lamp coverage (>= 4 lamps/chunk on average)', () => {
+    const cfg = structuredClone(CFG)
+    cfg.zoneBands = [{ id: ZONE_PILLARS, max: 1.01 }]
+    cfg.stairs.enabled = false
+    cfg.multilevel.enabled = false
     for (const s of SEEDS) {
       let lamps = 0
       let chunks = 0
-      for (let cz = -8; cz <= 8 && chunks < 20; cz++) {
-        for (let cx = -8; cx <= 8 && chunks < 20; cx++) {
-          const d = buildChunk(s, cx, 0, cz, CFG)
-          if (d.zone !== ZONE_PILLARS) continue
+      for (let cz = -2; cz <= 2; cz++) {
+        for (let cx = -2; cx <= 2; cx++) {
+          const d = buildChunk(s, cx, 0, cz, cfg)
+          expect(d.zone).toBe(ZONE_PILLARS)
           lamps += d.lamps.length
           chunks++
         }
@@ -532,6 +550,168 @@ describe('lamp regularity', () => {
       expect(chunks).toBeGreaterThan(0)
       expect(lamps / chunks).toBeGreaterThanOrEqual(4)
     }
+  })
+})
+
+describe('monumental pillar halls', () => {
+  it('places true large-pier bytes on a seam-continuous global bay grid', () => {
+    const cfg = structuredClone(CFG)
+    cfg.zoneBands = [{ id: ZONE_PILLARS, max: 1.01 }]
+    cfg.stairs.enabled = false
+    cfg.multilevel.enabled = false
+    cfg.pillars.monumentalChance = 1
+    const { spacing, phase } = cfg.pillars
+    let columns = 0
+    for (const [cx, cz] of [[0, 0], [1, 0], [-1, -1]]) {
+      const data = buildChunk(0x5049, cx, 0, cz, cfg)
+      expect(data.zone).toBe(ZONE_PILLARS)
+      for (let z = 0; z < CHUNK; z++) {
+        for (let x = 0; x < CHUNK; x++) {
+          const gx = cx * CHUNK + x
+          const gz = cz * CHUNK + z
+          const expected = fmod(gx, spacing) === phase && fmod(gz, spacing) === phase
+          expect(data.colAt(x, z)).toBe(expected ? COLUMN_MONUMENTAL : 0)
+          if (expected) columns++
+        }
+      }
+    }
+    expect(columns).toBeGreaterThan(0)
+  })
+
+  it('uses coherent processional, broken-bay, and court signatures', () => {
+    const processional = {
+      x0: 0,
+      z0: 0,
+      x1: 0,
+      z1: 0,
+      axis: 'x',
+      pierPattern: 'processionalAisle',
+    }
+    expect(pillarColumnKindAt(1, 0, 4, processional, CFG)).toBe(COLUMN_MONUMENTAL)
+    expect(pillarColumnKindAt(1, 0, 8, processional, CFG)).toBe(COLUMN_MONUMENTAL)
+    expect(pillarColumnKindAt(1, 0, 0, processional, CFG)).toBe(COLUMN_STANDARD)
+    expect(pillarColumnKindAt(1, 1, 4, processional, CFG)).toBe(COLUMN_NONE)
+
+    const broken = {
+      ...processional,
+      x0: 0,
+      z0: 0,
+      x1: 2,
+      z1: 2,
+      pierPattern: 'brokenBay',
+    }
+    expect(pillarColumnKindAt(1, 20, 20, broken, CFG)).toBe(COLUMN_NONE)
+    expect(pillarColumnKindAt(1, 16, 20, broken, CFG)).toBe(COLUMN_MONUMENTAL)
+
+    const court = { ...processional, pierPattern: 'courtColonnade' }
+    expect(pillarColumnKindAt(1, 0, 0, court, CFG)).toBe(COLUMN_MONUMENTAL)
+  })
+
+  it('recovers one processional signature across every real landmark slice', () => {
+    const cfg = structuredClone(CFG)
+    cfg.stairs.enabled = false
+    cfg.multilevel.enabled = false
+
+    for (const axis of ['x', 'z']) {
+      let found = null
+      for (let seed = 0; seed < 64 && !found; seed++) {
+        for (let dz = -8; dz <= 8 && !found; dz++) {
+          for (let dx = -8; dx <= 8; dx++) {
+            const landmark = regionLandmark(seed, dx, dz, cfg)
+            if (
+              landmark.active &&
+              landmark.kind === 'pillarHall' &&
+              landmark.pierPattern === 'processionalAisle' &&
+              landmark.axis === axis &&
+              landmark.width >= 2 &&
+              landmark.height >= 2
+            ) {
+              found = { seed, landmark }
+              break
+            }
+          }
+        }
+      }
+      expect(found).not.toBeNull()
+
+      const { seed, landmark } = found
+      const global = {
+        x0: landmark.x0 * CHUNK,
+        z0: landmark.z0 * CHUNK,
+        x1: (landmark.x1 + 1) * CHUNK - 1,
+        z1: (landmark.z1 + 1) * CHUNK - 1,
+      }
+      let monumental = 0
+      let standard = 0
+      for (let cz = landmark.z0; cz <= landmark.z1; cz++) {
+        for (let cx = landmark.x0; cx <= landmark.x1; cx++) {
+          if (!regionLandmarkContains(landmark, cx, cz)) continue
+          expect(regionLandmarkAt(cx, cz, seed, cfg)).toEqual(landmark)
+          const data = buildChunk(seed, cx, 0, cz, cfg)
+          for (let z = 0; z < CHUNK; z++) {
+            for (let x = 0; x < CHUNK; x++) {
+              const gx = cx * CHUNK + x
+              const gz = cz * CHUNK + z
+              if (
+                gx < global.x0 + 3 || gx > global.x1 - 3 ||
+                gz < global.z0 + 3 || gz > global.z1 - 3
+              ) continue
+              const expected = pillarColumnKindAt(seed, gx, gz, landmark, cfg)
+              if (!expected) continue
+              expect(data.colAt(x, z)).toBe(expected)
+              monumental += expected === COLUMN_MONUMENTAL ? 1 : 0
+              standard += expected === COLUMN_STANDARD ? 1 : 0
+            }
+          }
+        }
+      }
+      expect(monumental).toBeGreaterThan(0)
+      expect(standard).toBeGreaterThan(0)
+    }
+  })
+
+  it('realizes the elected missing pier of a broken-bay landmark', () => {
+    const cfg = structuredClone(CFG)
+    cfg.stairs.enabled = false
+    cfg.multilevel.enabled = false
+    let found = null
+    for (let seed = 0; seed < 64 && !found; seed++) {
+      for (let dz = -8; dz <= 8 && !found; dz++) {
+        for (let dx = -8; dx <= 8; dx++) {
+          const landmark = regionLandmark(seed, dx, dz, cfg)
+          if (landmark.active && landmark.pierPattern === 'brokenBay') {
+            found = { seed, landmark }
+            break
+          }
+        }
+      }
+    }
+    expect(found).not.toBeNull()
+    const { seed, landmark } = found
+    const { spacing, phase } = cfg.pillars
+    const missing = []
+    for (let gz = landmark.z0 * CHUNK; gz < (landmark.z1 + 1) * CHUNK; gz++) {
+      for (let gx = landmark.x0 * CHUNK; gx < (landmark.x1 + 1) * CHUNK; gx++) {
+        if (fmod(gx, spacing) !== phase || fmod(gz, spacing) !== phase) continue
+        if (pillarColumnKindAt(seed, gx, gz, landmark, cfg) === COLUMN_NONE) {
+          missing.push({ gx, gz })
+        }
+      }
+    }
+    expect(missing).toHaveLength(1)
+
+    const [{ gx, gz }] = missing
+    const cx = Math.floor(gx / CHUNK)
+    const cz = Math.floor(gz / CHUNK)
+    const data = buildChunk(seed, cx, 0, cz, cfg)
+    expect(data.colAt(gx - cx * CHUNK, gz - cz * CHUNK)).toBe(COLUMN_NONE)
+    const neighborX = gx + spacing
+    const neighborCx = Math.floor(neighborX / CHUNK)
+    const neighbor = buildChunk(seed, neighborCx, 0, cz, cfg)
+    expect(pillarColumnKindAt(seed, neighborX, gz, landmark, cfg))
+      .toBe(COLUMN_MONUMENTAL)
+    expect(neighbor.colAt(neighborX - neighborCx * CHUNK, gz - cz * CHUNK))
+      .toBe(COLUMN_MONUMENTAL)
   })
 })
 
@@ -612,6 +792,10 @@ describe('anomaly determinism', () => {
   it('normalizes a door frame after transition carving removes its supports', () => {
     const cfg = structuredClone(CFG)
     cfg.stairs.enabled = false
+    // This fixture targets the transition/door-normalization integration, not
+    // the default landmark election. Recover the broad-field coordinate that
+    // originally exposed the unsupported frame.
+    cfg.region.roomDominance.enabled = false
     const data = buildChunk(89, -10, 0, -6, cfg)
     expect(data.zone).toBe(ZONE_OFFICE)
     expect(data.hAt(5, 12)).toBe(0)

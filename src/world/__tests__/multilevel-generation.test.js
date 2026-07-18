@@ -17,6 +17,7 @@ import {
   multilevelBandBase,
   multilevelConfig,
   multilevelContract,
+  multilevelTerminalOverlookLine,
 } from '../multilevel.js'
 import { countChunkComponents } from '../topology.js'
 
@@ -161,16 +162,22 @@ function expectSurfaceEdges(chunks, structure, cy) {
   const { x0, z0, x1, z1 } = structure.globalBounds
   const deck = structure.decks.find((candidate) => candidate.levelCy === cy)
   const bridgeLine = deck?.globalBridgeLine ?? null
+  const overlookLine = multilevelTerminalOverlookLine({ ...structure, levelCy: cy })
   let windows = 0
   let mouths = 0
+  let rails = 0
 
   for (let gz = z0; gz <= z1; gz++) {
     const bridgeEnd = bridgeLine !== null && structure.bridgeAxis === 'x' && gz === bridgeLine
+    const terminalEdge = overlookLine !== null && structure.bridgeAxis === 'x' && gz === overlookLine
     for (const lineGX of [x0, x1 + 1]) {
       const state = vState(chunks, lineGX, gz, cy)
       if (bridgeEnd) {
         expectOpenApproach(state)
         mouths++
+      } else if (terminalEdge) {
+        expectRail(state)
+        rails++
       } else {
         expectWindow(state)
         windows++
@@ -179,11 +186,15 @@ function expectSurfaceEdges(chunks, structure, cy) {
   }
   for (let gx = x0; gx <= x1; gx++) {
     const bridgeEnd = bridgeLine !== null && structure.bridgeAxis === 'z' && gx === bridgeLine
+    const terminalEdge = overlookLine !== null && structure.bridgeAxis === 'z' && gx === overlookLine
     for (const lineGZ of [z0, z1 + 1]) {
       const state = hState(chunks, gx, lineGZ, cy)
       if (bridgeEnd) {
         expectOpenApproach(state)
         mouths++
+      } else if (terminalEdge) {
+        expectRail(state)
+        rails++
       } else {
         expectWindow(state)
         windows++
@@ -191,7 +202,6 @@ function expectSurfaceEdges(chunks, structure, cy) {
     }
   }
 
-  let rails = 0
   if (deck) {
     for (const { gx, gz } of deck.globalCells) {
       if (structure.bridgeAxis === 'x') {
@@ -302,7 +312,7 @@ describe('generated tall structures', () => {
     }
   })
 
-  it('creates a 15-storey open shaft with all perimeter windows and no bridge artifacts', () => {
+  it('creates a 15-storey open shaft with a guarded terminal overlook and no bridge artifacts', () => {
     const seed = 8128
     const config = forcedConfig({ kind: 'openVoid', levels: 15 })
     const structure = districtStructure(seed, 1, -1, 0, config)
@@ -311,6 +321,8 @@ describe('generated tall structures', () => {
 
     for (let cy = structure.baseCy + 1; cy <= structure.topCy; cy++) {
       expectSurfaceEdges(chunks, structure, cy)
+      const features = featureCounts(chunks, structure, cy)
+      expect(features.rails).toBe(cy === structure.topCy ? 2 : 0)
       for (const { cx, cz } of structure.participants) {
         const data = get(chunks, cx, cy, cz)
         expect(data.multilevelDown.bridgeCells).toEqual([])

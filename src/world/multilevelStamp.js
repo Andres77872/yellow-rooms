@@ -9,7 +9,10 @@ import {
   WALL_RAIL,
   WALL_WINDOW,
 } from './mapTypes.js'
-import { chunkMultilevelRooms } from './multilevel.js'
+import {
+  chunkMultilevelRooms,
+  multilevelTerminalOverlookLine,
+} from './multilevel.js'
 
 // Compile one chunk/floor slice of a canonical tall structure after ordinary
 // zone topology and stairs, but before lamps/anomalies. The global contract is
@@ -100,24 +103,27 @@ function stampOuterWindowsAndApproaches(data, slice) {
   const chunkGX = data.cx * CHUNK
   const chunkGZ = data.cz * CHUNK
   const bridge = slice.globalBridgeLine
+  const overlook = multilevelTerminalOverlookLine(slice)
 
   for (let z = z0; z <= z1; z++) {
     const gz = chunkGZ + z
     const isBridgeEnd = bridge !== null && slice.bridgeAxis === 'x' && gz === bridge
+    const isOverlook = overlook !== null && slice.bridgeAxis === 'x' && gz === overlook
     for (const [x, gx] of [[x0, chunkGX + x0], [x1 + 1, chunkGX + x1 + 1]]) {
       if (gx !== global.x0 && gx !== global.x1 + 1) continue
       if (isBridgeEnd) setV(data, x, z, 0, PASSAGE_WIDE)
-      else setV(data, x, z, 1, PASSAGE_WALL, WALL_WINDOW)
+      else setV(data, x, z, 1, PASSAGE_WALL, isOverlook ? WALL_RAIL : WALL_WINDOW)
     }
   }
 
   for (let x = x0; x <= x1; x++) {
     const gx = chunkGX + x
     const isBridgeEnd = bridge !== null && slice.bridgeAxis === 'z' && gx === bridge
+    const isOverlook = overlook !== null && slice.bridgeAxis === 'z' && gx === overlook
     for (const [z, gz] of [[z0, chunkGZ + z0], [z1 + 1, chunkGZ + z1 + 1]]) {
       if (gz !== global.z0 && gz !== global.z1 + 1) continue
       if (isBridgeEnd) setH(data, x, z, 0, PASSAGE_WIDE)
-      else setH(data, x, z, 1, PASSAGE_WALL, WALL_WINDOW)
+      else setH(data, x, z, 1, PASSAGE_WALL, isOverlook ? WALL_RAIL : WALL_WINDOW)
     }
   }
 }

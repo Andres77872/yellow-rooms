@@ -8,6 +8,7 @@ import {
   STAIR_STEPS,
   THICK,
   COL_HALF,
+  MONUMENTAL_COL_HALF,
   FRAME_DEPTH,
   DOOR_LEAF_FRACTION,
   DOOR_DARK_CHANCE,
@@ -27,7 +28,12 @@ import { collectDoorways } from './doors.js'
 import { pushDoorFrame, pushDoorLeaves, pushWindowTrim } from './trimwork.js'
 import { lampPanelTint } from './lampCharacter.js'
 import { STAIR_E, STAIR_S, STAIR_W } from './slab.js'
-import { WALL_PLAIN, WALL_RAIL, WALL_WINDOW } from './mapTypes.js'
+import {
+  COLUMN_MONUMENTAL,
+  WALL_PLAIN,
+  WALL_RAIL,
+  WALL_WINDOW,
+} from './mapTypes.js'
 
 const _m = new THREE.Matrix4()
 const _q = new THREE.Quaternion()
@@ -295,14 +301,16 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
   // Freestanding columns at cell centres.
   for (let z = 0; z < CHUNK; z++) {
     for (let x = 0; x < CHUNK; x++) {
-      if (data.cols[cIdx(x, z)] !== 1) continue
+      const kind = data.cols[cIdx(x, z)]
+      if (!kind) continue
+      const half = kind === COLUMN_MONUMENTAL ? MONUMENTAL_COL_HALF : COL_HALF
       inst.push({
         px: (x + 0.5) * CELL,
         py: wallY,
         pz: (z + 0.5) * CELL,
-        sx: COL_HALF * 2,
+        sx: half * 2,
         sy: WALL_H,
-        sz: COL_HALF * 2,
+        sz: half * 2,
       })
     }
   }

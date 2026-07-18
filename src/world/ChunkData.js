@@ -53,7 +53,8 @@ export class ChunkData {
     // windows and bridge rails remain wall=1 + PASSAGE_WALL for collision.
     this.wallFeatureV = new Uint8Array(CHUNK * CHUNK).fill(WALL_PLAIN)
     this.wallFeatureH = new Uint8Array(CHUNK * CHUNK).fill(WALL_PLAIN)
-    this.cols = new Uint8Array(CHUNK * CHUNK) // 1 = freestanding column at cell centre
+    // Column kind at a cell centre: 0 none, 1 standard post, 2 monumental pier.
+    this.cols = new Uint8Array(CHUNK * CHUNK)
     this.cellKind = new Uint8Array(CHUNK * CHUNK).fill(CELL_OPEN)
     this.spaceId = new Uint32Array(CHUNK * CHUNK)
     this.repairs = { connectivity: 0, navigation: 0, columns: 0 }

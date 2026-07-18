@@ -16,6 +16,13 @@ export const CELL_ATRIUM = 5 // lower hall of a room open through the slab above
 export const CELL_VOID = 6 // non-walkable upper-floor opening over an atrium
 export const CELL_BRIDGE = 7 // narrow retained deck crossing an atrium void
 
+// Column byte values. Navigation deliberately treats both as a blocked cell;
+// rendering and swept collision retain the physical size so a monumental pier
+// is more than a differently colored ordinary post.
+export const COLUMN_NONE = 0
+export const COLUMN_STANDARD = 1
+export const COLUMN_MONUMENTAL = 2
+
 // A closed edge can still have a visual/sight role.  The collision raster and
 // PASSAGE_WALL remain authoritative for movement; these features only refine
 // how that blocked edge is meshed and whether it occludes sight.  Keeping the

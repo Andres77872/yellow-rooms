@@ -4,6 +4,8 @@ import {
   CHUNK_WORLD,
   CELL,
   COL_HALF,
+  MONUMENTAL_COL_HALF,
+  MAX_COL_HALF,
   LOAD_RADIUS,
   UNLOAD_RADIUS,
   LOAD_RADIUS_Y,
@@ -14,6 +16,7 @@ import {
   LAMP_QUERY_R,
   LIGHT_RANGE,
   STALKER_AMBIENT,
+  PLAYER_R,
   chunkKey3,
   cIdx,
   layerY,
@@ -24,7 +27,7 @@ import { DEFAULT_WORLD_CONFIG } from './config.js'
 import { slabContract } from './slab.js'
 import { chunkMultilevelRooms } from './multilevel.js'
 import { Chunk } from './Chunk.js'
-import { wallFeatureSeesThrough } from './mapTypes.js'
+import { COLUMN_MONUMENTAL, wallFeatureSeesThrough } from './mapTypes.js'
 
 const HUB = (CHUNK / 2) | 0
 
@@ -513,7 +516,15 @@ export class ChunkManager {
   columnAt(gx, gz, cy = 0) {
     const c = this._chunkAt(gx, gz, cy)
     if (!c) return false
-    return c.data.colAt(gx - c.cx * CHUNK, gz - c.cz * CHUNK) === 1
+    return c.data.colAt(gx - c.cx * CHUNK, gz - c.cz * CHUNK) > 0
+  }
+
+  columnHalfAt(gx, gz, cy = 0) {
+    const c = this._chunkAt(gx, gz, cy)
+    if (!c) return 0
+    const kind = c.data.colAt(gx - c.cx * CHUNK, gz - c.cz * CHUNK)
+    if (!kind) return 0
+    return kind === COLUMN_MONUMENTAL ? MONUMENTAL_COL_HALF : COL_HALF
   }
 
   // Canonical stair descriptor for a cell, or null (see Chunk.buildStairCells).
@@ -546,10 +557,27 @@ export class ChunkManager {
     if (c.data.hasFloorHole(lx, lz)) return true
     const s = c.stairCells.get(cIdx(lx, lz))
     if (s && s.part === 'run') return true
-    if (!c.data.colAt(lx, lz)) return false
-    const ccx = (gx + 0.5) * CELL
-    const ccz = (gz + 0.5) * CELL
-    return Math.abs(wx - ccx) < COL_HALF && Math.abs(wz - ccz) < COL_HALF
+    // Placement checks body clearance, not only whether the point lies inside
+    // the rendered solid. Monumental clearance is 1.6u from the pier centre,
+    // just beyond a 3u cell's edge, so inspect neighbouring cells as well as
+    // the point's owner.
+    const scanReach = PLAYER_R + MAX_COL_HALF
+    for (let colZ = worldToCell(wz - scanReach); colZ <= worldToCell(wz + scanReach); colZ++) {
+      for (let colX = worldToCell(wx - scanReach); colX <= worldToCell(wx + scanReach); colX++) {
+        const owner = this._chunkAt(colX, colZ, cy)
+        if (!owner) continue
+        const kind = owner.data.colAt(
+          colX - owner.cx * CHUNK,
+          colZ - owner.cz * CHUNK
+        )
+        if (!kind) continue
+        const half = (kind === COLUMN_MONUMENTAL ? MONUMENTAL_COL_HALF : COL_HALF) + PLAYER_R
+        const ccx = (colX + 0.5) * CELL
+        const ccz = (colZ + 0.5) * CELL
+        if (Math.abs(wx - ccx) < half && Math.abs(wz - ccz) < half) return true
+      }
+    }
+    return false
   }
 
   // Cell centre at the FLOOR height of layer cy.

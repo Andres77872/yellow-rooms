@@ -230,6 +230,7 @@ export class Engine {
     const { state, cm } = this
     const lvl = state.level
     cm.setSeed(hashStr(`${state.seedText}#${lvl}`))
+    this.audio.resetLevel(cm.seed)
 
     // Exit: reproducible XZ several chunks away, on a random non-zero floor
     // within five layers of the floor-0 spawn.
@@ -375,7 +376,10 @@ export class Engine {
     // Slab-muffled footfalls (v8): a Pursuer closing in from ANOTHER floor is
     // invisible (the slab blocks sight), so it announces itself — heavy,
     // lowpassed thumps through the ceiling/floor, quickening as it nears.
-    if (this.pursuer.active && this.pursuer.cy !== controller.floor && res2.dist < 14) {
+    const realVerticalCue = this.pursuer.active &&
+      this.pursuer.cy !== controller.floor &&
+      res2.dist < 14
+    if (realVerticalCue) {
       this._thumpT = (this._thumpT ?? 0) - dt
       if (this._thumpT <= 0) {
         this.audio.entityThump(0.05 + 0.04 * (1 - res2.dist / 14), true)
@@ -395,7 +399,7 @@ export class Engine {
     )
     this._updateSanity(dt, merged)
     this._updateFlicker(dt)
-    audio.update(dt)
+    audio.update(dt, { seen: merged.seen, realVerticalCue })
     this._updateExit()
     this.ui.updateHud(state, this.exitInfo)
     if (this.minimap.visible) {

@@ -87,6 +87,6 @@ describe('office-to-open transitions', () => {
       expect(data.colAt(1, z)).toBe(0)
       expect(data.colAt(2, z)).toBe(0)
     }
-    expect(data.colAt(4, 2)).toBe(1)
+    expect(data.colAt(4, 4)).toBeGreaterThan(0)
   })
 })

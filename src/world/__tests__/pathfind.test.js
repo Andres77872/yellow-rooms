@@ -11,7 +11,7 @@ function mockCM(data) {
   return {
     wallVAt: (gx, gz) => inRange(gx, gz) && data.vAt(gx, gz) === 1,
     wallHAt: (gx, gz) => inRange(gx, gz) && data.hAt(gx, gz) === 1,
-    columnAt: (gx, gz) => inRange(gx, gz) && data.colAt(gx, gz) === 1,
+    columnAt: (gx, gz) => inRange(gx, gz) && data.colAt(gx, gz) > 0,
     stairAt: () => null, // single flat floor (stair cases live in pathfind3d.test.js)
     cellCenter: (gx, gz, cy, t) => t.set((gx + 0.5) * CELL, 0, (gz + 0.5) * CELL),
   }

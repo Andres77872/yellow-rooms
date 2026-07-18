@@ -1,8 +1,21 @@
 import { describe, it, expect } from 'vitest'
 import { moveAndCollide, hasLineOfSight } from '../../player/collision.js'
 import { ChunkData } from '../ChunkData.js'
-import { CELL, CHUNK, PLAYER_R, WALL_COL_HALF } from '../constants.js'
-import { PASSAGE_WALL, WALL_RAIL, WALL_WINDOW, wallFeatureSeesThrough } from '../mapTypes.js'
+import {
+  CELL,
+  CHUNK,
+  COL_HALF,
+  MONUMENTAL_COL_HALF,
+  PLAYER_R,
+  WALL_COL_HALF,
+} from '../constants.js'
+import {
+  COLUMN_MONUMENTAL,
+  PASSAGE_WALL,
+  WALL_RAIL,
+  WALL_WINDOW,
+  wallFeatureSeesThrough,
+} from '../mapTypes.js'
 
 // Mock ChunkManager backed by a single chunk at the origin.
 function mockCM(data) {
@@ -14,7 +27,13 @@ function mockCM(data) {
     wallHAt,
     opaqueVAt: (gx, gz) => wallVAt(gx, gz) && !wallFeatureSeesThrough(data.wallFeatureVAt(gx, gz)),
     opaqueHAt: (gx, gz) => wallHAt(gx, gz) && !wallFeatureSeesThrough(data.wallFeatureHAt(gx, gz)),
-    columnAt: (gx, gz) => inRange(gx, gz) && data.colAt(gx, gz) === 1,
+    columnAt: (gx, gz) => inRange(gx, gz) && data.colAt(gx, gz) > 0,
+    columnHalfAt: (gx, gz) => {
+      if (!inRange(gx, gz)) return 0
+      const kind = data.colAt(gx, gz)
+      if (!kind) return 0
+      return kind === COLUMN_MONUMENTAL ? MONUMENTAL_COL_HALF : COL_HALF
+    },
   }
 }
 
@@ -65,6 +84,18 @@ describe('collision: walls', () => {
     expect(blocked).toBe(true)
     expect(pos.x).toBeLessThan(colCenterX - 0.3) // stopped west of the column centre
   })
+
+  it('collides against a monumental pier at its rendered width', () => {
+    const data = new ChunkData(0, 0, 0, 0)
+    data.setCol(5, 5, COLUMN_MONUMENTAL)
+    const cm = mockCM(data)
+    const center = 5.5 * CELL
+    const pos = { x: center - 3, z: center }
+    let blocked = false
+    for (let i = 0; i < 60; i++) blocked = moveAndCollide(cm, pos, 0.1, 0).x || blocked
+    expect(blocked).toBe(true)
+    expect(pos.x).toBeCloseTo(center - MONUMENTAL_COL_HALF - PLAYER_R - 0.001, 3)
+  })
 })
 
 describe('collision: line of sight', () => {
@@ -87,6 +118,24 @@ describe('collision: line of sight', () => {
   it('is clear in fully open space', () => {
     const cm = mockCM(new ChunkData(0, 0, 0, 0))
     expect(hasLineOfSight(cm, 3, 3, 30, 12)).toBe(true)
+  })
+
+  it('blocks sight through a monumental pier but preserves clear bay sightlines', () => {
+    const data = new ChunkData(0, 0, 0, 0)
+    data.setCol(5, 5, COLUMN_MONUMENTAL)
+    const cm = mockCM(data)
+    expect(
+      hasLineOfSight(cm, 2.5 * CELL, 5.5 * CELL, 8.5 * CELL, 5.5 * CELL)
+    ).toBe(false)
+    expect(
+      hasLineOfSight(
+        cm,
+        2.5 * CELL,
+        5.5 * CELL + MONUMENTAL_COL_HALF + 0.05,
+        8.5 * CELL,
+        5.5 * CELL + MONUMENTAL_COL_HALF + 0.05
+      )
+    ).toBe(true)
   })
 
   it('windows and bridge rails block movement but not sight', () => {

@@ -39,7 +39,7 @@ function worldSlice(seed, cx, cz, cy, cfg) {
     wallHAt: (gx, gz, l) =>
       inChunk(gx, gz) && !!layers.get(l) && layers.get(l).data.hAt(local(gx, cx), local(gz, cz)) === 1,
     columnAt: (gx, gz, l) =>
-      inChunk(gx, gz) && !!layers.get(l) && layers.get(l).data.colAt(local(gx, cx), local(gz, cz)) === 1,
+      inChunk(gx, gz) && !!layers.get(l) && layers.get(l).data.colAt(local(gx, cx), local(gz, cz)) > 0,
     stairAt: (gx, gz, l) => {
       if (!inChunk(gx, gz) || !layers.get(l)) return null
       return layers.get(l).cells.get(cIdx(local(gx, cx), local(gz, cz))) || null

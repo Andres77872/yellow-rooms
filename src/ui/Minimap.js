@@ -188,11 +188,12 @@ export class Minimap {
 
     // 3) Columns (revealed cells only).
     ctx.fillStyle = C.column
-    const csz = Math.max(2, COL_HALF * 2 * SCALE)
     for (let gz = gz0; gz <= gz1; gz++) {
       for (let gx = gx0; gx <= gx1; gx++) {
         if (!store.isRevealed(gx, gz, floor)) continue
         if (!store.columnAt(gx, gz, floor)) continue
+        const half = store.columnHalfAt?.(gx, gz, floor) || COL_HALF
+        const csz = Math.max(2, half * 2 * SCALE)
         const x = this._sx((gx + 0.5) * CELL, px)
         const y = this._sy((gz + 0.5) * CELL, pz)
         ctx.fillRect(x - csz / 2, y - csz / 2, csz, csz)

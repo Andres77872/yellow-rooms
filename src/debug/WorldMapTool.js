@@ -6,6 +6,7 @@ import {
   ZONE_PILLARS,
   ZONE_WAREHOUSE,
   COL_HALF,
+  MONUMENTAL_COL_HALF,
   FOV,
   chunkKey3,
   worldToCell,
@@ -15,7 +16,12 @@ import { hashStr } from '../world/core/hash.js'
 import { floodReachable } from '../world/connectivity.js'
 import { auditLayeredPatch, auditPatch } from '../world/audit.js'
 import { section, slider, toggle, button, segmented, readout, buttonRow } from './widgets.js'
-import { CELL_BRIDGE, WALL_RAIL, WALL_WINDOW } from '../world/mapTypes.js'
+import {
+  CELL_BRIDGE,
+  COLUMN_MONUMENTAL,
+  WALL_RAIL,
+  WALL_WINDOW,
+} from '../world/mapTypes.js'
 
 const LOGW = 322
 const LOGH = 322
@@ -555,10 +561,12 @@ export class WorldMapTool {
 
         // Columns.
         ctx.fillStyle = '#6e6230'
-        const csz = Math.max(1.5, COL_HALF * 2 * scale)
         for (let z = 0; z < CHUNK; z++) {
           for (let x = 0; x < CHUNK; x++) {
-            if (d.colAt(x, z) === 1) {
+            const kind = d.colAt(x, z)
+            if (kind) {
+              const half = kind === COLUMN_MONUMENTAL ? MONUMENTAL_COL_HALF : COL_HALF
+              const csz = Math.max(1.5, half * 2 * scale)
               const wx = ox + (x + 0.5) * CELL
               const wz = oz + (z + 0.5) * CELL
               ctx.fillRect(this._sx(wx) - csz / 2, this._sy(wz) - csz / 2, csz, csz)
@@ -713,7 +721,9 @@ export class WorldMapTool {
     )
     this._stat.multilevelAudit.set(formatMultilevelAudit(integrity))
     this._stat.cont.set(
-      cont ? `score ${cont.score.toFixed(2)} · ${cont.sealed} unsafe · plan variety ${cont.planVariety.toFixed(2)}` : 'off'
+      cont
+        ? `score ${cont.score.toFixed(2)} · ${cont.sealed} unsafe · arch ${cont.architecture.ok ? 'ok' : 'FAIL'} · rooms ${(cont.architecture.officeShare * 100).toFixed(0)}% · open comp ${cont.architecture.largestOpenComponent}/${cont.architecture.openComponentCap} · run ${cont.architecture.maxOpenRun}/${cont.architecture.openRunCap} · plan variety ${cont.planVariety.toFixed(2)}`
+        : 'off'
     )
     this._stat.seed.set(`${this.source === 1 ? 'explore' : 'live'} 0x${(this.previewSeed >>> 0).toString(16)}`)
     this._stat.cursor.set(this._hover ? `${this._hover.wx.toFixed(1)}, ${this._hover.wz.toFixed(1)}` : '—')

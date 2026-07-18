@@ -306,6 +306,26 @@ function bridgeCenterLines(globalBounds, bridgeAxis, shortSpan) {
   return [low, high]
 }
 
+// The bridge-less shaft's top gallery opens two guarded axial overlooks onto
+// the full-height void. Return their shared GLOBAL short-axis line, or null for
+// every other surface. Keeping this election beside the canonical descriptor
+// logic lets stamping, audits, and tests consume one exact rule.
+export function multilevelTerminalOverlookLine(slice) {
+  const bounds = slice?.globalBounds ?? slice?.bounds
+  if (
+    slice?.kind !== 'openVoid' ||
+    slice.levelCy !== slice.topCy ||
+    !bounds ||
+    !Number.isFinite(bounds.x0) ||
+    !Number.isFinite(bounds.z0) ||
+    !Number.isFinite(bounds.x1) ||
+    !Number.isFinite(bounds.z1)
+  ) return null
+  return slice.bridgeAxis === 'x'
+    ? Math.floor((bounds.z0 + bounds.z1) / 2)
+    : Math.floor((bounds.x0 + bounds.x1) / 2)
+}
+
 function bridgeLevels(baseCy, topCy) {
   const levels = []
   for (let levelCy = baseCy + 1; levelCy <= topCy; levelCy += 2) {

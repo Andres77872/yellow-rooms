@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import * as THREE from 'three'
 import { buildChunk } from '../pipeline.js'
 import { buildChunkMeshes } from '../mesh.js'
+import { ChunkData } from '../ChunkData.js'
 import { DEFAULT_WORLD_CONFIG } from '../config.js'
 import { createGeometries, disposeGeometries } from '../../render/geometries.js'
 import {
@@ -11,7 +12,9 @@ import {
   CELL,
   CHUNK,
   CHUNK_WORLD,
+  COL_HALF,
   LAYER_H,
+  MONUMENTAL_COL_HALF,
   SLAB_T,
   THICK,
   WALL_H,
@@ -19,7 +22,12 @@ import {
   WINDOW_SILL_H,
   layerY,
 } from '../constants.js'
-import { WALL_RAIL, WALL_WINDOW } from '../mapTypes.js'
+import {
+  COLUMN_MONUMENTAL,
+  COLUMN_STANDARD,
+  WALL_RAIL,
+  WALL_WINDOW,
+} from '../mapTypes.js'
 import {
   multilevelBandBase,
   multilevelConfig,
@@ -118,6 +126,32 @@ function fasciaArea(geometry) {
 }
 
 describe('3D chunk mesh / slab ownership', () => {
+  it('meshes ordinary posts and monumental piers at distinct physical widths', () => {
+    const geom = createGeometries()
+    const { material, all } = materials()
+    const data = new ChunkData(0, 0, 0, 0)
+    data.setCol(2, 2, COLUMN_STANDARD)
+    data.setCol(6, 6, COLUMN_MONUMENTAL)
+    const mesh = buildChunkMeshes(data, geom, all, 0, 0, 0)
+    const instances = mesh.group.children.find((child) => child.isInstancedMesh)
+    const matrix = new THREE.Matrix4()
+    const position = new THREE.Vector3()
+    const quaternion = new THREE.Quaternion()
+    const scale = new THREE.Vector3()
+    const widths = []
+    for (let i = 0; i < instances.count; i++) {
+      instances.getMatrixAt(i, matrix)
+      matrix.decompose(position, quaternion, scale)
+      widths.push(scale.x)
+    }
+    widths.sort((a, b) => a - b)
+    expect(widths[0]).toBeCloseTo(COL_HALF * 2, 6)
+    expect(widths[1]).toBeCloseTo(MONUMENTAL_COL_HALF * 2, 6)
+    mesh.dispose()
+    disposeGeometries(geom)
+    material.dispose()
+  })
+
   it('punches identical two-cell apertures in the lower ceiling and upper floor', () => {
     const geom = createGeometries()
     const { material, all } = materials()

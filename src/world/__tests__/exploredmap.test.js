@@ -19,7 +19,7 @@ function mockCM(data) {
     chunks: new Map([['0,0,0', { data }]]), // live map is keyed (cx,cy,cz) in v8
     wallVAt: (gx, gz) => inRange(gx, gz) && data.vAt(gx, gz) === 1,
     wallHAt: (gx, gz) => inRange(gx, gz) && data.hAt(gx, gz) === 1,
-    columnAt: (gx, gz) => inRange(gx, gz) && data.colAt(gx, gz) === 1,
+    columnAt: (gx, gz) => inRange(gx, gz) && data.colAt(gx, gz) > 0,
   }
 }
 
