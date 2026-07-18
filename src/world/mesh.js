@@ -16,6 +16,7 @@ import {
   DOOR_TINT_VAR,
   WINDOW_SILL_H,
   WINDOW_HEAD_Y,
+  WINDOW_SALT,
   BRIDGE_GUARD_H,
   BRIDGE_GUARD_CAP_H,
   BRIDGE_BEAM_H,
@@ -26,6 +27,8 @@ import {
 } from './constants.js'
 import { collectDoorways } from './doors.js'
 import { pushDoorFrame, pushDoorLeaves, pushWindowTrim } from './trimwork.js'
+import { collectInteriorDressing } from './props.js'
+import { hash2i } from './core/hash.js'
 import { lampPanelTint } from './lampCharacter.js'
 import { STAIR_E, STAIR_S, STAIR_W } from './slab.js'
 import {
@@ -255,7 +258,8 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
     const sz = vertical ? CELL : THICK
     if (feature === WALL_WINDOW) {
       // Collision-solid sill + header (wallpaper); the joinery (casings, stool,
-      // glazing cross) comes from the shared trimwork builder.
+      // glazing) comes from the shared trimwork builder, with a deterministic
+      // per-window tone selecting cross / single-bar / venetian-blind glazing.
       inst.push({ px, py: WINDOW_SILL_H / 2, pz, sx, sy: WINDOW_SILL_H, sz })
       inst.push({
         px,
@@ -265,7 +269,9 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
         sy: WALL_H - WINDOW_HEAD_Y,
         sz,
       })
-      pushWindowTrim(featureFrameInst, axis, line, cell)
+      const gx = data.cx * CHUNK + (vertical ? line : cell)
+      const gz = data.cz * CHUNK + (vertical ? cell : line)
+      pushWindowTrim(featureFrameInst, axis, line, cell, hash2i(WINDOW_SALT, gx, gz) / 4294967296)
       return
     }
     if (feature === WALL_RAIL) {
@@ -403,6 +409,14 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
     }
   }
 
+  // --- Interior dressing (props.js): the "designed building" layer ---
+  // Trim (baseboards, crowns, column bases/caps) shares the frame batch and
+  // its uniform trim paint; tinted props and emissive wayfinding signs get
+  // their own instanced batches with per-instance colours. All purely visual
+  // and collision-free by construction (see props.js header).
+  const dressing = collectInteriorDressing(data)
+  for (const t of dressing.trim) frameInst.push(t)
+
   let frames = null
   if (frameInst.length) {
     frames = new THREE.InstancedMesh(geom.wallUnit, materials.doorFrame, frameInst.length)
@@ -433,6 +447,40 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
     leaves.instanceColor.needsUpdate = true
     leaves.computeBoundingSphere()
     group.add(leaves)
+  }
+
+  let props = null
+  if (dressing.props.length) {
+    props = new THREE.InstancedMesh(geom.wallUnit, materials.prop, dressing.props.length)
+    for (let i = 0; i < dressing.props.length; i++) {
+      const it = dressing.props[i]
+      _p.set(it.px, it.py, it.pz)
+      _s.set(it.sx, it.sy, it.sz)
+      _m.compose(_p, _q, _s)
+      props.setMatrixAt(i, _m)
+      props.setColorAt(i, _c.setRGB(it.tint[0], it.tint[1], it.tint[2]))
+    }
+    props.instanceMatrix.needsUpdate = true
+    props.instanceColor.needsUpdate = true
+    props.computeBoundingSphere()
+    group.add(props)
+  }
+
+  let signs = null
+  if (dressing.signs.length) {
+    signs = new THREE.InstancedMesh(geom.wallUnit, materials.signGlow, dressing.signs.length)
+    for (let i = 0; i < dressing.signs.length; i++) {
+      const it = dressing.signs[i]
+      _p.set(it.px, it.py, it.pz)
+      _s.set(it.sx, it.sy, it.sz)
+      _m.compose(_p, _q, _s)
+      signs.setMatrixAt(i, _m)
+      signs.setColorAt(i, _c.setRGB(it.tint[0], it.tint[1], it.tint[2]))
+    }
+    signs.instanceMatrix.needsUpdate = true
+    signs.instanceColor.needsUpdate = true
+    signs.computeBoundingSphere()
+    group.add(signs)
   }
 
   // --- Fluorescent ceiling panels (lit feed the light pool; dead are dark) ---
@@ -499,6 +547,8 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
     walls?.dispose()
     frames?.dispose()
     leaves?.dispose()
+    props?.dispose()
+    signs?.dispose()
     panels?.dispose()
     deadPanels?.dispose()
     for (const g of ownedGeos) g.dispose()

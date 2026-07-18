@@ -156,8 +156,15 @@ export function createGBufferMaterials(renderer) {
   // Painted-cream leaf base; per-door instanceColor tones it (brightness band,
   // rare dark stain) and darkens the knob to metal — see mesh.js leafTint.
   const doorLeaf = flatMaterial(lin(0xbfb49a), 0, true, true)
+  // Interior props (thresholds, radiators, clocks, boards, extinguisher
+  // cabinets, vents): white base tinted per instance by props.js palettes.
+  const prop = flatMaterial(lin(0xffffff), 0, true, true)
+  // Emissive wayfinding signs (exit + hanging blades): they glow and bloom
+  // but are NOT in the light field — beacons, not lamps. Steady (no flicker
+  // wiring), tinted per instance (exit green / blade amber).
+  const signGlow = emissiveMaterial(lin(0xffffff), true, true)
 
-  return { carpet, ceiling, wallpaper, panel, panelDead, entity, pursuer, exit, doorFrame, doorLeaf }
+  return { carpet, ceiling, wallpaper, panel, panelDead, entity, pursuer, exit, doorFrame, doorLeaf, prop, signGlow }
 }
 
 export function disposeGBufferMaterials(mats) {

@@ -15,11 +15,13 @@ import { PASSAGE_DOOR, PASSAGE_WIDE } from './mapTypes.js'
 // doorway always looks identical across chunk reloads; it varies between seeds
 // only because the wall layout does.
 //
-//   { axis: 'v'|'h', line, cell, leaf, leaves: [{ hinge: -1|1, face: -1|1 }], tone: 0..1 }
+//   { axis: 'v'|'h', line, cell, leaf, leaves: [{ hinge: -1|1, face: -1|1 }], tone: 0..1, style: 0..1 }
 //     v: line = lx (vertical grid line), cell = z (row along the line)
 //     h: line = lz (horizontal grid line), cell = x (column along the line)
 //     tone: leaf-colour seed (fresh hash bits) — mesh.js maps it onto the
 //           painted-cream band or, rarely, the dark-stained "wrong door".
+//     style: leaf-style seed (its own hash bits) — trimwork.js maps it onto
+//           the two-panel / three-panel / louvered variants.
 
 const SALT_V = DOOR_SALT
 const SALT_H = (DOOR_SALT ^ 0x68f1) | 0
@@ -76,7 +78,10 @@ function decorate(axis, line, cell, lo, hi, ga, gb, salt, fraction) {
   // Fresh high bits for the leaf tint so colour never correlates with the
   // face/leaf choices made from the low bits and the presence threshold.
   const tone = (h >>> 8) / 16777216
-  return { axis, line, cell, leaf, leaves, tone }
+  // A dedicated mid-bit slice picks the leaf style (two-panel / three-panel /
+  // louvered) so the style correlates with neither the tint nor the swing.
+  const style = ((h >>> 2) & 63) / 64
+  return { axis, line, cell, leaf, leaves, tone, style }
 }
 
 export function collectDoorways(data, fraction) {

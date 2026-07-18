@@ -106,10 +106,26 @@ fake-out sounds wait for a recovery period, never compete with visible/nearby
 threat or a real cross-floor footfall, and sometimes abstain entirely. The same
 level seed reproduces the same cue opportunities without affecting generation.
 
+The interior architecture layer dresses the generated topology for rendering
+(deterministic from global coordinates, purely visual, collision-free):
+
+- redesigned joinery: stepped architrave door casings with back-bands, corner
+  blocks, plinths and caps; two-panel / three-panel / louvered door leaves
+  with kick plates; gallery windows with aprons and cross, single-bar, or
+  venetian-blind glazing;
+- interior dressing: baseboards and crown molding on every full-height wall,
+  bases and capitals on every post and monumental pier, brass threshold strips
+  under doors and wide mouths, and ribbed radiators under the windows;
+- wayfinding and occupation props: emissive exit signs over a subset of doors,
+  hanging amber blade signs in corridors and lobbies, ceiling vents, wall
+  clocks, notice boards, and corridor extinguisher cabinets.
+
 The generation rationale and history are documented in
 [docs/map-generation-research.md](docs/map-generation-research.md). The deeper
 liminal-horror research review, structure roadmap, dynamics, and validation
-gates are in [docs/liminal-horror-design.md](docs/liminal-horror-design.md).
+gates are in [docs/liminal-horror-design.md](docs/liminal-horror-design.md),
+and the interior-architecture review for the dressing layer is in
+[docs/design-review.md](docs/design-review.md).
 
 ## Main generation modules
 
@@ -125,6 +141,8 @@ gates are in [docs/liminal-horror-design.md](docs/liminal-horror-design.md).
 - `src/world/audit.js` — 2D seam and canonical layered-connectivity validation
 - `src/world/mapTypes.js` — semantic cell and passage vocabulary
 - `src/world/pipeline.js` — pure public generation pipeline
+- `src/world/trimwork.js` / `src/world/props.js` — joinery and interior
+  dressing builders consumed by `src/world/mesh.js`
 
 Generation is covered by deterministic golden tests, macro-plan and seam
 invariants, multi-chunk wall/navigation flood tests, region-distribution tests,

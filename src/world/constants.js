@@ -411,6 +411,103 @@ export const DOOR_TINT_VAR = 0.12 // ± brightness variation on ordinary leaves
 export const DOOR_DARK_CHANCE = 0.05 // fraction of leaves that are stained dark
 export const DOOR_DARK_TINT = 0.32 // brightness multiplier for a dark-stained leaf
 
+// Door casing v2 (trimwork.js): the bare jamb+lintel casing is dressed with a
+// stepped back-band behind each jamb and a proud corner block at each head
+// corner — the classic architrave silhouette that reads as drawn moulding
+// under the ink outline. Depths stay staggered (band < jamb < plinth < cap <
+// corner) so every layer catches its own cel step.
+export const FRAME_BAND_W = 0.22 // back-band width along the wall
+export const FRAME_BAND_DEPTH = 0.16 // shallower than the jamb casing
+export const FRAME_CORNER = 0.24 // corner-block size (square)
+export const FRAME_CORNER_DEPTH = 0.26 // proudest element of the assembly
+// Leaf style variants, selected per door from a dedicated hash slice
+// (doors.js `style`): two-panel (default), three-panel (adds a mid rail
+// molding), or louvered (slatted upper half — the utility-closet read).
+export const DOOR_PANEL_MID_Y = 1.16 // mid rail molding centre height
+export const DOOR_PANEL_MID_H = 0.16
+export const DOOR_LOUVER_COUNT = 5 // slats across the upper leaf half
+export const DOOR_LOUVER_H = 0.06 // slat height (thickness reads as a step)
+export const DOOR_LOUVER_LO = 1.34 // lowest slat centre
+export const DOOR_LOUVER_HI = 2.16 // highest slat centre
+export const DOOR_KICK_Y = 0.07 // kick-plate centre height
+export const DOOR_KICK_H = 0.12 // metal kick plate at the leaf foot
+
+// Window dressing v2 (trimwork.js): an apron board under the stool, and three
+// deterministic glazing treatments selected by a per-window tone: the classic
+// four-pane cross, a single vertical bar, or venetian blinds (the liminal
+// office cliché — slatted light against the atrium void).
+export const WINDOW_APRON_H = 0.1 // apron board height under the stool
+export const WINDOW_BLIND_SLATS = 6 // venetian slat count
+export const WINDOW_BLIND_SLAT_H = 0.12 // slat height (slight overlap read)
+export const WINDOW_BLIND_DEPTH = 0.03 // slat depth, inside the aperture
+export const WINDOW_BLIND_RAIL_H = 0.08 // head / bottom rail height
+
+// Interior dressing + props (props.js). Purely visual, deterministic from
+// global coordinates, and collision-safe by construction: everything either
+// hugs existing walls/columns, lies flat on the floor, or hangs above head
+// height, so the collision raster never has to learn about it.
+// Baseboards + crown molding on every full-height wall edge turn the bare
+// thin-wall slabs into designed interior elevations.
+export const BASEBOARD_H = 0.14
+export const BASEBOARD_PROUD = 0.03 // depth proud of each wall face
+export const CROWN_H = 0.12
+export const CROWN_PROUD = 0.04
+// Floor threshold strips under doors and wide mouths: a flooring-material
+// change that marks the transition line the way real buildings do.
+export const THRESHOLD_H = 0.03
+export const THRESHOLD_DEPTH = THICK + 0.1
+// Column base + capital: freestanding posts and monumental piers get a plinth
+// and a flared cap so they read as designed structure, not extruded boxes.
+export const COL_BASE_H = 0.24
+export const COL_BASE_WIDEN = 0.14 // extra half-width beyond the shaft
+export const COL_CAP_H = 0.16
+export const COL_CAP_WIDEN = 0.18
+// Exit signs surface-mounted on the door header (both faces), on a
+// deterministic subset of doorways — a sparse wayfinding beacon in the haze.
+export const EXIT_SIGN_CHANCE = 0.35
+export const EXIT_SIGN_W = 0.72
+export const EXIT_SIGN_H = 0.24
+export const EXIT_SIGN_T = 0.07
+// Hanging blade signs in corridors/lobbies: a perpendicular double-faced
+// panel on a ceiling hanger, bottom edge above door-head height.
+export const BLADE_SIGN_CHANCE = 0.12
+export const BLADE_SIGN_W = 1.1
+export const BLADE_SIGN_H = 0.3
+export const BLADE_SIGN_T = 0.05
+export const BLADE_SIGN_Y = 2.45 // panel centre height
+// Ceiling vents: dark grilles flush under the ceiling, sparse, never over
+// lamps, signs, columns, stairs, or slab holes.
+export const VENT_CHANCE = 0.12
+export const VENT_W = 1.2
+export const VENT_D = 0.8
+export const VENT_H = 0.06
+// Wall-mounted props, one roll per wall edge per face, by adjacent cell kind:
+// clocks + notice boards in rooms/lobbies, extinguisher cabinets in corridors.
+// All shallower than the door casings that already stand proud of the walls.
+export const CLOCK_CHANCE = 0.06
+export const CLOCK_SIZE = 0.34
+export const CLOCK_Y = 2.05
+export const BOARD_CHANCE = 0.08
+export const BOARD_W = 1.3
+export const BOARD_H = 0.85
+export const BOARD_Y = 1.5
+export const PROP_PLATE_T = 0.05 // flat wall plates (clock, board)
+export const EXT_CHANCE = 0.06
+export const EXT_W = 0.3
+export const EXT_H = 0.55
+export const EXT_T = 0.14
+export const EXT_Y = 1.15
+// Radiator under every gallery window: a panel with ribs below the stool.
+export const RADIATOR_W = 1.6
+export const RADIATOR_H = 0.55
+export const RADIATOR_T = 0.12
+export const RADIATOR_RIBS = 3
+// Deterministic salts for the prop/sign/window hash streams.
+export const PROP_SALT = 0x3d05 | 0
+export const SIGN_SALT = 0x5ea1 | 0
+export const VENT_SALT = 0x7e07 | 0
+export const WINDOW_SALT = 0x71d0 | 0
+
 // Helpers ---------------------------------------------------------------
 export const idx = (lx, lz) => lz * CHUNK + lx
 export const chunkKey = (cx, cz) => `${cx},${cz}` // 2D (per-layer internals: plans, audits)

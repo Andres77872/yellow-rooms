@@ -9,12 +9,17 @@ import {
   DOOR_LEAF_THICK,
   DOOR_LEAF_GAP,
   DOOR_PANEL_PROUD,
+  DOOR_PANEL_MID_Y,
+  DOOR_LOUVER_COUNT,
+  DOOR_KICK_H,
   DOOR_KNOB_W,
   WINDOW_SILL_H,
   WINDOW_HEAD_Y,
   WINDOW_TRIM_W,
   WINDOW_MULLION_W,
   WINDOW_STOOL_H,
+  WINDOW_APRON_H,
+  WINDOW_BLIND_SLATS,
 } from '../constants.js'
 
 const DOOR_H = WALL_H - HEADER_H
@@ -28,19 +33,19 @@ const zSpan = (b) => [b.pz - b.sz / 2, b.pz + b.sz / 2]
 const overlap = (a, b) => Math.min(a[1], b[1]) - Math.max(a[0], b[0])
 
 describe('pushDoorFrame', () => {
-  it('dresses a vertical doorway with a symmetric 6-box casing', () => {
+  it('dresses a vertical doorway with a symmetric 10-box architrave casing', () => {
     const out = []
     pushDoorFrame(out, 'v', 4, 7)
-    expect(out).toHaveLength(6)
+    expect(out).toHaveLength(10)
     const plane = 4 * CELL
     const centre = (7 + 0.5) * CELL
     for (const b of out) {
       expect(b.px).toBeCloseTo(plane, 10) // every box centred on the wall plane
-      expect(b.sx).toBeGreaterThanOrEqual(0.22) // stands proud of the THICK wall
+      expect(b.sx).toBeGreaterThanOrEqual(0.16) // stands proud of the THICK wall
     }
     // Symmetry about the gap centre: offset boxes come in mirrored pairs.
     const offCentre = out.filter((b) => Math.abs(b.pz - centre) > 1e-9)
-    expect(offCentre).toHaveLength(4) // 2 jambs + 2 plinths
+    expect(offCentre).toHaveLength(8) // 2 jambs + 2 bands + 2 corners + 2 plinths
     for (const b of offCentre) {
       const mirror = out.find(
         (m) =>
@@ -55,6 +60,15 @@ describe('pushDoorFrame', () => {
     const lintel = out.find((b) => Math.abs(b.py - (DOOR_H + HEADER_H / 2)) < 1e-9)
     expect(lintel).toBeTruthy()
     expect(ySpan(lintel)[1]).toBeCloseTo(WALL_H, 10)
+  })
+
+  it('steps the profile: band < jamb < plinth < cap < corner in proudness', () => {
+    const out = []
+    pushDoorFrame(out, 'h', 3, 5)
+    const depths = out.map((b) => b.sz).sort((a, b) => a - b)
+    // Distinct stepped depths, from the shallow back-band to the proud corner.
+    expect(Math.min(...depths)).toBeCloseTo(0.16, 10) // back-bands
+    expect(Math.max(...depths)).toBeCloseTo(0.26, 10) // corner blocks
   })
 
   it('keeps the walkable opening clear (bar real-trim ankle intrusion)', () => {
@@ -72,7 +86,7 @@ describe('pushDoorFrame', () => {
         // Trim may stand proud ACROSS the plane (it frames the mouth) but may
         // not narrow the clear span along it beyond a plinth's 3cm toe.
         const into = overlap(along, clear)
-        expect(into).toBeLessThanOrEqual(0.05)
+        expect(into).toBeLessThanOrEqual(0.05 + 1e-9)
         expect(overlap(across, [plane - THICK / 2, plane + THICK / 2])).toBeGreaterThan(0)
       }
     }
@@ -80,18 +94,36 @@ describe('pushDoorFrame', () => {
 })
 
 describe('pushDoorLeaves', () => {
-  const base = { axis: 'v', line: 4, cell: 7, leaf: true, leaves: [{ hinge: 1, face: 1 }], tone: 0.5 }
+  const base = { axis: 'v', line: 4, cell: 7, leaf: true, leaves: [{ hinge: 1, face: 1 }], tone: 0.5, style: 0 }
 
-  it('builds a 4-part panel door per leaf (slab, 2 moldings, knob), roles tagged', () => {
+  it('builds a 5-part two-panel door per leaf (slab, 2 moldings, kick, knob)', () => {
     const out = []
     pushDoorLeaves(out, base)
-    expect(out).toHaveLength(4)
+    expect(out).toHaveLength(5)
     expect(out.filter((b) => b.role === 0)).toHaveLength(3) // paint
-    expect(out.filter((b) => b.role === 1)).toHaveLength(1) // knob
+    expect(out.filter((b) => b.role === 1)).toHaveLength(2) // kick + knob metal
     // A pair doubles the parts.
     const pair = []
     pushDoorLeaves(pair, { ...base, leaves: [{ hinge: -1, face: 1 }, { hinge: 1, face: -1 }] })
-    expect(pair).toHaveLength(8)
+    expect(pair).toHaveLength(10)
+  })
+
+  it('adds a mid rail molding for the three-panel style', () => {
+    const out = []
+    pushDoorLeaves(out, { ...base, style: 0.6 })
+    expect(out).toHaveLength(6)
+    const mid = out.find((b) => Math.abs(b.py - DOOR_PANEL_MID_Y) < 1e-9)
+    expect(mid).toBeTruthy()
+    expect(mid.role).toBe(0)
+  })
+
+  it('slatts the upper half for the louvered style', () => {
+    const out = []
+    pushDoorLeaves(out, { ...base, style: 0.9 })
+    // slab + lower panel + N louvers + kick + knob
+    expect(out).toHaveLength(4 + DOOR_LOUVER_COUNT)
+    const louvers = out.filter((b) => b.role === 0 && b.py > 1.3 && b.sy < 0.1)
+    expect(louvers).toHaveLength(DOOR_LOUVER_COUNT)
   })
 
   it('fits the framed opening: two leaves are each half the clear span', () => {
@@ -103,30 +135,32 @@ describe('pushDoorLeaves', () => {
   })
 
   it('stays flat against the neighbour cell and off the passage mouth', () => {
-    for (const hinge of [-1, 1]) {
-      for (const face of [-1, 1]) {
-        const out = []
-        pushDoorLeaves(out, { ...base, leaves: [{ hinge, face }] })
-        const plane = 4 * CELL
-        const n0 = (7 + hinge) * CELL
-        const n1 = (7 + hinge + 1) * CELL
-        for (const b of out) {
-          // Whole part inside the neighbour cell span (never over the opening).
-          const [z0, z1] = zSpan(b)
-          expect(z0).toBeGreaterThanOrEqual(n0 - 1e-9)
-          expect(z1).toBeLessThanOrEqual(n1 + 1e-9)
-          // Whole part on the room side of the wall face (never in the wall
-          // slab or the doorway throat).
-          const [x0, x1] = xSpan(b)
-          if (face === 1) expect(x0).toBeGreaterThanOrEqual(plane + THICK / 2 - 1e-9)
-          else expect(x1).toBeLessThanOrEqual(plane - THICK / 2 + 1e-9)
-          // Nothing prouder than leaf + panel off the wall face (the knob
-          // excepted — a knob legitimately stands past the moldings).
-          if (b.role !== 1) {
-            const reach = Math.max(Math.abs(x0 - plane), Math.abs(x1 - plane))
-            expect(reach).toBeLessThanOrEqual(
-              THICK / 2 + DOOR_LEAF_THICK + DOOR_PANEL_PROUD + 1e-9
-            )
+    for (const style of [0, 0.6, 0.95]) {
+      for (const hinge of [-1, 1]) {
+        for (const face of [-1, 1]) {
+          const out = []
+          pushDoorLeaves(out, { ...base, style, leaves: [{ hinge, face }] })
+          const plane = 4 * CELL
+          const n0 = (7 + hinge) * CELL
+          const n1 = (7 + hinge + 1) * CELL
+          for (const b of out) {
+            // Whole part inside the neighbour cell span (never over the opening).
+            const [z0, z1] = zSpan(b)
+            expect(z0).toBeGreaterThanOrEqual(n0 - 1e-9)
+            expect(z1).toBeLessThanOrEqual(n1 + 1e-9)
+            // Whole part on the room side of the wall face (never in the wall
+            // slab or the doorway throat).
+            const [x0, x1] = xSpan(b)
+            if (face === 1) expect(x0).toBeGreaterThanOrEqual(plane + THICK / 2 - 1e-9)
+            else expect(x1).toBeLessThanOrEqual(plane - THICK / 2 + 1e-9)
+            // Nothing prouder than leaf + panel off the wall face (the knob
+            // excepted — a knob legitimately stands past the moldings).
+            if (b.role !== 1) {
+              const reach = Math.max(Math.abs(x0 - plane), Math.abs(x1 - plane))
+              expect(reach).toBeLessThanOrEqual(
+                THICK / 2 + DOOR_LEAF_THICK + DOOR_PANEL_PROUD + 1e-9
+              )
+            }
           }
         }
       }
@@ -136,10 +170,11 @@ describe('pushDoorLeaves', () => {
   it('puts the knob at the leading edge, away from the hinge side', () => {
     const out = []
     pushDoorLeaves(out, base)
-    const knob = out.find((b) => b.role === 1)
+    const knobs = out.filter((b) => b.role === 1 && b.sy > DOOR_KICK_H)
+    expect(knobs).toHaveLength(1)
     const zl = 8 * CELL + DOOR_LEAF_GAP + LEAF_W / 2 // hinge 1 -> leaf centre in cell 8
-    expect(knob.pz).toBeGreaterThan(zl) // leading edge on the +z side
-    expect(Math.abs(knob.pz - (zl + LEAF_W / 2 - DOOR_KNOB_W))).toBeLessThan(1e-9)
+    expect(knobs[0].pz).toBeGreaterThan(zl) // leading edge on the +z side
+    expect(Math.abs(knobs[0].pz - (zl + LEAF_W / 2 - DOOR_KNOB_W))).toBeLessThan(1e-9)
   })
 
   it('mirrors a pair across the wall: one leaf per flanking cell, one per face', () => {
@@ -160,10 +195,10 @@ describe('pushDoorLeaves', () => {
 })
 
 describe('pushWindowTrim', () => {
-  it('frames the aperture with casing, a flush stool and a glazing cross', () => {
+  it('frames the aperture with casing, stool, apron and a glazing cross', () => {
     const out = []
-    pushWindowTrim(out, 'h', 2, 9)
-    expect(out).toHaveLength(6)
+    pushWindowTrim(out, 'h', 2, 9, 0)
+    expect(out).toHaveLength(7)
     const plane = 2 * CELL
     const centre = (9 + 0.5) * CELL
     for (const b of out) expect(b.pz).toBeCloseTo(plane, 10)
@@ -172,6 +207,11 @@ describe('pushWindowTrim', () => {
     const stool = out.find((b) => Math.abs(ySpan(b)[1] - WINDOW_SILL_H) < 1e-9)
     expect(stool).toBeTruthy()
     expect(stool.sy).toBeCloseTo(WINDOW_STOOL_H, 10)
+
+    // Apron board directly under the stool.
+    const apron = out.find((b) => Math.abs(b.sy - WINDOW_APRON_H) < 1e-9)
+    expect(apron).toBeTruthy()
+    expect(ySpan(apron)[1]).toBeCloseTo(WINDOW_SILL_H - WINDOW_STOOL_H, 10)
 
     // Glazing cross: two slim bars through the opening centre, clearly slimmer
     // than the casings so they read as joinery, not trim.
@@ -189,5 +229,41 @@ describe('pushWindowTrim', () => {
       expect(x0).toBeGreaterThanOrEqual(9 * CELL - 1e-9)
       expect(x1).toBeLessThanOrEqual(10 * CELL + 1e-9)
     }
+  })
+
+  it('drops the horizontal bar for the single-bar variant', () => {
+    const out = []
+    pushWindowTrim(out, 'v', 3, 4, 0.6)
+    expect(out).toHaveLength(6)
+    const bars = out.filter((b) => b.sx === WINDOW_MULLION_W || b.sy === WINDOW_MULLION_W)
+    expect(bars).toHaveLength(1) // vertical bar only
+  })
+
+  it('hangs venetian blinds for the blind variant, all inside the aperture', () => {
+    const out = []
+    pushWindowTrim(out, 'h', 2, 9, 0.9)
+    // 3 casings + stool + apron + 2 rails + N slats
+    expect(out).toHaveLength(7 + WINDOW_BLIND_SLATS)
+    const slats = out.filter((b) => b.sy < 0.13 && b.sz < WINDOW_TRIM_W && b.py > WINDOW_SILL_H && b.py < WINDOW_HEAD_Y)
+    expect(slats.length).toBeGreaterThanOrEqual(WINDOW_BLIND_SLATS)
+    for (const b of out) {
+      const [x0, x1] = xSpan(b)
+      expect(x0).toBeGreaterThanOrEqual(9 * CELL - 1e-9)
+      expect(x1).toBeLessThanOrEqual(10 * CELL + 1e-9)
+      const [y0, y1] = ySpan(b)
+      expect(y0).toBeGreaterThanOrEqual(0)
+      expect(y1).toBeLessThanOrEqual(WINDOW_HEAD_Y + WINDOW_TRIM_W / 2 + 1e-9)
+    }
+  })
+
+  it('is deterministic per tone and defaults to the cross', () => {
+    const a = []
+    const b = []
+    pushWindowTrim(a, 'v', 1, 1, 0.3)
+    pushWindowTrim(b, 'v', 1, 1, 0.3)
+    expect(a).toEqual(b)
+    const def = []
+    pushWindowTrim(def, 'v', 1, 1)
+    expect(def).toHaveLength(7) // tone 0 -> cross
   })
 })

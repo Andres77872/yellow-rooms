@@ -80,6 +80,8 @@ function materials() {
       wallpaper: material,
       doorFrame: material,
       doorLeaf: material,
+      prop: material,
+      signGlow: material,
       panel: material,
       panelDead: material,
       exit: material,
