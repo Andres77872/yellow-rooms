@@ -68,6 +68,10 @@ import {
   CELL_VOID,
   CELL_BRIDGE,
   COLUMN_MONUMENTAL,
+  COLUMN_FURNITURE,
+  SPACE_ROLE_BREAK,
+  SPACE_ROLE_MEETING,
+  SPACE_ROLE_SERVER,
 } from './mapTypes.js'
 
 // Interior dressing and props — the "designed building" layer that sits
@@ -94,14 +98,22 @@ import {
 export const PROP_TINT = {
   threshold: [0.5, 0.42, 0.26], // worn brass
   vent: [0.3, 0.29, 0.26], // dark grille
+  ventSlat: [0.17, 0.16, 0.14], // grille slats
   clock: [0.95, 0.93, 0.85], // cream face
+  clockRim: [0.2, 0.2, 0.19], // dark case + hands
   board: [0.66, 0.54, 0.36], // cork
+  boardFrame: [0.3, 0.24, 0.17], // wood frame
+  paper: [0.93, 0.91, 0.82], // pinned notices
   extinguisher: [0.62, 0.14, 0.1], // safety red
+  glassPale: [0.78, 0.86, 0.88], // cabinet glazing
   radiator: [0.82, 0.8, 0.72], // painted enamel
+  pipe: [0.35, 0.34, 0.32], // plumbing metal
+  caution: [0.85, 0.7, 0.15], // server-room warning plate
 }
 export const SIGN_TINT = {
   exit: [0.45, 1.0, 0.62], // emergency green
   blade: [1.0, 0.82, 0.45], // warm wayfinding amber
+  frame: [0.2, 0.2, 0.18], // sign housings (dark even while emissive)
 }
 
 const DOOR_H = WALL_H - HEADER_H
@@ -130,11 +142,13 @@ function dressEdge(data, axis, line, cell, trim, props, signs) {
     if (passage !== PASSAGE_DOOR && passage !== PASSAGE_WIDE) return
     // Threshold strip: a flooring-material seam line under the opening.
     box(props, centre, THRESHOLD_H / 2, plane, CELL, THRESHOLD_H, THRESHOLD_DEPTH, PROP_TINT.threshold)
-    // Exit sign on a deterministic subset of real doorways — both faces.
+    // Exit sign on a deterministic subset of real doorways — a dark housing
+    // plate with the glowing face proud of it, one assembly per wall face.
     if (passage === PASSAGE_DOOR && roll(SIGN_SALT, gx, gz) < EXIT_SIGN_CHANCE) {
       const y = DOOR_H + 0.12 + EXIT_SIGN_H / 2
       for (const s of [-1, 1]) {
-        box(signs, centre, y, plane + s * (THICK / 2 + EXIT_SIGN_T / 2), EXIT_SIGN_W, EXIT_SIGN_H, EXIT_SIGN_T, SIGN_TINT.exit)
+        box(signs, centre, y, plane + s * (THICK / 2 + 0.02), EXIT_SIGN_W + 0.07, EXIT_SIGN_H + 0.06, 0.04, SIGN_TINT.frame)
+        box(signs, centre, y, plane + s * (THICK / 2 + 0.04 + EXIT_SIGN_T / 2), EXIT_SIGN_W, EXIT_SIGN_H, EXIT_SIGN_T, SIGN_TINT.exit)
       }
     }
     return
@@ -147,7 +161,8 @@ function dressEdge(data, axis, line, cell, trim, props, signs) {
   }
 
   if (feature === WALL_WINDOW) {
-    // Radiator panel + ribs under the window stool, on both gallery faces.
+    // Radiator under the window stool, both gallery faces: enamel panel with
+    // ribs, feet, and an inlet pipe dropping to the floor.
     const y = RADIATOR_H / 2
     for (const s of [-1, 1]) {
       const faceOff = plane + s * (THICK / 2 + RADIATOR_T / 2)
@@ -156,6 +171,11 @@ function dressEdge(data, axis, line, cell, trim, props, signs) {
         const off = (r / (RADIATOR_RIBS - 1) - 0.5) * (RADIATOR_W - 0.2)
         box(props, centre + off, y, faceOff + s * (RADIATOR_T / 2 + 0.015), 0.07, RADIATOR_H * 0.82, 0.03, PROP_TINT.radiator)
       }
+      // Feet + the inlet pipe at one end.
+      for (const fs of [-1, 1]) {
+        box(props, centre + fs * (RADIATOR_W / 2 - 0.12), 0.04, faceOff, 0.08, 0.08, RADIATOR_T, PROP_TINT.pipe)
+      }
+      box(props, centre + RADIATOR_W / 2 - 0.06, RADIATOR_H / 2 - 0.1, faceOff + s * (RADIATOR_T / 2 + 0.02), 0.05, RADIATOR_H - 0.1, 0.05, PROP_TINT.pipe)
     }
     return
   }
@@ -164,21 +184,55 @@ function dressEdge(data, axis, line, cell, trim, props, signs) {
 
   // Wall-mounted props: one roll per wall face, driven by the adjacent cell
   // kind. Corridor walls get extinguisher cabinets; rooms/lobbies get clocks
-  // and notice boards. Plates sit shallower than the door casings.
+  // and notice boards — modulated by the district plan's room role: break
+  // rooms always pin notices, server rooms get warning plates instead of
+  // homely clutter. Plates sit shallower than the door casings.
   for (const s of [-1, 1]) {
     const cx = vertical ? line + (s > 0 ? 0 : -1) : cell
     const cz = vertical ? cell : line + (s > 0 ? 0 : -1)
     if (cx < 0 || cx >= CHUNK || cz < 0 || cz >= CHUNK) continue
-    const kind = data.cellKind[cIdx(cx, cz)]
+    const ci = cIdx(cx, cz)
+    const kind = data.cellKind[ci]
+    const role = data.spaceRole[ci]
     const r = roll((PROP_SALT ^ (s > 0 ? 0x5eed : 0xface)) | 0, gx, gz)
     if (kind === CELL_CORRIDOR) {
       if (r >= EXT_CHANCE) continue
-      box(props, centre, EXT_Y, plane + s * (THICK / 2 + EXT_T / 2), EXT_W, EXT_H, EXT_T, PROP_TINT.extinguisher)
+      // Extinguisher cabinet: red body, pale glazed door, handle nub.
+      const off = plane + s * (THICK / 2 + EXT_T / 2)
+      box(props, centre, EXT_Y, off, EXT_W, EXT_H, EXT_T, PROP_TINT.extinguisher)
+      box(props, centre, EXT_Y + 0.03, off + s * (EXT_T / 2 + 0.008), EXT_W - 0.08, EXT_H - 0.16, 0.015, PROP_TINT.glassPale)
+      box(props, centre + (EXT_W / 2 - 0.05), EXT_Y, off + s * (EXT_T / 2 + 0.02), 0.03, 0.1, 0.03, PROP_TINT.pipe)
     } else if (kind === CELL_ROOM || kind === CELL_LOBBY) {
-      if (r < CLOCK_CHANCE) {
-        box(props, centre, CLOCK_Y, plane + s * (THICK / 2 + PROP_PLATE_T / 2), CLOCK_SIZE, CLOCK_SIZE, PROP_PLATE_T, PROP_TINT.clock)
-      } else if (r < CLOCK_CHANCE + BOARD_CHANCE) {
-        box(props, centre, BOARD_Y, plane + s * (THICK / 2 + PROP_PLATE_T / 2), BOARD_W, BOARD_H, PROP_PLATE_T, PROP_TINT.board)
+      if (role === SPACE_ROLE_SERVER) {
+        // Caution plate at the server room's walls, no homely clutter.
+        if (r >= 0.3) continue
+        const off = plane + s * (THICK / 2 + PROP_PLATE_T / 2)
+        box(props, centre, 1.6, off, 0.4, 0.28, PROP_PLATE_T, PROP_TINT.caution)
+        box(props, centre, 1.6, off + s * (PROP_PLATE_T / 2 + 0.006), 0.3, 0.05, 0.012, PROP_TINT.clockRim)
+        continue
+      }
+      const boardChance = role === SPACE_ROLE_BREAK ? 0.4 : role === SPACE_ROLE_MEETING ? 0.16 : BOARD_CHANCE
+      if (r < CLOCK_CHANCE && role !== SPACE_ROLE_BREAK) {
+        // Wall clock: dark case, cream face, two static hands.
+        const off = plane + s * (THICK / 2 + PROP_PLATE_T / 2)
+        box(props, centre, CLOCK_Y, off, CLOCK_SIZE + 0.06, CLOCK_SIZE + 0.06, PROP_PLATE_T, PROP_TINT.clockRim)
+        const faceOff = off + s * (PROP_PLATE_T / 2 + 0.006)
+        box(props, centre, CLOCK_Y, faceOff, CLOCK_SIZE, CLOCK_SIZE, 0.012, PROP_TINT.clock)
+        box(props, centre, CLOCK_Y + 0.05, faceOff + s * 0.012, 0.025, 0.16, 0.012, PROP_TINT.clockRim) // hour hand
+        box(props, centre + 0.06, CLOCK_Y, faceOff + s * 0.012, 0.2, 0.02, 0.012, PROP_TINT.clockRim) // minute hand
+      } else if (r < CLOCK_CHANCE + boardChance) {
+        // Notice board: wood frame, cork field, pinned paper slips.
+        const off = plane + s * (THICK / 2 + PROP_PLATE_T / 2)
+        box(props, centre, BOARD_Y, off, BOARD_W + 0.08, BOARD_H + 0.08, PROP_PLATE_T, PROP_TINT.boardFrame)
+        const faceOff = off + s * (PROP_PLATE_T / 2 + 0.006)
+        box(props, centre, BOARD_Y, faceOff, BOARD_W, BOARD_H, 0.012, PROP_TINT.board)
+        const h2 = hash2i((PROP_SALT ^ 0xbeef) | 0, gx, gz)
+        for (let p = 0; p < 3; p++) {
+          const pu = ((h2 >>> (p * 6)) & 63) / 63 - 0.5
+          const pv = ((h2 >>> (p * 6 + 3)) & 63) / 63 - 0.5
+          box(props, centre + pu * (BOARD_W - 0.5), BOARD_Y + pv * (BOARD_H - 0.35), faceOff + s * 0.01,
+            0.22, 0.28, 0.008, PROP_TINT.paper)
+        }
       }
     }
   }
@@ -190,14 +244,20 @@ function dressColumns(data, trim) {
   for (let z = 0; z < CHUNK; z++) {
     for (let x = 0; x < CHUNK; x++) {
       const kind = data.cols[cIdx(x, z)]
-      if (!kind) continue
+      // Furniture cells are dressed by their own models (furnitureModels.js);
+      // only structural columns get a base + capital.
+      if (!kind || kind === COLUMN_FURNITURE) continue
       const half = kind === COLUMN_MONUMENTAL ? MONUMENTAL_COL_HALF : COL_HALF
       const px = (x + 0.5) * CELL
       const pz = (z + 0.5) * CELL
       const baseW = (half + COL_BASE_WIDEN) * 2
       const capW = (half + COL_CAP_WIDEN) * 2
+      // Base: a stepped plinth (lower wide step + narrower neck); capital: a
+      // flare + abacus slab, so piers read as designed structure.
       trim.push({ px, py: COL_BASE_H / 2, pz, sx: baseW, sy: COL_BASE_H, sz: baseW })
+      trim.push({ px, py: COL_BASE_H + 0.05, pz, sx: (half + 0.06) * 2, sy: 0.1, sz: (half + 0.06) * 2 })
       trim.push({ px, py: WALL_H - COL_CAP_H / 2, pz, sx: capW, sy: COL_CAP_H, sz: capW })
+      trim.push({ px, py: WALL_H - COL_CAP_H - 0.05, pz, sx: (half + 0.08) * 2, sy: 0.1, sz: (half + 0.08) * 2 })
     }
   }
 }
@@ -221,26 +281,25 @@ function dressCeiling(data, props, signs) {
         const h = hash2i((SIGN_SALT ^ 0x5b1a) | 0, gx, gz)
         if (h / 4294967296 < BLADE_SIGN_CHANCE) {
           const alongX = (h & 2) === 2
-          signs.push({
-            px,
-            py: BLADE_SIGN_Y,
-            pz,
-            sx: alongX ? BLADE_SIGN_W : BLADE_SIGN_T,
-            sy: BLADE_SIGN_H,
-            sz: alongX ? BLADE_SIGN_T : BLADE_SIGN_W,
-            tint: SIGN_TINT.blade,
-          })
-          // Hanger rod from the panel top to the ceiling.
-          const top = BLADE_SIGN_Y + BLADE_SIGN_H / 2
-          signs.push({
-            px,
-            py: (top + WALL_H) / 2,
-            pz,
-            sx: 0.04,
-            sy: WALL_H - top,
-            sz: 0.04,
-            tint: SIGN_TINT.blade,
-          })
+          const blade = (ou, y, ov, su, sy, sv, tint) =>
+            signs.push({
+              px: px + (alongX ? ou : ov),
+              py: y,
+              pz: pz + (alongX ? ov : ou),
+              sx: alongX ? su : sv,
+              sy,
+              sz: alongX ? sv : su,
+              tint,
+            })
+          // Housing rails above and below the glowing panel face.
+          blade(0, BLADE_SIGN_Y, 0, BLADE_SIGN_W, BLADE_SIGN_H, BLADE_SIGN_T, SIGN_TINT.blade)
+          blade(0, BLADE_SIGN_Y + BLADE_SIGN_H / 2 + 0.02, 0, BLADE_SIGN_W + 0.08, 0.04, BLADE_SIGN_T + 0.02, SIGN_TINT.frame)
+          blade(0, BLADE_SIGN_Y - BLADE_SIGN_H / 2 - 0.02, 0, BLADE_SIGN_W + 0.08, 0.04, BLADE_SIGN_T + 0.02, SIGN_TINT.frame)
+          // Two hanger rods from the housing to the ceiling.
+          const top = BLADE_SIGN_Y + BLADE_SIGN_H / 2 + 0.04
+          for (const rod of [-1, 1]) {
+            blade(rod * (BLADE_SIGN_W / 2 - 0.12), (top + WALL_H) / 2, 0, 0.04, WALL_H - top, 0.04, SIGN_TINT.frame)
+          }
           signed = true
         }
       }
@@ -252,6 +311,7 @@ function dressCeiling(data, props, signs) {
       const h = hash2i((VENT_SALT ^ 0x33c1) | 0, gx, gz)
       const ox = ((h & 1023) / 1023 - 0.5) * 0.9
       const oz = (((h >>> 10) & 1023) / 1023 - 0.5) * 0.9
+      // Grille body flush under the ceiling, with three slat strips.
       props.push({
         px: px + ox,
         py: WALL_H - VENT_H / 2,
@@ -261,6 +321,17 @@ function dressCeiling(data, props, signs) {
         sz: VENT_D,
         tint: PROP_TINT.vent,
       })
+      for (let slat = 0; slat < 3; slat++) {
+        props.push({
+          px: px + ox,
+          py: WALL_H - VENT_H - 0.012,
+          pz: pz + oz + (slat - 1) * (VENT_D / 3),
+          sx: VENT_W - 0.16,
+          sy: 0.025,
+          sz: 0.05,
+          tint: PROP_TINT.ventSlat,
+        })
+      }
     }
   }
 }

@@ -163,8 +163,11 @@ export function createGBufferMaterials(renderer) {
   // but are NOT in the light field — beacons, not lamps. Steady (no flicker
   // wiring), tinted per instance (exit green / blade amber).
   const signGlow = emissiveMaterial(lin(0xffffff), true, true)
+  // Collision-real office furniture: white base tinted per part by the
+  // furnitureModels.js palette (laminate, metal, fabric, screens, leaves).
+  const furniture = flatMaterial(lin(0xffffff), 0, true, true)
 
-  return { carpet, ceiling, wallpaper, panel, panelDead, entity, pursuer, exit, doorFrame, doorLeaf, prop, signGlow }
+  return { carpet, ceiling, wallpaper, panel, panelDead, entity, pursuer, exit, doorFrame, doorLeaf, prop, signGlow, furniture }
 }
 
 export function disposeGBufferMaterials(mats) {

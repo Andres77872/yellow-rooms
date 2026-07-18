@@ -10,6 +10,13 @@ import {
   PASSAGE_OPEN,
   PASSAGE_WALL,
   PASSAGE_WIDE,
+  SPACE_ROLE_NONE,
+  SPACE_ROLE_MEETING,
+  SPACE_ROLE_BREAK,
+  SPACE_ROLE_COPY,
+  SPACE_ROLE_ARCHIVE,
+  SPACE_ROLE_SERVER,
+  SPACE_ROLE_STORAGE,
 } from '../mapTypes.js'
 import { selectZone } from '../regions.js'
 import { chunkStairs, stairStrip, STAIR_DX, STAIR_DZ } from '../slab.js'
@@ -25,6 +32,7 @@ const SALT_CIRCULATION = 0x31c7
 const SALT_ROOMS = 0x6a09
 const SALT_DOORS = 0x4d23
 const SALT_SPACE_ID = 0x72e5
+const SALT_ROLES = 0x5a11
 // Sized for v8's stacked floors: up to 3 resident layers, each with its own
 // per-layer-seed districts, keep ~2-3x the districts warm vs a single floor.
 const CACHE_LIMIT = 64
@@ -94,6 +102,7 @@ class OfficePlan {
     this.passageH = new Uint8Array(size * size).fill(PASSAGE_OPEN)
     this.cellKind = new Uint8Array(size * size).fill(CELL_OPEN)
     this.spaceId = new Uint32Array(size * size)
+    this.roleGrid = new Uint8Array(size * size) // SPACE_ROLE_* per cell
     this.spaces = []
     this.adjacency = []
     this.portals = []
@@ -938,7 +947,51 @@ function allocateSpaces(plan, circulation, rng, cfg, seed) {
     throw new Error('office plan allocated an empty semantic space')
   }
   plan.spaces = stats
+  assignSpaceRoles(plan, seed)
   return localSpace
+}
+
+// Semantic room roles (v15): each room-typed space elects a special function
+// from its stable id and size, so a whole district slices it identically in
+// every chunk. Roles never touch topology — they steer the dressing layer
+// (furniture composition, wall props, signage) so districts read as named
+// places. The grammar is deliberately sparse: most rooms stay ordinary.
+function assignSpaceRoles(plan, seed) {
+  const pick = (space) => {
+    if (space.type !== 'room') return SPACE_ROLE_NONE
+    const w = space.x1 - space.x0 + 1
+    const h = space.z1 - space.z0 + 1
+    const r = hash3i((seed ^ SALT_ROLES) | 0, plan.dx, plan.dz, space.localId) / 4294967296
+    if (space.area >= 20 && w >= 4 && h >= 4) {
+      // Genuinely large rooms: meeting, server, or break space.
+      if (r < 0.32) return SPACE_ROLE_MEETING
+      if (r < 0.42) return SPACE_ROLE_SERVER
+      if (r < 0.55) return SPACE_ROLE_BREAK
+      return SPACE_ROLE_NONE
+    }
+    if (space.area >= 10) {
+      // Mid rooms: copy, archive, storage, or a small break corner.
+      if (r < 0.16) return SPACE_ROLE_COPY
+      if (r < 0.3) return SPACE_ROLE_ARCHIVE
+      if (r < 0.44) return SPACE_ROLE_STORAGE
+      if (r < 0.52) return SPACE_ROLE_BREAK
+      return SPACE_ROLE_NONE
+    }
+    // Small rooms: rare storage/copy closets only.
+    if (r < 0.1) return SPACE_ROLE_STORAGE
+    if (r < 0.18) return SPACE_ROLE_COPY
+    return SPACE_ROLE_NONE
+  }
+  for (const space of plan.spaces) {
+    space.role = pick(space)
+    if (space.role === SPACE_ROLE_NONE) continue
+    for (let z = space.z0; z <= space.z1; z++) {
+      for (let x = space.x0; x <= space.x1; x++) {
+        const i = idx(plan.size, x, z)
+        if (plan.spaceId[i] === space.id) plan.roleGrid[i] = space.role
+      }
+    }
+  }
 }
 
 function derivePartitions(plan, localSpace) {
@@ -1682,6 +1735,7 @@ function clonePlan(source) {
     'passageH',
     'cellKind',
     'spaceId',
+    'roleGrid',
   ]) plan[key] = source[key].slice()
   plan.spaces = source.spaces.map((space) => ({ ...space }))
   plan.adjacency = source.adjacency.map((edge) => ({ ...edge }))
@@ -1736,6 +1790,7 @@ export function applyOfficeDistrictPlan(data, ctx) {
       const di = z * CHUNK + x
       data.cellKind[di] = plan.cellKind[pi]
       data.spaceId[di] = plan.spaceId[pi]
+      data.spaceRole[di] = plan.roleGrid[pi]
     }
   }
   for (let z = 0; z < CHUNK; z++) {

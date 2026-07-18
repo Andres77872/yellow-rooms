@@ -57,7 +57,9 @@ describe('collectInteriorDressing', () => {
     expect(trim).toEqual([])
     expect(signs).toEqual([])
     // No walls, doors or typed cells: the only possible props are ceiling vents.
-    for (const p of props) expect(p.tint).toBe(PROP_TINT.vent)
+    for (const p of props) {
+      expect([PROP_TINT.vent, PROP_TINT.ventSlat]).toContainEqual(p.tint)
+    }
   })
 
   it('dresses every full-height wall with a baseboard and a crown', () => {
@@ -103,11 +105,12 @@ describe('collectInteriorDressing', () => {
     const { signs } = collectInteriorDressing(data)
     const exits = signs.filter((s) => s.tint === SIGN_TINT.exit)
     expect(exits.length).toBeGreaterThan(0)
-    expect(exits.length % 2).toBe(0) // one sign per wall face
+    expect(exits.length % 2).toBe(0) // one glowing face per wall face
     for (const s of exits) {
       expect(s.py - s.sy / 2).toBeGreaterThan(DOOR_H)
       expect(s.py + s.sy / 2).toBeLessThan(WALL_H)
-      expect(Math.abs(Math.abs(s.px - 5 * CELL) - THICK / 2 - s.sx / 2)).toBeLessThan(1e-9)
+      // The glowing face rides proud of its dark housing on the header.
+      expect(Math.abs(Math.abs(s.px - 5 * CELL) - THICK / 2 - 0.04 - s.sx / 2)).toBeLessThan(1e-9)
     }
     // A wide mouth never gets an exit sign.
     const wide = walledChunk()
@@ -133,17 +136,20 @@ describe('collectInteriorDressing', () => {
     data.setCol(3, 3, COLUMN_STANDARD)
     data.setCol(9, 9, COLUMN_MONUMENTAL)
     const { trim } = collectInteriorDressing(data)
-    expect(trim).toHaveLength(4)
+    // Stepped base + neck, capital + abacus: four boxes per shaft.
+    expect(trim).toHaveLength(8)
     const std = trim.filter((b) => b.px === 3.5 * CELL)
     const mon = trim.filter((b) => b.px === 9.5 * CELL)
     expect(std.map((b) => b.sx).sort((a, b) => a - b)).toEqual([
+      (COL_HALF + 0.06) * 2,
+      (COL_HALF + 0.08) * 2,
       (COL_HALF + COL_BASE_WIDEN) * 2,
       (COL_HALF + COL_CAP_WIDEN) * 2,
-    ])
+    ].sort((a, b) => a - b))
     for (const b of trim) {
-      const touchesFloor = Math.abs(b.py - b.sy / 2) < 1e-9
-      const touchesCeil = Math.abs(b.py + b.sy / 2 - WALL_H) < 1e-9
-      expect(touchesFloor || touchesCeil).toBe(true)
+      const nearFloor = Math.abs(b.py - b.sy / 2) < 0.25
+      const nearCeil = Math.abs(b.py + b.sy / 2 - WALL_H) < 0.25
+      expect(nearFloor || nearCeil).toBe(true)
     }
     expect(Math.max(...mon.map((b) => b.sx))).toBeGreaterThan(2 * MONUMENTAL_COL_HALF)
   })
@@ -158,12 +164,12 @@ describe('collectInteriorDressing', () => {
       expect(b.tint).toBe(SIGN_TINT.blade)
       expect(b.py).toBe(BLADE_SIGN_Y)
       expect(b.py - b.sy / 2).toBeGreaterThan(DOOR_H - 0.2)
-      // Hanger rod reaches the ceiling.
-      const hanger = signs.find(
-        (h) => h !== b && h.px === b.px && h.pz === b.pz && h.sy !== BLADE_SIGN_H
+      // Two hanger rods reach the ceiling, offset from the panel centre.
+      const rods = signs.filter(
+        (h) => h !== b && h.sy > BLADE_SIGN_H && Math.abs(h.px - b.px) + Math.abs(h.pz - b.pz) > 0.1
       )
-      expect(hanger).toBeTruthy()
-      expect(hanger.py + hanger.sy / 2).toBeCloseTo(WALL_H, 10)
+      expect(rods.length).toBeGreaterThanOrEqual(2)
+      for (const rod of rods) expect(rod.py + rod.sy / 2).toBeCloseTo(WALL_H, 10)
     }
     // Open (untyped) cells get no signs at all.
     const bare = collectInteriorDressing(new ChunkData(0, 0, 0, ZONE_OFFICE))
@@ -204,15 +210,25 @@ describe('collectInteriorDressing', () => {
       }
     }
     const { props } = collectInteriorDressing(data)
-    const wallProps = props.filter((p) => p.tint !== PROP_TINT.vent)
+    const wallProps = props.filter(
+      (p) => p.tint !== PROP_TINT.vent && p.tint !== PROP_TINT.ventSlat
+    )
     expect(wallProps.length).toBeGreaterThan(0)
     for (const p of wallProps) {
       // Extinguishers only on corridor (east) faces; clocks/boards only west.
+      // Nothing may stand prouder than a casing plus a glazing pane.
       const plane = Math.round(p.px / CELL) * CELL
       const off = Math.abs(p.px - plane)
-      expect(off).toBeLessThanOrEqual(THICK / 2 + EXT_T + 1e-9)
-      if (p.tint === PROP_TINT.extinguisher) expect(p.px).toBeGreaterThan(plane)
-      else expect(p.px).toBeLessThan(plane)
+      expect(off).toBeLessThanOrEqual(THICK / 2 + EXT_T + 0.02 + 1e-9)
+      if (
+        p.tint === PROP_TINT.extinguisher ||
+        p.tint === PROP_TINT.glassPale ||
+        p.tint === PROP_TINT.pipe
+      ) {
+        expect(p.px).toBeGreaterThan(plane)
+      } else {
+        expect(p.px).toBeLessThan(plane)
+      }
     }
   })
 })

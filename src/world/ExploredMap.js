@@ -11,7 +11,7 @@ import {
 import { hasLineOfSight } from '../player/collision.js'
 import { generateChunk } from './generate.js'
 import { buildStairCells } from './stairCells.js'
-import { COLUMN_MONUMENTAL, wallFeatureSeesThrough } from './mapTypes.js'
+import { COLUMN_FURNITURE, COLUMN_MONUMENTAL, wallFeatureSeesThrough } from './mapTypes.js'
 
 // Player-explored fog-of-war state for the HUD minimap. Pure data/logic (no
 // THREE), so it stays unit-testable like ChunkData / collision.
@@ -157,6 +157,8 @@ export class ExploredMap {
     if (!d) return 0
     const kind = d.colAt(gx - cx * CHUNK, gz - cz * CHUNK)
     if (!kind) return 0
+    // Furniture never blocks the fog-reveal DDA (see ChunkManager.columnHalfAt).
+    if (kind === COLUMN_FURNITURE) return 0
     return kind === COLUMN_MONUMENTAL ? MONUMENTAL_COL_HALF : COL_HALF
   }
 

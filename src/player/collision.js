@@ -60,6 +60,7 @@ export function moveAndCollide(cm, pos, dx, dz, cy = 0) {
       }
     }
     resolveColumns(cm, pos, r, true, dx, hit, cy)
+    resolveFurniture(cm, pos, r, true, dx, hit, cy)
   }
 
   // --- Z axis ---
@@ -90,6 +91,7 @@ export function moveAndCollide(cm, pos, dx, dz, cy = 0) {
       }
     }
     resolveColumns(cm, pos, r, false, dz, hit, cy)
+    resolveFurniture(cm, pos, r, false, dz, hit, cy)
   }
 
   depenetrate(cm, pos, hit, cy)
@@ -139,6 +141,43 @@ function segmentHitsColumn(cm, gx, gz, cy, x0, z0, x1, z1) {
   return clip(x0, dx, cx - half, cx + half) &&
     clip(z0, dz, cz - half, cz + half) &&
     far > 1e-6 && near < 1 - 1e-6
+}
+
+// Furniture cells carry no square column half (columnHalfAt returns 0 for
+// them): the player sweeps each piece's precise AABB from ChunkData.furniture
+// instead, so a desk collides as a desk, not as an invisible 3u block. The
+// query is optional so small test doubles keep working.
+function furnitureAt(cm, gx, gz, cy) {
+  return cm.furnitureAt ? cm.furnitureAt(gx, gz, cy) : null
+}
+
+// AABB-vs-furniture resolution along one axis, mirroring resolveColumns but
+// with per-axis halves from the piece record (w along x, d along z). Records
+// arrive with world-space centres (wx/wz) from ChunkManager.furnitureAt.
+function resolveFurniture(cm, pos, r, axisX, d, hit, cy) {
+  const scanReach = r + 1.2 // every furniture half-extent is < 1.2
+  const cgx0 = worldToCell(pos.x - scanReach)
+  const cgx1 = worldToCell(pos.x + scanReach)
+  const cgz0 = worldToCell(pos.z - scanReach)
+  const cgz1 = worldToCell(pos.z + scanReach)
+  for (let cz = cgz0; cz <= cgz1; cz++) {
+    for (let cx = cgx0; cx <= cgx1; cx++) {
+      const list = furnitureAt(cm, cx, cz, cy)
+      if (!list) continue
+      for (const f of list) {
+        const rx = r + f.w / 2
+        const rz = r + f.d / 2
+        if (Math.abs(pos.x - f.wx) >= rx || Math.abs(pos.z - f.wz) >= rz) continue
+        if (axisX) {
+          pos.x = d > 0 ? f.wx - rx - SKIN : f.wx + rx + SKIN
+          hit.x = true
+        } else {
+          pos.z = d > 0 ? f.wz - rz - SKIN : f.wz + rz + SKIN
+          hit.z = true
+        }
+      }
+    }
+  }
 }
 
 // AABB-vs-column resolution along one axis (axisX = true -> push on X).
@@ -229,6 +268,28 @@ function depenetrate(cm, pos, hit, cy) {
           best = oz
           axis = 2
           push = pos.z >= ccz ? ccz + reach + SKIN : ccz - reach - SKIN
+        }
+      }
+    }
+
+    // Furniture pieces (rectangular AABBs) — same MTV ejection, per-axis reach.
+    for (let cz = worldToCell(pos.z - scanReach); cz <= worldToCell(pos.z + scanReach); cz++) {
+      for (let cx = worldToCell(pos.x - scanReach); cx <= worldToCell(pos.x + scanReach); cx++) {
+        const list = furnitureAt(cm, cx, cz, cy)
+        if (!list) continue
+        for (const f of list) {
+          const rx = r + f.w / 2
+          const rz = r + f.d / 2
+          const ox = rx - Math.abs(pos.x - f.wx)
+          const oz = rz - Math.abs(pos.z - f.wz)
+          if (ox <= SKIN || oz <= SKIN) continue
+          if (ox <= oz) {
+            if (ox > best) { best = ox; axis = 1; push = pos.x >= f.wx ? f.wx + rx + SKIN : f.wx - rx - SKIN }
+          } else if (oz > best) {
+            best = oz
+            axis = 2
+            push = pos.z >= f.wz ? f.wz + rz + SKIN : f.wz - rz - SKIN
+          }
         }
       }
     }

@@ -82,6 +82,7 @@ function digest(d) {
     d.cols,
     d.cellKind,
     d.spaceId,
+    d.spaceRole,
   ]) {
     for (const v of arr) fold(v)
   }
@@ -89,6 +90,16 @@ function digest(d) {
     fold(l.lx)
     fold(l.lz)
     fold(l.lit ? 1 : 0)
+  }
+  // Furniture records: positions/sizes are quantized to millimetres so the
+  // fold stays integer-exact while still pinning every piece's placement.
+  fold(d.furniture.length)
+  for (const f of d.furniture) {
+    fold(f.kind)
+    fold(f.lx)
+    fold(f.lz)
+    fold(f.facing)
+    for (const v of [f.x, f.z, f.w, f.d]) fold(Math.round(v * 1000))
   }
   fold(d.zone)
   fold(d.repairs.connectivity)
@@ -190,37 +201,37 @@ function digest(d) {
 
 // Re-pinned whenever WORLD_GEN_VERSION changes. Coordinates cover all three
 // zones AND multiple layers; the digest includes semantic passages, spaces,
-// repair metadata, plan-aware stairs, and representative v13 structures. The
-// final twelve entries pin bottom/middle/top in both chunks of deterministic
-// maximum-height bridged and open-void structures.
+// repair metadata, plan-aware stairs, furniture records, and representative
+// v13 structures. The final twelve entries pin bottom/middle/top in both
+// chunks of deterministic maximum-height bridged and open-void structures.
 const GOLDEN = {
-  '0,0,0': 'cc43476e',
-  '3,0,-2': '57f5510d',
-  '12,0,12': 'fa5ce098',
-  '-10,0,10': '1251d631',
-  '0,1,0': '046d92d9',
-  '3,-1,-2': '7908734c',
-  '12,2,12': '1caff78b',
-  '3,-2,-12': 'a5088eff',
-  '3,-1,-12': '8ac5d518',
-  '1,0,-2': '0a67b5a3',
-  '2,1,-2': '23dc2b4b',
-  '1,7,-2': '4ca6ed87',
-  '-1,0,2': 'cf54d113',
-  '-1,3,3': '3fb818a0',
-  '-7,9,-8': '45682846',
-  '-3,-15,-1': '7bb3ba2c',
-  '-2,-15,-1': '9d260457',
-  '-3,-8,-1': 'cd12c9e6',
-  '-2,-8,-1': '790d987b',
-  '-3,-1,-1': '6dc6a474',
-  '-2,-1,-1': 'ad037cbf',
-  '-10,0,8': '963cd9a5',
-  '-10,0,9': '35086b04',
-  '-10,7,8': 'a1605cb3',
-  '-10,7,9': 'd42b31bb',
-  '-10,14,8': 'b5550b31',
-  '-10,14,9': '849828da',
+  '0,0,0': 'a00be492',
+  '3,0,-2': '7f74001d',
+  '12,0,12': 'd766df34',
+  '-10,0,10': '1697b6b5',
+  '0,1,0': '5006baca',
+  '3,-1,-2': '700ed5ec',
+  '12,2,12': '37b75671',
+  '3,-2,-12': '55005550',
+  '3,-1,-12': '0f9451b6',
+  '1,0,-2': '148a53f9',
+  '2,1,-2': '2b79d965',
+  '1,7,-2': '312793b0',
+  '-1,0,2': 'a9f88b91',
+  '-1,3,3': 'abb758f0',
+  '-7,9,-8': '0a81483f',
+  '-3,-15,-1': 'ca68f8a0',
+  '-2,-15,-1': '0c946c33',
+  '-3,-8,-1': '191e78f2',
+  '-2,-8,-1': 'ecb63571',
+  '-3,-1,-1': '4c089718',
+  '-2,-1,-1': 'ece8cdca',
+  '-10,0,8': '903520f2',
+  '-10,0,9': '20f6d139',
+  '-10,7,8': 'bcea2b8e',
+  '-10,7,9': '54a16a91',
+  '-10,14,8': '0c1e5bc2',
+  '-10,14,9': 'c7af4d6d',
 }
 
 const MAX_HEIGHT_GOLDEN = {

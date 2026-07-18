@@ -11,6 +11,7 @@ import { DEFAULT_WORLD_CONFIG } from './config.js'
 import { PASSAGE_OPEN } from './mapTypes.js'
 import { repairChunkTopology } from './topology.js'
 import { normalizeDoorPassages } from './doors.js'
+import { placeFurniture } from './furniture.js'
 import { layerSeed } from './layerSeed.js'
 
 const TOPOLOGY_SALT = 0x74a1
@@ -101,6 +102,13 @@ export function buildChunk(seed, cx, cy, cz, config = DEFAULT_WORLD_CONFIG, exit
 
   // L5 — lights (independent stream, global module grid).
   placeLights(data, { seed: lseed, cx, cz, zone, config })
+
+  // L5.5 — interior furniture (v15). Collision-real office pieces (desks,
+  // chairs, conference tables, storage) stamped into room cells as
+  // COLUMN_FURNITURE blockers with precise player-collision AABBs. Runs after
+  // lamps so fixtures keep their grid (pieces skip lamp cells), before the
+  // anomaly carves so a clearing can still evict a piece wholesale.
+  placeFurniture(data, { zone, config })
 
   // L6 — anomaly: carve clearings for the exit and/or spawn, if this is the host.
   if (exitCell) {

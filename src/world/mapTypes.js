@@ -22,6 +22,12 @@ export const CELL_BRIDGE = 7 // narrow retained deck crossing an atrium void
 export const COLUMN_NONE = 0
 export const COLUMN_STANDARD = 1
 export const COLUMN_MONUMENTAL = 2
+// A cell occupied by furniture (desk, chair, table, cabinet...). Navigation,
+// maps, audits and placement treat it as blocked like any column, but the
+// precise walkable AABB lives in ChunkData.furniture: swept collision resolves
+// the real footprint (a desk is not a 3u square), and eye-height sight lines
+// pass over the low pieces (columnHalfAt returns 0 for this kind).
+export const COLUMN_FURNITURE = 3
 
 // A closed edge can still have a visual/sight role.  The collision raster and
 // PASSAGE_WALL remain authoritative for movement; these features only refine
@@ -36,3 +42,17 @@ export const wallFeatureSeesThrough = (feature) =>
   feature === WALL_WINDOW || feature === WALL_RAIL
 
 export const isPassageOpen = (kind) => kind !== PASSAGE_WALL
+
+// Semantic room roles (v15). Assigned per office-district space at plan time
+// (officePlan.js) and compiled into ChunkData.spaceRole; topology never
+// changes — roles steer the dressing layer (furniture composition, wall
+// props, signage) so districts read as named places: meeting rooms, break
+// rooms, copy rooms, archives, server rooms, storage. Ordinary rooms keep
+// SPACE_ROLE_NONE and furnish generically.
+export const SPACE_ROLE_NONE = 0
+export const SPACE_ROLE_MEETING = 1
+export const SPACE_ROLE_BREAK = 2
+export const SPACE_ROLE_COPY = 3
+export const SPACE_ROLE_ARCHIVE = 4
+export const SPACE_ROLE_SERVER = 5
+export const SPACE_ROLE_STORAGE = 6

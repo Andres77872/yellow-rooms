@@ -57,8 +57,18 @@ export class ChunkData {
     this.cols = new Uint8Array(CHUNK * CHUNK)
     this.cellKind = new Uint8Array(CHUNK * CHUNK).fill(CELL_OPEN)
     this.spaceId = new Uint32Array(CHUNK * CHUNK)
+    // SPACE_ROLE_* per cell (mapTypes.js): the district plan's semantic room
+    // roles, compiled alongside spaceId. Dressing-only; topology never reads it.
+    this.spaceRole = new Uint8Array(CHUNK * CHUNK)
     this.repairs = { connectivity: 0, navigation: 0, columns: 0 }
     this.lamps = [] // [{lx, lz, lit}] — ceiling fixtures on a global module grid
+    // Collision-real furniture (furniture.js). One record per occupied cell:
+    //   { kind, lx, lz, x, z, w, d, facing }
+    // x/z are CHUNK-LOCAL centre coordinates; w/d the axis-aligned extents
+    // (already rotated by `facing`, which only steers asymmetric render
+    // details). The owning cell also carries COLUMN_FURNITURE in cols, so
+    // navigation/maps/audits block it; the player sweeps the precise AABB.
+    this.furniture = []
     this.exit = null // {lx, lz} | null
     // Stair halves this layer realizes (slab contracts; see stairStamp.js):
     // stairUp pierces this chunk's CEILING (slab cy), stairDown its FLOOR
@@ -123,6 +133,12 @@ export class ChunkData {
   }
   setCol(x, z, v) {
     this.cols[cIdx(x, z)] = v
+    // Clearing a cell (late anomaly/exit carves) also drops any furniture it
+    // hosted, so a carved clearing never keeps a ghost desk without its
+    // navigation blocker.
+    if (!v && this.furniture.length) {
+      this.furniture = this.furniture.filter((f) => f.lx !== x || f.lz !== z)
+    }
   }
 
   // --- Slab holes (derived from the stair descriptors, never rasterized) ---

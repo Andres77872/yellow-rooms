@@ -112,11 +112,73 @@ InstancedMesh; props and signs each add one instanced draw per chunk.
 - Props currently have no acoustic or event-socket role; signage could later
   feed the director's cue sockets (a flickering exit sign as a fake-out).
 
+## Second pass — furniture and semantic room roles (v15)
+
+The first pass dressed walls and ceilings; the world still had no occupation
+trace at floor level, because anything the player can bump into must exist in
+the collision model, not just the renderer. This pass makes furniture real
+and gives office rooms semantic identities.
+
+### Collision-real furniture (`furniture.js`, `furnitureModels.js`)
+
+- **Two-representation contract.** Every piece occupies one cell in the cols
+  raster as `COLUMN_FURNITURE`, so enemy pathfinding, minimaps, audits,
+  spawn placement and the navigation validator all treat it as blocked —
+  exactly like a structural column. The player instead sweeps the piece's
+  precise AABB (`ChunkData.furniture`), so a desk collides as a desk (you can
+  squeeze behind it) while enemies route around the cell — the same
+  cell-granular asymmetry columns already use. Eye-height sight lines pass
+  over the low pieces (`columnHalfAt` returns 0 for furniture).
+- **Placement** is per-chunk deterministic, office rooms only, with a 2-cell
+  border margin (no cross-seam overlap), never on doorway approaches, lamps,
+  columns, or slab holes. A connectivity safeguard compares the chunk's
+  column-aware component count before/after and rolls back any piece that
+  would sever its room — office chunks skip topology repair, so this local
+  check replaces it. A quarter of ordinary rooms stay bare: emptiness is
+  pacing, and incomplete chair sets read as abandonment, not scatter.
+- **Models** keep the anime flat-shape language: desks with leg panels,
+  modesty panels, drawer stacks, monitors and keyboards; upholstered chairs;
+  conference tables on panel legs; two-door cabinets; copiers with scanner
+  lids and output slots; water coolers with blue bottles; potted plants with
+  crossed leaf slabs; server racks with vent slots and status LEDs. All parts
+  batch into one instanced draw per chunk with per-part tints.
+
+### Semantic room roles (`officePlan.js` + dressing)
+
+- Roles are assigned at district-plan time from each space's stable id and
+  size (large rooms: meeting / server / break; mid rooms: copy / archive /
+  storage / break; small rooms: rare storage or copy closets), compiled into
+  `ChunkData.spaceRole` beside `spaceId`. Topology is untouched — roles steer
+  dressing only, which is what keeps the validated plan contracts intact.
+- Role-driven composition: meeting rooms get conference islands, break rooms
+  always get the water cooler plus a table set, copy rooms stack copiers,
+  archives line up cabinets, server rooms fill with racks, storage rooms mix
+  cabinets and clutter. Wall props follow: break rooms always pin notice
+  boards, server rooms get caution plates instead of homely clutter, meeting
+  rooms get more boards.
+- The grammar is deliberately sparse and size-gated, so named rooms work as
+  landmarks at decisions (per the wayfinding research) rather than as uniform
+  wallpaper: a rack row or a cooler is a memory anchor in a sea of offices.
+
+### Still open
+
+- Roles do not yet affect lighting rhythm, acoustics, adjacency, or door
+  types (the design doc's full semantic-rooms contract); lamp character per
+  role is the natural next slice.
+- Special-role adjacency damping (no two server rooms sharing a wall) is
+  unimplemented; rarity comes from the hash distribution alone.
+- Director event sockets, and structure families beyond the macro archetypes,
+  remain roadmap.
+
 ## Validation
 
-- `npm test` — 331 passing, including new `props.test.js` (placement rules,
-  determinism, collision-safety invariants) and the rewritten
+- `npm test` — 351 passing, including new `props.test.js` (placement rules,
+  determinism, collision-safety invariants), `furniture.test.js` (placement
+  contract, precise-AABB collision, model bounds), `roomRoles.test.js`
+  (role determinism, distribution, composition), and the rewritten
   `trimwork.test.js` (architrave profile, leaf styles, glazing variants,
   opening-clearance contract).
-- `npm run lint`, `npm run build`, `npm run audit:world` — clean; world-gen
-  bytes are untouched (mesh-layer only, no `WORLD_GEN_VERSION` bump).
+- `npm run lint`, `npm run build`, `npm run audit:world` — clean. Generation
+  moved to `WORLD_GEN_VERSION` 15 (furniture blockers + role grid); golden
+  digests re-pinned with furniture records and roles folded in.
+

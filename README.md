@@ -107,18 +107,33 @@ threat or a real cross-floor footfall, and sometimes abstain entirely. The same
 level seed reproduces the same cue opportunities without affecting generation.
 
 The interior architecture layer dresses the generated topology for rendering
-(deterministic from global coordinates, purely visual, collision-free):
+(deterministic from global coordinates):
 
 - redesigned joinery: stepped architrave door casings with back-bands, corner
   blocks, plinths and caps; two-panel / three-panel / louvered door leaves
   with kick plates; gallery windows with aprons and cross, single-bar, or
   venetian-blind glazing;
 - interior dressing: baseboards and crown molding on every full-height wall,
-  bases and capitals on every post and monumental pier, brass threshold strips
-  under doors and wide mouths, and ribbed radiators under the windows;
-- wayfinding and occupation props: emissive exit signs over a subset of doors,
-  hanging amber blade signs in corridors and lobbies, ceiling vents, wall
-  clocks, notice boards, and corridor extinguisher cabinets.
+  stepped bases and capitals on every post and monumental pier, brass
+  threshold strips under doors and wide mouths, and ribbed radiators with
+  feet and inlet pipes under the windows;
+- wayfinding and occupation props: housed emissive exit signs over a subset
+  of doors, hanging amber blade signs with frame rails in corridors and
+  lobbies, slatted ceiling vents, wall clocks with hands, framed notice
+  boards with pinned papers, and glazed corridor extinguisher cabinets.
+
+World-gen version 15 adds collision-real furniture and semantic room roles:
+
+- desks, chairs, conference tables, cabinets, copiers, water coolers, plants,
+  and server racks occupy cells as `COLUMN_FURNITURE` navigation blockers;
+  enemies, minimaps and audits treat them as blocked while the player sweeps
+  each piece's precise AABB, and placement is verified to never sever a room;
+- district plans elect per-space roles (meeting / break / copy / archive /
+  server / storage) from each room's stable id and size, compiled into
+  `ChunkData.spaceRole`; roles drive furniture composition and wall props —
+  break rooms always get the water cooler and a pinned notice board, server
+  rooms get rack rows and caution plates — while a quarter of ordinary rooms
+  stay deliberately bare.
 
 The generation rationale and history are documented in
 [docs/map-generation-research.md](docs/map-generation-research.md). The deeper
@@ -143,6 +158,8 @@ and the interior-architecture review for the dressing layer is in
 - `src/world/pipeline.js` — pure public generation pipeline
 - `src/world/trimwork.js` / `src/world/props.js` — joinery and interior
   dressing builders consumed by `src/world/mesh.js`
+- `src/world/furniture.js` / `src/world/furnitureModels.js` — collision-real
+  furniture placement and piece models
 
 Generation is covered by deterministic golden tests, macro-plan and seam
 invariants, multi-chunk wall/navigation flood tests, region-distribution tests,

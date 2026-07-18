@@ -328,10 +328,12 @@ export const OUTLINE_FADE_FAR = 0.95
 
 // --- Thin-wall model (refactor) ---------------------------------------
 // World-gen version: bump whenever the algorithm changes the bytes a seed
-// produces. Guards the golden determinism test. v14 makes office rooms the
-// continuous world fabric, bounds open landmark pockets, and adds genuinely
-// monumental column geometry to the finite pillar halls.
-export const WORLD_GEN_VERSION = 14
+// produces. Guards the golden determinism test. v15 adds the collision-real
+// furniture layer (COLUMN_FURNITURE blockers + precise piece records) to
+// office rooms; v14 made office rooms the continuous world fabric, bounded
+// open landmark pockets, and added genuinely monumental column geometry to
+// the finite pillar halls.
+export const WORLD_GEN_VERSION = 15
 
 // Interior archetypes. The room-dominant macro planner bounds the two open
 // styles; the registry in zones/index.js maps ids to their chunk compilers.
@@ -507,6 +509,47 @@ export const PROP_SALT = 0x3d05 | 0
 export const SIGN_SALT = 0x5ea1 | 0
 export const VENT_SALT = 0x7e07 | 0
 export const WINDOW_SALT = 0x71d0 | 0
+
+// --- Furniture (furniture.js / furnitureModels.js) ----------------------
+// Real, collision-solid office furniture placed into office rooms. Furniture
+// cells enter the cols raster as COLUMN_FURNITURE, so navigation, minimaps,
+// audits and enemy pathing treat them as blocked like any column; the player
+// collides with the precise piece AABB (ChunkData.furniture), not the coarse
+// cell. Placement is per-chunk deterministic from global coordinates, keeps a
+// 2-cell margin off chunk borders (no cross-seam overlap), skips doorway
+// approaches, and rolls back any piece that would split its room's remaining
+// walk cells. Lamps and sight lines are unaffected: pieces stay below
+// eye height except the cabinet, which still never blocks the collision DDA
+// (it stands against a wall, so its cell edge occludes nothing new).
+export const FURN_MARGIN = 2 // cells kept clear of each chunk border
+export const FURN_SALT = 0x51de | 0
+// Desk + chair workstation against a room wall.
+export const DESK_W = 1.7
+export const DESK_D = 0.85
+export const DESK_H = 0.76
+export const CHAIR_W = 0.55
+export const CHAIR_H = 0.92 // seat + back top
+export const CHAIR_SEAT_H = 0.45
+// Conference table island for large rooms.
+export const TABLE_W = 2.2
+export const TABLE_D = 1.1
+export const TABLE_H = 0.74
+// Tall storage: the only piece that reaches toward eye height.
+export const CABINET_W = 0.95
+export const CABINET_D = 0.45
+export const CABINET_H = 1.85
+// Photocopier / water cooler / plant silhouettes.
+export const COPIER_W = 0.85
+export const COPIER_D = 0.7
+export const COPIER_H = 1.05
+export const COOLER_W = 0.42
+export const COOLER_H = 1.35
+export const PLANT_W = 0.5
+export const PLANT_H = 1.15
+// Server rack: the tallest piece, rows of them in SPACE_ROLE_SERVER rooms.
+export const RACK_W = 0.9
+export const RACK_D = 0.7
+export const RACK_H = 1.9
 
 // Helpers ---------------------------------------------------------------
 export const idx = (lx, lz) => lz * CHUNK + lx

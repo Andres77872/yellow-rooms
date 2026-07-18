@@ -27,7 +27,7 @@ import { DEFAULT_WORLD_CONFIG } from './config.js'
 import { slabContract } from './slab.js'
 import { chunkMultilevelRooms } from './multilevel.js'
 import { Chunk } from './Chunk.js'
-import { COLUMN_MONUMENTAL, wallFeatureSeesThrough } from './mapTypes.js'
+import { COLUMN_FURNITURE, COLUMN_MONUMENTAL, wallFeatureSeesThrough } from './mapTypes.js'
 
 const HUB = (CHUNK / 2) | 0
 
@@ -524,7 +524,30 @@ export class ChunkManager {
     if (!c) return 0
     const kind = c.data.colAt(gx - c.cx * CHUNK, gz - c.cz * CHUNK)
     if (!kind) return 0
+    // Furniture carries no square column half: swept collision resolves the
+    // precise piece AABB (furnitureAt below), and eye-height sight lines pass
+    // over the low pieces.
+    if (kind === COLUMN_FURNITURE) return 0
     return kind === COLUMN_MONUMENTAL ? MONUMENTAL_COL_HALF : COL_HALF
+  }
+
+  // Furniture records anchored at a cell, with chunk-local centres promoted to
+  // world coordinates for the swept collision pass. Returns null when empty so
+  // the hot loops skip allocation. At most a couple of records share a cell by
+  // construction (one piece per cell), but the array keeps the query total.
+  furnitureAt(gx, gz, cy = 0) {
+    const c = this._chunkAt(gx, gz, cy)
+    if (!c) return null
+    const lx = gx - c.cx * CHUNK
+    const lz = gz - c.cz * CHUNK
+    const list = c.data.furniture
+    if (!list.length) return null
+    let out = null
+    for (const f of list) {
+      if (f.lx !== lx || f.lz !== lz) continue
+      ;(out ??= []).push({ wx: c.cx * CHUNK_WORLD + f.x, wz: c.cz * CHUNK_WORLD + f.z, w: f.w, d: f.d })
+    }
+    return out
   }
 
   // Canonical stair descriptor for a cell, or null (see Chunk.buildStairCells).

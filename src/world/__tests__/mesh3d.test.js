@@ -82,6 +82,7 @@ function materials() {
       doorLeaf: material,
       prop: material,
       signGlow: material,
+      furniture: material,
       panel: material,
       panelDead: material,
       exit: material,

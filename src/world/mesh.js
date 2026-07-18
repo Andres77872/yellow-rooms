@@ -28,10 +28,12 @@ import {
 import { collectDoorways } from './doors.js'
 import { pushDoorFrame, pushDoorLeaves, pushWindowTrim } from './trimwork.js'
 import { collectInteriorDressing } from './props.js'
+import { pushFurnitureModel } from './furnitureModels.js'
 import { hash2i } from './core/hash.js'
 import { lampPanelTint } from './lampCharacter.js'
 import { STAIR_E, STAIR_S, STAIR_W } from './slab.js'
 import {
+  COLUMN_FURNITURE,
   COLUMN_MONUMENTAL,
   WALL_PLAIN,
   WALL_RAIL,
@@ -304,11 +306,12 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
       addFeatureWall('h', lz, x, data.wallFeatureH[hIdx(x, lz)] ?? WALL_PLAIN)
     }
   }
-  // Freestanding columns at cell centres.
+  // Freestanding columns at cell centres. Furniture cells are built separately
+  // from their records (precise pieces, not full-height shafts).
   for (let z = 0; z < CHUNK; z++) {
     for (let x = 0; x < CHUNK; x++) {
       const kind = data.cols[cIdx(x, z)]
-      if (!kind) continue
+      if (!kind || kind === COLUMN_FURNITURE) continue
       const half = kind === COLUMN_MONUMENTAL ? MONUMENTAL_COL_HALF : COL_HALF
       inst.push({
         px: (x + 0.5) * CELL,
@@ -483,6 +486,32 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
     group.add(signs)
   }
 
+  // --- Furniture (collision-real pieces from ChunkData.furniture) ---
+  // Multi-part models (furnitureModels.js) batched into one instanced draw
+  // with per-part tints. These are the ONLY props the collision raster knows
+  // about: their cells carry COLUMN_FURNITURE and the player sweeps the
+  // precise piece AABBs.
+  let furniture = null
+  if (data.furniture.length) {
+    const parts = []
+    for (const f of data.furniture) pushFurnitureModel(parts, f)
+    if (parts.length) {
+      furniture = new THREE.InstancedMesh(geom.wallUnit, materials.furniture, parts.length)
+      for (let i = 0; i < parts.length; i++) {
+        const it = parts[i]
+        _p.set(it.px, it.py, it.pz)
+        _s.set(it.sx, it.sy, it.sz)
+        _m.compose(_p, _q, _s)
+        furniture.setMatrixAt(i, _m)
+        furniture.setColorAt(i, _c.setRGB(it.tint[0], it.tint[1], it.tint[2]))
+      }
+      furniture.instanceMatrix.needsUpdate = true
+      furniture.instanceColor.needsUpdate = true
+      furniture.computeBoundingSphere()
+      group.add(furniture)
+    }
+  }
+
   // --- Fluorescent ceiling panels (lit feed the light pool; dead are dark) ---
   // Each lit panel's emissive is tinted by its fixture identity (lampCharacter):
   // the same colour-temperature drift the cast light gets, and a browned-dim
@@ -549,6 +578,7 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
     leaves?.dispose()
     props?.dispose()
     signs?.dispose()
+    furniture?.dispose()
     panels?.dispose()
     deadPanels?.dispose()
     for (const g of ownedGeos) g.dispose()

@@ -193,6 +193,15 @@ export const DEFAULT_WORLD_CONFIG = {
     deckSalt: 0xd3c5,
   },
 
+  // Interior furniture (v15): collision-real office pieces placed into room
+  // cells after the lamp pass. Placement is deterministic per chunk, keeps a
+  // border margin, skips doorway approaches and lamp cells, furnishes only a
+  // fraction of rooms (emptiness is pacing), and rolls back any piece that
+  // would sever its room's walk graph.
+  furniture: {
+    enabled: true,
+  },
+
   // Exit / spawn clearing radius (cells).
   exit: { clearRadius: 1 },
 }
