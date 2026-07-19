@@ -32,6 +32,7 @@ import {
   CELL_ROOM,
   COLUMN_STANDARD,
   COLUMN_MONUMENTAL,
+  MAP_FAMILY_TOWER,
 } from '../mapTypes.js'
 
 const DOOR_H = WALL_H - HEADER_H
@@ -230,5 +231,39 @@ describe('collectInteriorDressing', () => {
         expect(p.px).toBeLessThan(plane)
       }
     }
+  })
+
+  it('[R26-S01..S04][D05] projects authored Tower sockets into existing prop and sign batches without mutating the descriptor', () => {
+    const data = new ChunkData(0, 4, 0, ZONE_OFFICE, undefined, MAP_FAMILY_TOWER)
+    data.setV(5, 4, 1, PASSAGE_WALL)
+    data.setV(5, 6, 1, PASSAGE_WALL)
+    data.setPassageV(5, 8, PASSAGE_WIDE)
+    data.setPassageV(5, 10, PASSAGE_DOOR)
+    data.lamps.push({ lx: 7, lz: 12, lit: true })
+    data.multilevelStructure = Object.freeze({
+      id: 17,
+      family: MAP_FAMILY_TOWER,
+      kind: 'towerSkybridge',
+      landmarkSockets: Object.freeze([
+        Object.freeze({ slot: 'anchorFloor', kind: 'signage', gx: 4, gz: 4, cy: 4, axis: 'x', side: 1, salt: 0x745101 }),
+        Object.freeze({ slot: 'anchorFloor', kind: 'clock', gx: 4, gz: 6, cy: 4, axis: 'x', side: 1, salt: 0x745102 }),
+        Object.freeze({ slot: 'bridgeApproach', kind: 'litAccent', gx: 4, gz: 8, cy: 4, axis: 'x', side: 1, salt: 0x745103 }),
+        Object.freeze({ slot: 'bridgeApproach', kind: 'door', gx: 4, gz: 10, cy: 4, axis: 'x', side: 1, salt: 0x745104 }),
+        Object.freeze({ slot: 'anchorFloor', kind: 'fixture', gx: 7, gz: 12, cy: 4, axis: 'z', side: 1, salt: 0x745105 }),
+      ]),
+    })
+    const descriptorBefore = structuredClone(data.multilevelStructure)
+
+    const first = collectInteriorDressing(data)
+    const second = collectInteriorDressing(data)
+
+    expect(second).toEqual(first)
+    expect(data.multilevelStructure).toEqual(descriptorBefore)
+    expect(first.signs.some(isTint(SIGN_TINT.blade))).toBe(true)
+    expect(first.signs.some(isTint(SIGN_TINT.exit))).toBe(true)
+    expect(first.props.some(isTint(PROP_TINT.clock))).toBe(true)
+    expect(data.passageVAt(5, 10)).toBe(PASSAGE_DOOR)
+    expect(data.lamps).toContainEqual({ lx: 7, lz: 12, lit: true })
+    expect(data).not.toHaveProperty('towerLandmarks')
   })
 })

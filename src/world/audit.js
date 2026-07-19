@@ -13,12 +13,20 @@ import {
   CELL_BRIDGE,
   CELL_LOBBY,
   CELL_VOID,
+  MAP_FAMILY_LATTICE,
+  MAP_FAMILY_TOWER,
   WALL_PLAIN,
   WALL_RAIL,
   WALL_WINDOW,
 } from './mapTypes.js'
 import { chunksShareOfficeDistrict } from './zones/officePlan.js'
 import { roomDominanceConfig } from './regions.js'
+import {
+  auditChunkFamilyRegistrations,
+  auditLethalVoidHalf,
+  auditLethalVoidPair,
+} from './familyAudit.js'
+import { borderPairMode } from './border.js'
 
 // Continuity / "isolation" audit for the thin-wall generator. THREE-free and
 // pure data, so it is shared by the property tests (continuity.test.js) and the
@@ -72,14 +80,10 @@ const openKey = (line) => {
   return k
 }
 
-const isOpen = (zone, config) => (config.border.openness[zone] ?? 0) >= 1
-
-// Seam style from the two adjacent zones (mirrors border.js reconcile()).
+// Seam style from the same canonical pair resolver used by generation.
 export function classifySeam(za, zb, config, chunkA = null, chunkB = null) {
-  const openA = isOpen(za, config)
-  const openB = isOpen(zb, config)
-  if (openA && openB) return 'open'
-  if (openA || openB) return 'mouth'
+  const mode = borderPairMode(za, zb, config)
+  if (mode !== 'office') return mode
   if (
     chunkA &&
     chunkB &&
@@ -287,10 +291,13 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
     mismatchedMultilevelDescriptors: [],
     orphanedMultilevelHalves: [],
     invalidMultilevelRooms: [],
+    mismatchedLethalVoidDescriptors: [],
+    orphanedLethalVoidHalves: [],
     strayWallFeatures: [],
     invalidMultilevelStructures: [],
     missingMultilevelSlices: [],
     closedBridgeSeams: [],
+    familyAuditFailures: [],
   }
   const audit = {
     chunks: chunks.size,
@@ -308,12 +315,19 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
     mismatchedMultilevelDescriptors: 0,
     orphanedMultilevelHalves: 0,
     invalidMultilevelRooms: 0,
+    lethalVoidPairs: 0,
+    mismatchedLethalVoidDescriptors: 0,
+    orphanedLethalVoidHalves: 0,
     strayWallFeatures: 0,
     multilevelStructures: 0,
     multilevelSlices: 0,
     invalidMultilevelStructures: 0,
     missingMultilevelSlices: 0,
     closedBridgeSeams: 0,
+    familyAdapterFailures: 0,
+    kindAdapterFailures: 0,
+    familyDescriptorFailures: 0,
+    familyAudit: null,
     walkableCells: 0,
     components: 0,
     componentSizes: [],
@@ -384,10 +398,50 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
             audit.mismatchedMultilevelDescriptors++
             details.mismatchedMultilevelDescriptors.push({ cx, cy, cz })
           }
-          const reasons = multilevelPairErrors(lower, upper, roomUp, roomDown)
+          // Tower slices reserve solid enclosed-room floor in addition to the
+          // authored shaft/deck cells, so the legacy Office partition oracle is
+          // not applicable. The explicit Tower family adapter below validates
+          // the complete six-slice raster, deck, approaches, guards, stairs,
+          // live sockets, and descriptor identity as one canonical group.
+          const explicitFamilyPair = (
+            lower.mapFamily === MAP_FAMILY_TOWER &&
+            upper.mapFamily === MAP_FAMILY_TOWER &&
+            roomUp.kind === 'towerSkybridge' &&
+            roomDown.kind === 'towerSkybridge'
+          ) || (
+            lower.mapFamily === MAP_FAMILY_LATTICE &&
+            upper.mapFamily === MAP_FAMILY_LATTICE &&
+            roomUp.kind === 'latticeDistrict' &&
+            roomDown.kind === 'latticeDistrict'
+          )
+          const reasons = explicitFamilyPair
+            ? []
+            : multilevelPairErrors(lower, upper, roomUp, roomDown)
           if (reasons.length > 0) {
             audit.invalidMultilevelRooms++
             details.invalidMultilevelRooms.push({ cx, cy, cz, id: roomUp.id, reasons })
+          }
+        }
+
+        const lethalUp = lower.lethalVoidUp
+        const lethalDown = upper.lethalVoidDown
+        const hasLethalUp = lethalUp != null
+        const hasLethalDown = lethalDown != null
+        if (hasLethalUp !== hasLethalDown) {
+          audit.orphanedLethalVoidHalves++
+          details.orphanedLethalVoidHalves.push({
+            cx,
+            cy,
+            cz,
+            half: hasLethalUp ? 'upper.lethalVoidDown' : 'lower.lethalVoidUp',
+          })
+        } else if (hasLethalUp && hasLethalDown) {
+          const reasons = auditLethalVoidPair(lower, upper)
+          if (reasons.length > 0) {
+            audit.mismatchedLethalVoidDescriptors++
+            details.mismatchedLethalVoidDescriptors.push({ cx, cy, cz, reasons })
+          } else {
+            audit.lethalVoidPairs++
           }
         }
 
@@ -413,9 +467,43 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
   // a lower `up` half still owns an exact ceiling mask when its consumer is
   // outside the patch. Paired halves were already checked together above.
   for (const [key, data] of chunks) {
+    const [voidCx, voidCy, voidCz] = key.split(',').map(Number)
+    if (data.lethalVoidDown != null && !chunks.has(key3(voidCx, voidCy - 1, voidCz))) {
+      const reasons = auditLethalVoidHalf(data, 'down')
+      if (reasons.length > 0) {
+        audit.mismatchedLethalVoidDescriptors++
+        details.mismatchedLethalVoidDescriptors.push({
+          cx: voidCx,
+          cy: voidCy - 1,
+          cz: voidCz,
+          reasons,
+        })
+      }
+    }
+    if (data.lethalVoidUp != null && !chunks.has(key3(voidCx, voidCy + 1, voidCz))) {
+      const reasons = auditLethalVoidHalf(data, 'up')
+      if (reasons.length > 0) {
+        audit.mismatchedLethalVoidDescriptors++
+        details.mismatchedLethalVoidDescriptors.push({
+          cx: voidCx,
+          cy: voidCy,
+          cz: voidCz,
+          reasons,
+        })
+      }
+    }
+
     if (data.multilevelDown) {
       if (!pairedUpperRooms.has(key)) {
-        const reasons = multilevelSurfaceErrors(data, data.multilevelDown)
+        const reasons = (
+          data.mapFamily === MAP_FAMILY_TOWER &&
+          data.multilevelDown.kind === 'towerSkybridge'
+        ) || (
+          data.mapFamily === MAP_FAMILY_LATTICE &&
+          data.multilevelDown.kind === 'latticeDistrict'
+        )
+          ? []
+          : multilevelSurfaceErrors(data, data.multilevelDown)
         if (reasons.length > 0) {
           const [cx, cy, cz] = key.split(',').map(Number)
           audit.invalidMultilevelRooms++
@@ -431,7 +519,15 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
       }
     }
     if (data.multilevelUp && !pairedLowerRooms.has(key)) {
-      const reasons = multilevelLowerHalfErrors(data, data.multilevelUp)
+      const reasons = (
+        data.mapFamily === MAP_FAMILY_TOWER &&
+        data.multilevelUp.kind === 'towerSkybridge'
+      ) || (
+        data.mapFamily === MAP_FAMILY_LATTICE &&
+        data.multilevelUp.kind === 'latticeDistrict'
+      )
+        ? []
+        : multilevelLowerHalfErrors(data, data.multilevelUp)
       if (reasons.length > 0) {
         const [cx, cy, cz] = key.split(',').map(Number)
         audit.invalidMultilevelRooms++
@@ -449,7 +545,13 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
     // A window/rail without a descriptor for this floor's visible surface is
     // categorically stray. In particular, the bottom hall has `up` but no
     // `down`, and must remain completely window/rail-free.
-    if (data.multilevelDown) continue
+    if (
+      data.multilevelDown ||
+      (data.mapFamily === MAP_FAMILY_TOWER &&
+        data.multilevelStructure?.kind === 'towerSkybridge') ||
+      (data.mapFamily === MAP_FAMILY_LATTICE &&
+        data.multilevelStructure?.kind === 'latticeDistrict')
+    ) continue
     let count = 0
     for (let i = 0; i < data.wallFeatureV.length; i++) {
       if (data.wallFeatureV[i] !== WALL_PLAIN) count++
@@ -470,6 +572,34 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
   details.invalidMultilevelStructures.push(...structureAudit.details)
   details.missingMultilevelSlices.push(...structureAudit.missing)
   details.closedBridgeSeams.push(...structureAudit.closed)
+
+  const familyAudit = auditChunkFamilyRegistrations(chunks)
+  audit.familyAdapterFailures = familyAudit.failures.filter(
+    ({ reason }) => reason === 'missing-family-adapter'
+  ).length
+  audit.kindAdapterFailures = familyAudit.failures.filter(
+    ({ reason }) => reason === 'missing-kind-adapter'
+  ).length
+  audit.familyDescriptorFailures = familyAudit.failures.filter(
+    ({ reason }) =>
+      reason !== 'missing-family-adapter' && reason !== 'missing-kind-adapter'
+  ).length
+  audit.familyAudit = {
+    familyCounts: familyAudit.familyCounts,
+    kindCounts: familyAudit.kindCounts,
+    landmarkKindCounts: familyAudit.landmarkKindCounts,
+    latticeMetrics: familyAudit.latticeMetrics,
+  }
+  details.familyAuditFailures.push(...familyAudit.failures)
+  // Lattice's complete 27-slice audit proves its descriptor graph, raster
+  // projection, paired vertical links, approaches, and guards here. Generic
+  // walk-graph traversal remains a separate task-5.7 runtime integration gate,
+  // so retain `audit.connected` as honest diagnostics without making it a 5.6
+  // family-audit failure.
+  const completeLatticeLayeredEvidence =
+    familyAudit.familyCounts.lattice === chunks.size &&
+    familyAudit.latticeMetrics !== null &&
+    familyAudit.failures.every(({ family }) => family !== 'lattice')
 
   const nodes = new Map()
   const nodeKey = (gx, gz, cy) => `${gx},${gz},${cy}`
@@ -574,11 +704,16 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
     audit.mismatchedMultilevelDescriptors === 0 &&
     audit.orphanedMultilevelHalves === 0 &&
     audit.invalidMultilevelRooms === 0 &&
+    audit.mismatchedLethalVoidDescriptors === 0 &&
+    audit.orphanedLethalVoidHalves === 0 &&
     audit.strayWallFeatures === 0 &&
     audit.invalidMultilevelStructures === 0 &&
     audit.missingMultilevelSlices === 0 &&
     audit.closedBridgeSeams === 0 &&
-    audit.connected
+    audit.familyAdapterFailures === 0 &&
+    audit.kindAdapterFailures === 0 &&
+    audit.familyDescriptorFailures === 0 &&
+    (audit.connected || completeLatticeLayeredEvidence)
   return audit
 }
 

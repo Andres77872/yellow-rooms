@@ -4,6 +4,7 @@ import {
   CHUNK_WORLD,
   ZONE_OFFICE,
   ZONE_PILLARS,
+  ZONE_SEWER,
   ZONE_WAREHOUSE,
   COL_HALF,
   MONUMENTAL_COL_HALF,
@@ -15,116 +16,35 @@ import { generateChunk } from '../world/generate.js'
 import { hashStr } from '../world/core/hash.js'
 import { floodReachable } from '../world/connectivity.js'
 import { auditLayeredPatch, auditPatch } from '../world/audit.js'
-import { section, slider, toggle, button, segmented, readout, buttonRow } from './widgets.js'
+import { section, slider, toggle, button, segmented, readout, buttonRow, textBlock } from './widgets.js'
 import {
-  CELL_BRIDGE,
   COLUMN_MONUMENTAL,
   WALL_RAIL,
   WALL_WINDOW,
 } from '../world/mapTypes.js'
+import {
+  describeCell,
+  exploreConfigForFamily,
+  formatFamilyCounts,
+  formatFamilyFailureSummary,
+  formatLatticeMetrics,
+  formatMultilevelAudit,
+  formatStructureDetail,
+  listFamilyFailures,
+  multilevelAuditBox,
+  structureAtCell,
+} from './mapInspect.js'
+import { MAP_FAMILY_ORDER } from '../world/mapFamily.js'
+import { makeView, paintCellOverlays, paintSewerGraph, paintStructures } from './familyOverlays.js'
+
+// The historical helper exports moved to mapInspect.js; re-export so existing
+// imports (tests, DebugMode) keep working.
+export { multilevelAuditBox, structureAtCell, formatMultilevelStructure, formatMultilevelAudit } from './mapInspect.js'
 
 const LOGW = 322
 const LOGH = 322
 const HUBC = (CHUNK / 2) | 0
 const SPAWN = (HUBC + 0.5) * CELL
-
-const validStructureBounds = (bounds) =>
-  Number.isInteger(bounds?.x0) &&
-  Number.isInteger(bounds?.z0) &&
-  Number.isInteger(bounds?.x1) &&
-  Number.isInteger(bounds?.z1) &&
-  bounds.x0 <= bounds.x1 &&
-  bounds.z0 <= bounds.z1
-
-// Build the layered-audit box from the structure selected in the map. A tall
-// volume is audited as one object: all of its floors and both participant
-// chunks are included even when the current viewport clips an edge. Without a
-// selection the historical current-floor +/-1 stair audit remains useful.
-export function multilevelAuditBox(structure, c0x, c1x, c0z, c1z, floor) {
-  let x0 = c0x
-  let x1 = c1x
-  let z0 = c0z
-  let z1 = c1z
-  let y0 = floor - 1
-  let y1 = floor + 1
-
-  if (
-    structure?.hasRoom &&
-    Number.isInteger(structure.baseCy) &&
-    Number.isInteger(structure.topCy) &&
-    structure.baseCy <= structure.topCy
-  ) {
-    y0 = structure.baseCy
-    y1 = structure.topCy
-    const participants = Array.isArray(structure.participants)
-      ? structure.participants
-      : []
-    if (participants.length > 0) {
-      for (const participant of participants) {
-        if (!Number.isInteger(participant?.cx) || !Number.isInteger(participant?.cz)) continue
-        x0 = Math.min(x0, participant.cx)
-        x1 = Math.max(x1, participant.cx)
-        z0 = Math.min(z0, participant.cz)
-        z1 = Math.max(z1, participant.cz)
-      }
-    } else if (validStructureBounds(structure.globalBounds)) {
-      x0 = Math.min(x0, Math.floor(structure.globalBounds.x0 / CHUNK))
-      x1 = Math.max(x1, Math.floor(structure.globalBounds.x1 / CHUNK))
-      z0 = Math.min(z0, Math.floor(structure.globalBounds.z0 / CHUNK))
-      z1 = Math.max(z1, Math.floor(structure.globalBounds.z1 / CHUNK))
-    }
-  }
-
-  return {
-    x0,
-    y0,
-    z0,
-    nx: x1 - x0 + 1,
-    ny: y1 - y0 + 1,
-    nz: z1 - z0 + 1,
-  }
-}
-
-export function structureAtCell(structures, gx, gz, floor) {
-  if (!Number.isInteger(gx) || !Number.isInteger(gz) || !Number.isInteger(floor)) return null
-  for (const structure of structures) {
-    const bounds = structure?.globalBounds
-    if (
-      structure?.hasRoom &&
-      validStructureBounds(bounds) &&
-      floor >= structure.baseCy &&
-      floor <= structure.topCy &&
-      gx >= bounds.x0 &&
-      gx <= bounds.x1 &&
-      gz >= bounds.z0 &&
-      gz <= bounds.z1
-    ) return structure
-  }
-  return null
-}
-
-export function formatMultilevelStructure(structures, selected, source = 'visible') {
-  if (structures.length === 0) return 'visible 0 · current —'
-  const structure = selected ?? structures[0]
-  const levels = Number.isInteger(structure.levelCount)
-    ? structure.levelCount
-    : structure.topCy - structure.baseCy + 1
-  const bridges = structure.bridgeLevels?.length
-    ? structure.bridgeLevels.join(',')
-    : 'none'
-  return `visible ${structures.length} · ${source} #${structure.id} ${structure.kind} · cy ${structure.baseCy}…${structure.topCy} · ${levels} levels · bridges ${bridges}`
-}
-
-export function formatMultilevelAudit(audit) {
-  if (!audit) return 'off'
-  return `struct ${audit.multilevelStructures ?? 0} · pairs ${audit.multilevelPairs ?? 0} · slices ${audit.multilevelSlices ?? 0} · mismatch ${audit.mismatchedMultilevelDescriptors ?? 0} · bad room/struct ${audit.invalidMultilevelRooms ?? 0}/${audit.invalidMultilevelStructures ?? 0} · orphan ${audit.orphanedMultilevelHalves ?? 0} · stray ${audit.strayWallFeatures ?? 0} · missing ${audit.missingMultilevelSlices ?? 0} · seams ${audit.closedBridgeSeams ?? 0}`
-}
-
-const ZONE_TINT = {
-  [ZONE_OFFICE]: 'rgba(150,90,40,.10)',
-  [ZONE_PILLARS]: 'rgba(70,120,140,.09)',
-  [ZONE_WAREHOUSE]: 'rgba(120,110,60,.06)',
-}
 
 // World-gen top-down map for the thin-wall model, one floor (v13 layer) at a
 // time. Draws wall edges, columns, border openings, lamps (lit/dead), stair
@@ -144,7 +64,15 @@ export class WorldMapTool {
     this.level = engine.state.level
     this.floor = 0 // cy of the drawn layer
     this.followFloor = true // track engine.controller.floor each update
-    this._gen = new Map() // explore cache: `${seed}:cx,cy,cz` -> ChunkData
+    // EXPLORE-mode family preview. LIVE always renders whatever the engine's
+    // ChunkManager generated; the selector only steers regeneration.
+    this.family = engine.state.mapFamily ?? 'office'
+    this._exploreConfig = exploreConfigForFamily(this.family)
+    this.fillMode = 'zones' // zones | spaceId | role | owner | none
+    this.showFamilyStructures = true
+    this.showLethal = true
+    this._pinned = null // structure pinned via the `inspect` click mode
+    this._gen = new Map() // explore cache: `${family}:${seed}:cx,cy,cz` -> ChunkData
     this._integrityCache = { key: '', value: null }
     this._hover = null // {wx,wz}
     this._build()
@@ -187,6 +115,20 @@ export class WorldMapTool {
     this._seedRow = { el: document.createElement('div') }
     this._seedRow.el.appendChild(seedWrap)
     this._seedRow.el.appendChild(seedBtns.el)
+    // Family preview selector (EXPLORE only — LIVE shows the engine's world).
+    const famRow = document.createElement('div')
+    famRow.className = 'dbg-row'
+    const famLab = document.createElement('span')
+    famLab.className = 'dbg-label'
+    famLab.textContent = 'family'
+    famRow.appendChild(famLab)
+    this._familySeg = segmented({
+      labels: [...MAP_FAMILY_ORDER],
+      value: Math.max(0, MAP_FAMILY_ORDER.indexOf(this.family)),
+      onPick: (i) => this._setFamily(MAP_FAMILY_ORDER[i]),
+    })
+    famRow.appendChild(this._familySeg.el)
+    this._seedRow.el.appendChild(famRow)
     this._seedRow.el.style.display = 'none'
     ctl.body.appendChild(this._seedRow.el)
 
@@ -215,7 +157,7 @@ export class WorldMapTool {
     clickLab.className = 'dbg-label'
     clickLab.textContent = 'map click'
     clickRow.appendChild(clickLab)
-    const CLICK_MODES = ['off', 'stalker', 'player']
+    const CLICK_MODES = ['off', 'stalker', 'player', 'inspect']
     this._clickMode = segmented({
       labels: CLICK_MODES,
       value: 0,
@@ -223,6 +165,24 @@ export class WorldMapTool {
     })
     clickRow.appendChild(this._clickMode.el)
     ctl.body.appendChild(clickRow)
+
+    // Cell fill layer: zone tint (historical default), hashed spaceId,
+    // semantic room roles, structure ownership wash, or bare walls.
+    const fillRow = document.createElement('div')
+    fillRow.className = 'dbg-row'
+    const fillLab = document.createElement('span')
+    fillLab.className = 'dbg-label'
+    fillLab.textContent = 'fill'
+    fillRow.appendChild(fillLab)
+    const FILL_MODES = ['zones', 'spaceId', 'role', 'owner', 'none']
+    fillRow.appendChild(
+      segmented({
+        labels: FILL_MODES,
+        value: 0,
+        onPick: (i) => (this.fillMode = FILL_MODES[i]),
+      }).el
+    )
+    ctl.body.appendChild(fillRow)
 
     ctl.body.appendChild(
       slider({
@@ -241,6 +201,20 @@ export class WorldMapTool {
     )
     ctl.body.appendChild(
       toggle({ label: 'seam continuity', value: false, onChange: (v) => (this.seams = v) }).el
+    )
+    ctl.body.appendChild(
+      toggle({
+        label: 'family structures',
+        value: this.showFamilyStructures,
+        onChange: (v) => (this.showFamilyStructures = v),
+      }).el
+    )
+    ctl.body.appendChild(
+      toggle({
+        label: 'lethal voids',
+        value: this.showLethal,
+        onChange: (v) => (this.showLethal = v),
+      }).el
     )
     ctl.body.appendChild(
       buttonRow('', [
@@ -272,13 +246,34 @@ export class WorldMapTool {
       zones: readout('zones'),
       conn: readout('connectivity'),
       integrity: readout('3d integrity'),
-      multilevel: readout('multilevel'),
+      multilevel: readout('structure'),
       multilevelAudit: readout('multilevel audit'),
+      family: readout('family'),
+      familyAudit: readout('family audit'),
+      lattice: readout('lattice'),
       cont: readout('continuity'),
       seed: readout('seed'),
       cursor: readout('cursor'),
     }
     for (const k of Object.keys(this._stat)) stats.body.appendChild(this._stat[k].el)
+
+    // Per-reason family failures — collapsed by default; the `family audit`
+    // readout above carries the counts at a glance.
+    const failures = section('family failures')
+    root.appendChild(failures.el)
+    this._familyFailures = textBlock()
+    failures.body.appendChild(this._familyFailures.el)
+    failures.body.style.display = 'none'
+    failures.el.querySelector('.dbg-sec-head').classList.add('dbg-collapsed')
+  }
+
+  _setFamily(family) {
+    if (family === this.family) return
+    this.family = family
+    this._exploreConfig = exploreConfigForFamily(family)
+    this._gen.clear()
+    this._integrityCache = { key: '', value: null }
+    this._pinned = null
   }
 
   _applySeed() {
@@ -359,7 +354,16 @@ export class WorldMapTool {
       if (mode === 'off') return
       const r = c.getBoundingClientRect()
       const w = this._screenToWorld(e.clientX - r.left, e.clientY - r.top)
-      if (mode === 'stalker') this.engine.debugMode.placeStalker(w.wx, w.wz, this.floor)
+      if (mode === 'inspect') {
+        // Pin the clicked structure (clicking empty space unpins) so the
+        // audit box and detail readout stop following the cursor.
+        this._pinned = structureAtCell(
+          this._visibleStructures ?? [],
+          worldToCell(w.wx),
+          worldToCell(w.wz),
+          this.floor
+        )
+      } else if (mode === 'stalker') this.engine.debugMode.placeStalker(w.wx, w.wz, this.floor)
       else this.engine.debugMode.teleportPlayer(w.wx, w.wz, this.floor)
     })
   }
@@ -388,13 +392,18 @@ export class WorldMapTool {
     if (this.source === 0) {
       return this.engine.cm.chunks.get(chunkKey3(cx, cy, cz))?.data ?? null
     }
-    const key = `${this.previewSeed}:${chunkKey3(cx, cy, cz)}`
+    const key = `${this.family}:${this.previewSeed}:${chunkKey3(cx, cy, cz)}`
     let g = this._gen.get(key)
     if (!g) {
-      g = generateChunk(this.previewSeed, cx, cy, cz)
+      g = generateChunk(this.previewSeed, cx, cy, cz, this._exploreConfig)
       this._gen.set(key, g)
     }
     return g
+  }
+
+  // The world config the drawn chunks were actually generated with.
+  _activeConfig() {
+    return this.source === 0 ? this.engine.cm.config : this._exploreConfig
   }
 
   // Global thin-wall queries over whatever chunks are available (unknown -> wall).
@@ -456,10 +465,16 @@ export class WorldMapTool {
 
     let litN = 0
     let deadN = 0
-    const zoneN = { [ZONE_OFFICE]: 0, [ZONE_PILLARS]: 0, [ZONE_WAREHOUSE]: 0 }
+    const zoneN = {
+      [ZONE_OFFICE]: 0,
+      [ZONE_PILLARS]: 0,
+      [ZONE_WAREHOUSE]: 0,
+      [ZONE_SEWER]: 0,
+    }
     const structuresByKey = new Map()
     let knownChunks = 0
     const wallW = Math.max(1, scale * 0.12)
+    const view = makeView(this)
 
     for (let ccz = c0z; ccz <= c1z; ccz++) {
       for (let ccx = c0x; ccx <= c1x; ccx++) {
@@ -477,23 +492,11 @@ export class WorldMapTool {
         const ox = ccx * CHUNK_WORLD
         const oz = ccz * CHUNK_WORLD
 
-        // Zone tint.
-        ctx.fillStyle = ZONE_TINT[d.zone] || 'rgba(120,110,60,.05)'
-        ctx.fillRect(this._sx(ox), this._sy(oz), CHUNK_WORLD * scale, CHUNK_WORLD * scale)
-
-        // Actual current-floor surface: void cells remain dark; the retained
-        // narrow bridge is highlighted so a malformed/floating deck is obvious.
-        for (let lz = 0; lz < CHUNK; lz++) {
-          for (let lx = 0; lx < CHUNK; lx++) {
-            if (d.hasFloorHole(lx, lz)) {
-              ctx.fillStyle = 'rgba(4,4,3,.72)'
-              ctx.fillRect(this._sx(ox + lx * CELL), this._sy(oz + lz * CELL), CELL * scale, CELL * scale)
-            } else if (d.cellKind[lz * CHUNK + lx] === CELL_BRIDGE) {
-              ctx.fillStyle = 'rgba(120,210,190,.28)'
-              ctx.fillRect(this._sx(ox + lx * CELL), this._sy(oz + lz * CELL), CELL * scale, CELL * scale)
-            }
-          }
-        }
+        // Fill layer + floor surface (holes/bridges/atria) + lethal voids.
+        paintCellOverlays(view, d, ccx, ccz, {
+          fillMode: this.fillMode,
+          lethal: this.showLethal,
+        })
 
         // Sealed-pocket overlay (cells unreached by the validator; stair
         // run/hole cells are non-nodes and get the hatch glyph instead).
@@ -577,6 +580,9 @@ export class WorldMapTool {
         // Stair glyphs (this floor's stairUp landing/run, stairDown hole/exit).
         this._drawStairs(d, ox, oz)
 
+        // Sewer module graph (trunk tree solid, loop closures dashed).
+        if (this.showFamilyStructures) paintSewerGraph(view, d, ccx, ccz)
+
         // Lamps.
         for (const l of d.lamps) {
           const wx = ox + (l.lx + 0.5) * CELL
@@ -614,9 +620,21 @@ export class WorldMapTool {
     if (this.seams) cont = this._drawSeams(c0x, c1x, c0z, c1z)
 
     const visibleStructures = [...structuresByKey.values()]
+    this._visibleStructures = visibleStructures // for the inspect click mode
+
+    // Family structure glyphs (tower decks/sockets, lattice anchors/edges)
+    // and per-family bounds outlines, pinned selection emphasized.
+    if (this.showFamilyStructures) {
+      paintStructures(view, visibleStructures, this._pinned)
+    }
+
     let selectedStructure = null
     let selectedSource = 'visible'
-    if (this._hover) {
+    if (this._pinned) {
+      selectedStructure = this._pinned
+      selectedSource = 'pinned'
+    }
+    if (!selectedStructure && this._hover) {
       selectedStructure = structureAtCell(
         visibleStructures,
         worldToCell(this._hover.wx),
@@ -666,6 +684,7 @@ export class WorldMapTool {
       const integrityKey = [
         this.source,
         this.source === 0 ? this.engine.cm.seed : this.previewSeed,
+        this.source === 0 ? '-' : this.family,
         selectedStructure?.id ?? '-',
         auditBox.x0,
         auditBox.y0,
@@ -701,7 +720,7 @@ export class WorldMapTool {
     this._stat.chunks.set(`${cm.chunks.size} loaded / ${knownChunks} drawn`)
     this._stat.lamps.set(`${litN} lit  ${deadN} dead`)
     this._stat.zones.set(
-      `off ${zoneN[ZONE_OFFICE]} · pil ${zoneN[ZONE_PILLARS]} · whs ${zoneN[ZONE_WAREHOUSE]}`
+      `off ${zoneN[ZONE_OFFICE]} · pil ${zoneN[ZONE_PILLARS]} · whs ${zoneN[ZONE_WAREHOUSE]} · sew ${zoneN[ZONE_SEWER]}`
     )
     this._floorRead.set(`cy ${this.floor}`)
     this._stat.conn.set(
@@ -713,20 +732,39 @@ export class WorldMapTool {
         : 'off'
     )
     this._stat.multilevel.set(
-      formatMultilevelStructure(
+      formatStructureDetail(
         visibleStructures,
         selectedStructure,
         selectedSource
       )
     )
     this._stat.multilevelAudit.set(formatMultilevelAudit(integrity))
+    this._stat.family.set(formatFamilyCounts(integrity?.familyAudit))
+    this._stat.familyAudit.set(formatFamilyFailureSummary(integrity))
+    this._stat.lattice.set(formatLatticeMetrics(integrity?.familyAudit?.latticeMetrics))
+    this._familyFailures.set(integrity ? listFamilyFailures(integrity.details) : [])
     this._stat.cont.set(
       cont
         ? `score ${cont.score.toFixed(2)} · ${cont.sealed} unsafe · arch ${cont.architecture.ok ? 'ok' : 'FAIL'} · rooms ${(cont.architecture.officeShare * 100).toFixed(0)}% · open comp ${cont.architecture.largestOpenComponent}/${cont.architecture.openComponentCap} · run ${cont.architecture.maxOpenRun}/${cont.architecture.openRunCap} · plan variety ${cont.planVariety.toFixed(2)}`
         : 'off'
     )
-    this._stat.seed.set(`${this.source === 1 ? 'explore' : 'live'} 0x${(this.previewSeed >>> 0).toString(16)}`)
-    this._stat.cursor.set(this._hover ? `${this._hover.wx.toFixed(1)}, ${this._hover.wz.toFixed(1)}` : '—')
+    const sourceFamily = this.source === 1
+      ? this.family
+      : this.engine.state.mapFamily ?? 'office'
+    this._stat.seed.set(
+      `${this.source === 1 ? 'explore' : 'live'} ${sourceFamily} 0x${(this.previewSeed >>> 0).toString(16)}`
+    )
+    let cursorText = '—'
+    if (this._hover) {
+      const gx = worldToCell(this._hover.wx)
+      const gz = worldToCell(this._hover.wz)
+      const hcx = Math.floor(gx / CHUNK)
+      const hcz = Math.floor(gz / CHUNK)
+      const hd = this._chunkData(hcx, hcz)
+      const detail = hd ? describeCell(hd, gx - hcx * CHUNK, gz - hcz * CHUNK) : ''
+      cursorText = `${this._hover.wx.toFixed(1)}, ${this._hover.wz.toFixed(1)}${detail ? ' · ' + detail : ''}`
+    }
+    this._stat.cursor.set(cursorText)
   }
 
   // Mark openings on a chunk's owned West (lx=0) and North (lz=0) borders,
@@ -793,7 +831,7 @@ export class WorldMapTool {
       c0z,
       c1x - c0x + 1,
       c1z - c0z + 1,
-      this.engine.cm.config
+      this._activeConfig()
     )
   }
 
@@ -868,6 +906,9 @@ export class WorldMapTool {
   }
 
   _drawExit() {
+    // The exit is live-world state; drawing it over an EXPLORE preview of a
+    // different seed/family would be a lie.
+    if (this.source !== 0) return
     const ex = this.engine.cm.exit
     if (!ex) return
     const wx = ex.cx * CHUNK_WORLD + (ex.lx + 0.5) * CELL

@@ -35,6 +35,8 @@ import { TouchControls } from '../ui/TouchControls.js'
 import { Minimap } from '../ui/Minimap.js'
 import { ExploredMap } from '../world/ExploredMap.js'
 import { hashStr } from '../world/core/hash.js'
+import { worldConfigForFamilyOrOffice } from '../world/mapFamily.js'
+import { MAP_FAMILY_OFFICE } from '../world/mapTypes.js'
 import { createExitPlacement, evaluateExit } from './exitPlacement.js'
 
 // Make color management explicit (it defaults to true in three r0.185). With it
@@ -82,11 +84,26 @@ export class Engine {
     this.geom = createGeometries()
 
     this.cm = new ChunkManager(scene, hashStr('lobby'), this.materials, this.geom)
+    // Apply the ?family= selection before anything reads cm.config — the title
+    // backdrop prewarm below must already render the requested family's world.
+    // Unknown/disabled values fall back to Office rather than crash the boot.
+    let urlFamily = ''
+    try {
+      urlFamily = (new URLSearchParams(location.search).get('family') ?? '')
+        .trim()
+        .toLowerCase()
+    } catch {
+      /* headless test env without location */
+    }
+    const urlFam = worldConfigForFamilyOrOffice(urlFamily || MAP_FAMILY_OFFICE)
+    this.cm.config = urlFam.config
+    this.state.mapFamily = urlFam.family
     this.explored = new ExploredMap(this.cm) // player-seen fog state for the minimap
     this.controller = new Controller(camera, renderer.domElement, this.state)
     // Floor handoff re-gates cross-floor chunk visibility the same frame.
     this._transitStair = null
     this.controller.onFloorChange = (f) => this.cm.updateVisibility(f, this._transitStair)
+    this.controller.onVoidDeath = () => this.die('void')
     this.controller.flashlight = null // handled in the lighting pass, not a real light
 
     this.audio = new AudioBus(camera)
@@ -155,9 +172,14 @@ export class Engine {
   }
 
   _wireUI() {
-    this.ui.onStart = (seed) => this.startRun(seed)
+    this.ui.onStart = (seed, family) => this.startRun(seed, family)
     this.ui.onResume = () => this.resume()
-    this.ui.onRestart = () => this.startRun(this.state.seedText)
+    this.ui.onRestart = () => {
+      if (this.state.phase === Phase.DEAD && this.state.deathReason === 'void') {
+        return this.retryCurrentLevel()
+      }
+      return this.startRun(this.state.seedText)
+    }
     this.ui.onQuit = () => this.quitToTitle()
     this.ui.onSetting = (k, v) => this._applySetting(k, v)
     this.ui.onResetSettings = () => {
@@ -190,20 +212,34 @@ export class Engine {
   start() {
     const urlSeed = new URLSearchParams(location.search).get('seed')
     if (urlSeed) this.ui.setSeedInput(urlSeed)
+    this.ui.setFamilyInput(this.state.mapFamily)
     this.ui.showTitle()
     requestAnimationFrame(this._animate)
   }
 
-  startRun(seedText) {
+  startRun(seedText, family = this.state.mapFamily) {
     seedText = (seedText || '').trim() || Math.random().toString(36).slice(2, 8)
     this.state.seedText = seedText
     this.state.level = 1
     this.state.resetLevel()
     this.ui.setSeedInput(seedText)
+    // Rebuild the world config only when the family actually changes: retry
+    // and same-family restarts must keep the config object identity (void-
+    // death baselines compare it), and Office runs stay byte-identical.
+    const familyText = typeof family === 'string' ? family.trim().toLowerCase() : ''
+    const fam = worldConfigForFamilyOrOffice(familyText || MAP_FAMILY_OFFICE)
+    if (this.cm.config?.mapFamily?.selected !== fam.family) {
+      this.cm.config = fam.config
+    }
+    this.state.mapFamily = fam.family
+    this.ui.setFamilyInput(fam.family)
     try {
-      // Preserve other params (e.g. the ?touch override) — only update the seed.
+      // Preserve other params (e.g. the ?touch override) — only update the
+      // seed and family. Office keeps default URLs clean (no family param).
       const q = new URLSearchParams(location.search)
       q.set('seed', seedText)
+      if (fam.family === MAP_FAMILY_OFFICE) q.delete('family')
+      else q.set('family', fam.family)
       history.replaceState(null, '', `?${q}`)
     } catch {
       /* ignore */
@@ -229,6 +265,7 @@ export class Engine {
   _setupLevel() {
     const { state, cm } = this
     const lvl = state.level
+    state.mapFamily = cm.config.mapFamily?.selected ?? 'office'
     cm.setSeed(hashStr(`${state.seedText}#${lvl}`))
     this.audio.resetLevel(cm.seed)
 
@@ -267,14 +304,14 @@ export class Engine {
     // in-game way to re-lock. Pausing lets the Resume button re-lock via a gesture.
     if (!locked && (this.state.phase === Phase.PLAYING || this.state.phase === Phase.TRANSITION)) {
       this.state.phase = Phase.PAUSED
-      this.ui.showPause()
+      this.ui.showPause(this.state)
     }
   }
 
   pause() {
     if (this.state.phase !== Phase.PLAYING && this.state.phase !== Phase.TRANSITION) return
     this.state.phase = Phase.PAUSED
-    this.ui.showPause()
+    this.ui.showPause(this.state)
     this.touchControls?.reset()
   }
 
@@ -307,6 +344,23 @@ export class Engine {
     this.controller.unlock()
     this.touchControls?.reset()
     this.ui.showDeath(reason, this.state)
+  }
+
+  retryCurrentLevel() {
+    const { state } = this
+    if (state.phase !== Phase.DEAD || state.deathReason !== 'void') return false
+
+    // Keep the current seed/level/config object intact. _setupLevel() derives the
+    // same world seed and reuses the selected normalized profile while clearing
+    // ChunkManager, visibility, transit, entity, lighting, and Controller state.
+    state.resetLevel()
+    this._setupLevel()
+    this.deferred.grade.dead.value = 0
+    state.phase = Phase.PLAYING
+    this.ui.showHud()
+    if (!this.touch) this.controller.lock()
+    this._checkOrientation()
+    return true
   }
 
   _levelComplete() {

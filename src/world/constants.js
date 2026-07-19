@@ -328,18 +328,19 @@ export const OUTLINE_FADE_FAR = 0.95
 
 // --- Thin-wall model (refactor) ---------------------------------------
 // World-gen version: bump whenever the algorithm changes the bytes a seed
-// produces. Guards the golden determinism test. v15 adds the collision-real
-// furniture layer (COLUMN_FURNITURE blockers + precise piece records) to
-// office rooms; v14 made office rooms the continuous world fabric, bounded
-// open landmark pockets, and added genuinely monumental column geometry to
-// the finite pillar halls.
-export const WORLD_GEN_VERSION = 15
+// produces. Guards the golden determinism test. v18 is the first release-
+// eligible bounded Lattice stream; v17 introduced the release-eligible bounded
+// Tower/skybridge stream, and v16 introduced the release-eligible bounded Sewer
+// stream while preserving Office geometry. v15 added the collision-real
+// furniture layer.
+export const WORLD_GEN_VERSION = 18
 
 // Interior archetypes. The room-dominant macro planner bounds the two open
 // styles; the registry in zones/index.js maps ids to their chunk compilers.
 export const ZONE_OFFICE = 0 // district-planned circulation, rooms, and explicit doors
 export const ZONE_PILLARS = 1 // bounded hypostyle hall, seamless bay lattice
 export const ZONE_WAREHOUSE = 2 // bounded inner court, sparse wall fragments
+export const ZONE_SEWER = 3 // release-enabled bounded dry sewer family
 
 // Thin-wall geometry / collision tuning.
 export const THICK = 0.16 // visual wall slab thickness (world units)

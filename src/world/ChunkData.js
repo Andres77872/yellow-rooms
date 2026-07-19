@@ -1,11 +1,13 @@
 import { CHUNK, WORLD_GEN_VERSION, vIdx, hIdx, cIdx } from './constants.js'
 import {
   CELL_OPEN,
+  MAP_FAMILY_OFFICE,
   PASSAGE_OPEN,
   PASSAGE_WALL,
   PASSAGE_WIDE,
   WALL_PLAIN,
 } from './mapTypes.js'
+import { lethalVoidCellAt } from './structureAdapters.js'
 
 function stairHoleAt(stair, lx, lz) {
   return !!stair?.run?.some((cell) => cell.lx === lx && cell.lz === lz)
@@ -17,7 +19,7 @@ function stairHoleAt(stair, lx, lz) {
 // Keeping the mask on the canonical descriptor still lets independently
 // generated floor halves derive identical holes without another mutable raster.
 function multilevelHoleAt(room, lx, lz) {
-  if (!room?.hasRoom) return false
+  if (!room?.hasRoom || !Array.isArray(room.voidCells)) return false
   return room.voidCells.some((cell) => cell.lx === lx && cell.lz === lz)
 }
 
@@ -36,11 +38,22 @@ function multilevelHoleAt(room, lx, lz) {
 // and the slab holes are DERIVED from them (hasCeilHole/hasFloorHole) so the
 // raster and the descriptor can never drift apart.
 export class ChunkData {
-  constructor(cx, cy, cz, zone, version = WORLD_GEN_VERSION) {
+  constructor(
+    cx,
+    cy,
+    cz,
+    zone,
+    version = WORLD_GEN_VERSION,
+    mapFamily = MAP_FAMILY_OFFICE
+  ) {
     this.version = version
     this.cx = cx
     this.cy = cy
     this.cz = cz
+    // Family identity is carried independently from zone identity. Keeping it
+    // explicit prevents future office-compatible families from being inferred
+    // from shared zone or descriptor vocabulary.
+    this.mapFamily = mapFamily
     this.zone = zone
     this.wallV = new Uint8Array(CHUNK * CHUNK) // 1 = vertical wall on a grid line
     this.wallH = new Uint8Array(CHUNK * CHUNK) // 1 = horizontal wall on a grid line
@@ -75,16 +88,26 @@ export class ChunkData {
     // (slab cy-1). Shape: {dir, landing:{lx,lz}, run:[{..},{..}], exit:{lx,lz}}.
     this.stairUp = null
     this.stairDown = null
+    // Sole canonical carrier for the bounded Sewer family. It remains null for
+    // office and every other family; generators must not introduce wrapper
+    // aliases that would let pipeline, digest, and audit consumers drift.
+    this.sewerDescriptor = null
     // Global immutable descriptor for the tall structure intersecting this
     // chunk/floor, if any. Runtime streaming uses its participant chunks and
     // inclusive vertical range without widening the world's normal Y radius.
     this.multilevelStructure = null
     // Canonical per-slab slices of a possibly tall structure. `multilevelUp`
     // describes this layer's ceiling and `multilevelDown` its floor. Middle
-    // storeys legitimately own both, and their masks may retain different
-    // bridge decks.
+    // storeys legitimately own both. Rectilinear Office/Tower slices retain a
+    // single bridge line; Lattice slices instead carry derived bridgeSegments
+    // while the same voidCells mask remains the slab-hole authority.
     this.multilevelUp = null
     this.multilevelDown = null
+    // Descriptor-scoped lethal slab halves. A lower layer owns `Up` for its
+    // ceiling; the layer above owns the byte-equal `Down` half for its floor.
+    // Null remains the only default for Office, Sewer, and unstamped families.
+    this.lethalVoidUp = null
+    this.lethalVoidDown = null
     // Edges the stair stamp owns (guard walls AND mouths). Transient — not
     // serialized, not digested — carves check these so a later exit/spawn
     // clearing can never re-open a guard wall or re-wall a stair mouth.
@@ -147,11 +170,15 @@ export class ChunkData {
   // seen from below and above).
 
   hasCeilHole(lx, lz) {
-    return stairHoleAt(this.stairUp, lx, lz) || multilevelHoleAt(this.multilevelUp, lx, lz)
+    return stairHoleAt(this.stairUp, lx, lz) ||
+      multilevelHoleAt(this.multilevelUp, lx, lz) ||
+      lethalVoidCellAt(this, 'up', lx, lz) !== null
   }
 
   hasFloorHole(lx, lz) {
-    return stairHoleAt(this.stairDown, lx, lz) || multilevelHoleAt(this.multilevelDown, lx, lz)
+    return stairHoleAt(this.stairDown, lx, lz) ||
+      multilevelHoleAt(this.multilevelDown, lx, lz) ||
+      lethalVoidCellAt(this, 'down', lx, lz) !== null
   }
 
   // --- Protected edges (stair stamp ownership) ---

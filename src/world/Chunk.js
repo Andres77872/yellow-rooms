@@ -1,7 +1,82 @@
 import { CHUNK_WORLD, CELL, layerY } from './constants.js'
 import { generateChunk } from './generate.js'
+import { latticeStructureSlice } from './latticeStamp.js'
+import { resolveMapFamily } from './mapFamily.js'
+import { MAP_FAMILY_LATTICE } from './mapTypes.js'
 import { buildChunkMeshes } from './mesh.js'
 import { buildStairCells } from './stairCells.js'
+import { validatedRuntimeStructure } from './structureAdapters.js'
+
+function worldApertureRegion(region, cx, cz) {
+  return {
+    minX: cx * CHUNK_WORLD + region.x0 * CELL,
+    maxX: cx * CHUNK_WORLD + region.x1 * CELL,
+    minZ: cz * CHUNK_WORLD + region.z0 * CELL,
+    maxZ: cz * CHUNK_WORLD + region.z1 * CELL,
+  }
+}
+
+function canonicalLatticeApertureSlice(
+  structure,
+  slice,
+  cx,
+  cy,
+  cz,
+  config
+) {
+  try {
+    const profile = resolveMapFamily(config)
+    if (profile.family !== MAP_FAMILY_LATTICE || !Object.isFrozen(slice)) {
+      return null
+    }
+    const expected = latticeStructureSlice(structure, cx, cz, cy, profile)
+    if (!expected || JSON.stringify(slice) !== JSON.stringify(expected)) return null
+    return expected
+  } catch {
+    return null
+  }
+}
+
+// Lattice slabs can expose many non-rectangular void cells. Preserve the
+// existing multilevel aperture kind and exact cell footprint, coalescing only
+// adjacent cells on the same row into deterministic half-open local regions.
+function latticeApertureRegions(slice) {
+  const regions = []
+  let current = null
+  for (const { lx, lz } of slice.voidCells) {
+    if (current && current.z0 === lz && current.x1 === lx) {
+      current.x1 = lx + 1
+      continue
+    }
+    current = { x0: lx, z0: lz, x1: lx + 1, z1: lz + 1 }
+    regions.push(current)
+  }
+  return regions
+}
+
+function structureApertureRegions(
+  adapter,
+  slice,
+  structure,
+  cx,
+  cy,
+  cz,
+  config
+) {
+  const regions = adapter.apertureRegions(slice)
+  if (Array.isArray(regions) && regions.length > 0) return regions
+  if (adapter.family !== MAP_FAMILY_LATTICE) return regions
+
+  const canonical = canonicalLatticeApertureSlice(
+    structure,
+    slice,
+    cx,
+    cy,
+    cz,
+    config
+  )
+  return canonical ? latticeApertureRegions(canonical) : []
+}
 
 // A single streamed chunk: its deterministic ChunkData (thin-wall model) plus
 // the THREE meshes that render it. Generation and meshing are now separate
@@ -30,8 +105,8 @@ export class Chunk {
     this.multilevelStructure = this.data.multilevelStructure
 
     // Vertical openings through this chunk's CEILING (slab cy). Stairs expose
-    // a point-like centre; multilevel rooms expose the exact two void lobes on
-    // either side of their bridge. Feeds light, sight and visibility gating.
+    // a point-like centre; multilevel rooms expose exact void regions around
+    // retained bridges. Feeds light, sight and visibility gating.
     this.apertures = []
     const up = this.data.stairUp
     if (up) {
@@ -50,47 +125,57 @@ export class Chunk {
         lowerCy: cy,
       })
     }
-    const room = this.data.multilevelUp
-    if (room) {
-      const { x0, z0, x1, z1 } = room.bounds
-      const minX = cx * CHUNK_WORLD + x0 * CELL
-      const maxX = cx * CHUNK_WORLD + (x1 + 1) * CELL
-      const minZ = cz * CHUNK_WORLD + z0 * CELL
-      const maxZ = cz * CHUNK_WORLD + (z1 + 1) * CELL
-      let regions
-      if (room.globalBridgeLine === null) {
-        regions = [{ minX, maxX, minZ, maxZ }]
-      } else if (room.bridgeAxis === 'x') {
-        const split0 = cz * CHUNK_WORLD + room.bridgeLine * CELL
-        const split1 = split0 + CELL
-        regions = [
-          { minX, maxX, minZ, maxZ: split0 },
-          { minX, maxX, minZ: split1, maxZ },
-        ].filter((region) => region.minZ < region.maxZ)
-      } else {
-        const split0 = cx * CHUNK_WORLD + room.bridgeLine * CELL
-        const split1 = split0 + CELL
-        regions = [
-          { minX, maxX: split0, minZ, maxZ },
-          { minX: split1, maxX, minZ, maxZ },
-        ].filter((region) => region.minX < region.maxX)
-      }
-      this.apertures.push({
-        kind: 'multilevel',
-        id: room.id,
-        centerX: (minX + maxX) / 2,
-        centerZ: (minZ + maxZ) / 2,
-        minX,
-        maxX,
-        minZ,
-        maxZ,
-        regions,
-        lowerCy: room.lowerCy,
-        baseCy: room.baseCy,
-        topCy: room.topCy,
-        structureKind: room.kind,
-      })
-    }
+    this._registerStructureAperture(seed, config)
+  }
+
+  _registerStructureAperture(seed, config) {
+    const structure = this.data.multilevelStructure
+    const slice = this.data.multilevelUp
+    if (!structure || !slice) return
+
+    const validated = validatedRuntimeStructure(
+      seed,
+      config,
+      structure,
+      this.cy
+    )
+    if (!validated) return
+    const { adapter, ownership } = validated
+    if (!adapter.validateSlice(slice, structure, { ownership }).ok) return
+
+    const localRegions = structureApertureRegions(
+      adapter,
+      slice,
+      structure,
+      this.cx,
+      this.cy,
+      this.cz,
+      config
+    )
+    if (!Array.isArray(localRegions) || localRegions.length === 0) return
+    const regions = localRegions.map((region) =>
+      worldApertureRegion(region, this.cx, this.cz)
+    )
+    const minX = Math.min(...regions.map((region) => region.minX))
+    const maxX = Math.max(...regions.map((region) => region.maxX))
+    const minZ = Math.min(...regions.map((region) => region.minZ))
+    const maxZ = Math.max(...regions.map((region) => region.maxZ))
+
+    this.apertures.push({
+      kind: 'multilevel',
+      id: slice.id,
+      centerX: (minX + maxX) / 2,
+      centerZ: (minZ + maxZ) / 2,
+      minX,
+      maxX,
+      minZ,
+      maxZ,
+      regions,
+      lowerCy: slice.lowerCy,
+      baseCy: slice.baseCy,
+      topCy: slice.topCy,
+      structureKind: slice.kind,
+    })
   }
 
   dispose() {

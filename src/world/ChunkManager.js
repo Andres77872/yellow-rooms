@@ -27,41 +27,39 @@ import { DEFAULT_WORLD_CONFIG } from './config.js'
 import { slabContract } from './slab.js'
 import { chunkMultilevelRooms } from './multilevel.js'
 import { Chunk } from './Chunk.js'
-import { COLUMN_FURNITURE, COLUMN_MONUMENTAL, wallFeatureSeesThrough } from './mapTypes.js'
+import {
+  COLUMN_FURNITURE,
+  COLUMN_MONUMENTAL,
+  MAP_FAMILY_LATTICE,
+  MAP_FAMILY_TOWER,
+  wallFeatureSeesThrough,
+} from './mapTypes.js'
+import { validatedRuntimeStructure } from './structureAdapters.js'
 
 const HUB = (CHUNK / 2) | 0
+const UINT32_MAX = 0xffffffff
+const HARD_VOID_PLANE_KEYS = Object.freeze(['deathYmm', 'family', 'id'])
 
-function structureParticipants(structure) {
-  const participants = structure?.participants ?? structure?.participantChunks
-  if (!Array.isArray(participants)) return []
-  return participants.filter(
-    (participant) =>
-      Number.isInteger(participant?.cx) && Number.isInteger(participant?.cz)
-  )
-}
-
-// Runtime structure descriptors come from deterministic generation, but queue
-// entries can live across floor/position changes. Validate all fields used by
-// streaming before allowing a tagged request to widen the ordinary load box.
-function validStructure(structure) {
-  return !!(
-    structure &&
-    structure.hasRoom !== false &&
-    (Number.isInteger(structure.id) ||
-      (typeof structure.id === 'string' && structure.id.length > 0)) &&
-    Number.isInteger(structure.baseCy) &&
-    Number.isInteger(structure.topCy) &&
-    structure.topCy >= structure.baseCy &&
-    structureParticipants(structure).length
-  )
+function exactHardVoidPlane(plane) {
+  if (plane === null || typeof plane !== 'object' || Array.isArray(plane)) {
+    return false
+  }
+  const keys = Object.keys(plane).sort()
+  return keys.length === HARD_VOID_PLANE_KEYS.length &&
+    keys.every((key, index) => key === HARD_VOID_PLANE_KEYS[index]) &&
+    Number.isInteger(plane.id) &&
+    plane.id >= 0 &&
+    plane.id <= UINT32_MAX &&
+    (plane.family === MAP_FAMILY_TOWER || plane.family === MAP_FAMILY_LATTICE) &&
+    Number.isInteger(plane.deathYmm)
 }
 
 function structureSpansFloor(structure, cy) {
-  return validStructure(structure) && cy >= structure.baseCy && cy <= structure.topCy
+  return cy >= structure.baseCy && cy <= structure.topCy
 }
 
-function structureHasParticipant(structure, cx, cz) {
-  return structureParticipants(structure).some(
+function structureHasParticipant(participants, cx, cz) {
+  return participants.some(
     (participant) => participant?.cx === cx && participant?.cz === cz
   )
 }
@@ -70,13 +68,29 @@ function chunkStructure(chunk) {
   return chunk?.multilevelStructure ?? chunk?.data?.multilevelStructure ?? null
 }
 
-function chunkSharesStructure(chunk, cy) {
+// Cross-floor lamp assignment does not widen residency or chunk visibility.
+// Keep its established descriptor-local office filter unchanged in this slice;
+// canonical adapter evidence gates the ownership-authorizing surfaces below.
+function chunkHasLampContinuity(chunk, cy) {
   const structure = chunkStructure(chunk)
+  const participants = structure?.participants ?? structure?.participantChunks
   return !!(
-    structureSpansFloor(structure, cy) &&
+    structure &&
+    structure.hasRoom !== false &&
+    (Number.isInteger(structure.id) ||
+      (typeof structure.id === 'string' && structure.id.length > 0)) &&
+    Number.isInteger(structure.baseCy) &&
+    Number.isInteger(structure.topCy) &&
+    structure.topCy >= structure.baseCy &&
+    cy >= structure.baseCy &&
+    cy <= structure.topCy &&
     chunk.cy >= structure.baseCy &&
     chunk.cy <= structure.topCy &&
-    structureHasParticipant(structure, chunk.cx, chunk.cz)
+    Array.isArray(participants) &&
+    participants.some(
+      (participant) =>
+        participant?.cx === chunk.cx && participant?.cz === chunk.cz
+    )
   )
 }
 
@@ -201,18 +215,41 @@ export class ChunkManager {
     )
   }
 
+  _validatedStructure(structure, levelCy) {
+    return validatedRuntimeStructure(
+      this.seed,
+      this.config,
+      structure,
+      levelCy
+    )
+  }
+
+  _chunkSharesStructure(chunk, levelCy) {
+    const structure = chunkStructure(chunk)
+    const validated = this._validatedStructure(structure, levelCy)
+    return !!(
+      validated &&
+      structureSpansFloor(structure, levelCy) &&
+      chunk.cy >= structure.baseCy &&
+      chunk.cy <= structure.topCy &&
+      structureHasParticipant(validated.participants, chunk.cx, chunk.cz)
+    )
+  }
+
   // A structure tag widens only the vertical load radius, plus the one-chunk
   // XZ hysteresis needed when the second participant lies just outside the
   // normal load box. It is never trusted without matching the immutable
   // descriptor's range and participant list.
   _structureRequestRelevant(request, pcx, pcy, pcz) {
     const structure = request.structure
+    const validated = this._validatedStructure(structure, pcy)
     return !!(
       request.structureRequest === true &&
+      validated &&
       structureSpansFloor(structure, pcy) &&
       request.cy >= structure.baseCy &&
       request.cy <= structure.topCy &&
-      structureHasParticipant(structure, request.cx, request.cz) &&
+      structureHasParticipant(validated.participants, request.cx, request.cz) &&
       Math.abs(request.cx - pcx) <= UNLOAD_RADIUS &&
       Math.abs(request.cz - pcz) <= UNLOAD_RADIUS
     )
@@ -258,13 +295,14 @@ export class ChunkManager {
     if (
       !Number.isInteger(pcx) ||
       !Number.isInteger(pcy) ||
-      !Number.isInteger(pcz) ||
-      !structureSpansFloor(structure, pcy)
+      !Number.isInteger(pcz)
     ) return 0
 
-    const participants = [...structureParticipants(structure)].sort(
-      (a, b) => a.cz - b.cz || a.cx - b.cx
-    )
+    const validated = this._validatedStructure(structure, pcy)
+    if (!validated || !structureSpansFloor(structure, pcy)) return 0
+    // expectedParticipants already supplies the canonical frozen (cz,cx)
+    // order. Do not create a second runtime ordering policy here.
+    const participants = validated.participants
     let added = 0
     for (let cy = structure.baseCy; cy <= structure.topCy; cy++) {
       for (const participant of participants) {
@@ -302,10 +340,10 @@ export class ChunkManager {
     const seen = new Set()
     for (const chunk of this.chunks.values()) {
       const structure = chunkStructure(chunk)
-      if (!structureSpansFloor(structure, pcy)) continue
-      const participantKey = structureParticipants(structure)
+      const validated = this._validatedStructure(structure, pcy)
+      if (!validated || !structureSpansFloor(structure, pcy)) continue
+      const participantKey = validated.participants
         .map(({ cx, cz }) => `${cx},${cz}`)
-        .sort()
         .join(';')
       const key = `${structure.id}:${structure.baseCy}:${structure.topCy}:${participantKey}`
       if (seen.has(key)) continue
@@ -366,7 +404,7 @@ export class ChunkManager {
         Math.abs(c.cx - pcx) > UNLOAD_RADIUS ||
         Math.abs(c.cz - pcz) > UNLOAD_RADIUS
       const outsideY = Math.abs(c.cy - pcy) > UNLOAD_RADIUS_Y
-      const retainedStructure = !outsideXZ && chunkSharesStructure(c, pcy)
+      const retainedStructure = !outsideXZ && this._chunkSharesStructure(c, pcy)
       if (outsideXZ || (outsideY && !retainedStructure)) {
         for (const a of c.apertures) {
           this.apertures.delete(a.key)
@@ -456,7 +494,7 @@ export class ChunkManager {
     // Every streamed slice of the same continuous atrium/shaft must render:
     // looking up or down the void can expose walls and bridges many storeys
     // away. Descriptor validation keeps unrelated far floors gated.
-    if (chunkSharesStructure(c, pcy)) return true
+    if (this._chunkSharesStructure(c, pcy)) return true
     if (Math.abs(c.cy - pcy) !== 1) return false
     const lowerCy = Math.min(c.cy, pcy)
     for (const a of this.apertures.values()) {
@@ -565,6 +603,54 @@ export class ChunkManager {
     return c.data.hasFloorHole(gx - c.cx * CHUNK, gz - c.cz * CHUNK)
   }
 
+  // Explicit authored lethal-plane lookup. A loaded raster is not sufficient:
+  // the descriptor must still resolve to the canonical structure ownership for
+  // every declared participant before its family adapter may authorize death.
+  hardVoidAt(gx, gz, cy = 0) {
+    if (!Number.isInteger(gx) || !Number.isInteger(gz) || !Number.isInteger(cy)) {
+      return null
+    }
+    const cx = Math.floor(gx / CHUNK)
+    const cz = Math.floor(gz / CHUNK)
+    const chunk = this._chunkAt(gx, gz, cy)
+    const data = chunk?.data
+    if (
+      !data ||
+      chunk.cx !== cx ||
+      chunk.cy !== cy ||
+      chunk.cz !== cz ||
+      data.cx !== cx ||
+      data.cy !== cy ||
+      data.cz !== cz
+    ) return null
+
+    const structure = data.multilevelStructure
+    const validated = this._validatedStructure(structure, cy)
+    const adapter = validated?.adapter
+    if (
+      !validated ||
+      (adapter.family !== MAP_FAMILY_TOWER && adapter.family !== MAP_FAMILY_LATTICE) ||
+      !structureHasParticipant(validated.participants, cx, cz)
+    ) return null
+
+    let plane
+    try {
+      plane = adapter.hardVoidAt(data, gx - cx * CHUNK, gz - cz * CHUNK)
+    } catch {
+      return null
+    }
+    if (
+      !exactHardVoidPlane(plane) ||
+      plane.id !== structure.id ||
+      plane.family !== adapter.family
+    ) return null
+    return {
+      id: plane.id,
+      family: plane.family,
+      deathYmm: plane.deathYmm,
+    }
+  }
+
   // May anything spawn/stand at this world point on layer cy? Unlike the wall
   // queries (unloaded -> open, collision no-ops), placement must FAIL CLOSED:
   // an unloaded chunk is blocked, as are floor holes, stair ramps (an entity
@@ -624,7 +710,7 @@ export class ChunkManager {
       if (!lamps || !lamps.length) continue
       const floorDelta = pcy === null ? 0 : Math.abs(c.cy - pcy)
       const structureCandidate = pcy !== null && floorDelta !== 0 &&
-        chunkSharesStructure(c, pcy) &&
+        chunkHasLampContinuity(c, pcy) &&
         Math.abs(layerY(c.cy) - layerY(pcy)) <= LIGHT_RANGE
       if (pcy !== null && floorDelta > 1 && !structureCandidate) continue
       // Chunk-AABB prune: skip chunks whose nearest edge is beyond the query
@@ -676,7 +762,7 @@ export class ChunkManager {
   // footprint. Gate each lamp against the canonical global cell bounds, just
   // as adjacent stair spill gates against its aperture region.
   _lampSpillsThroughStructure(v, chunk, pcy) {
-    if (!chunkSharesStructure(chunk, pcy)) return false
+    if (!chunkHasLampContinuity(chunk, pcy)) return false
     const lampCy = Number.isInteger(v.cy) ? v.cy : chunk.cy
     if (Math.abs(layerY(lampCy) - layerY(pcy)) > LIGHT_RANGE) return false
     const structure = chunkStructure(chunk)

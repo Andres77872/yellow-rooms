@@ -1,10 +1,23 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { groundHeightAt } from '../ground.js'
 import { moveAndCollide } from '../collision.js'
 import { buildChunk } from '../../world/pipeline.js'
+import { ChunkData } from '../../world/ChunkData.js'
+import { ChunkManager } from '../../world/ChunkManager.js'
 import { buildStairCells } from '../../world/stairCells.js'
 import { slabContract, STAIR_DX, STAIR_DZ } from '../../world/slab.js'
 import { DEFAULT_WORLD_CONFIG } from '../../world/config.js'
+import {
+  MAP_FAMILY_LATTICE,
+  MAP_FAMILY_OFFICE,
+  MAP_FAMILY_SEWER,
+  MAP_FAMILY_TOWER,
+} from '../../world/mapTypes.js'
+import { structureAdapterFor } from '../../world/structureAdapters.js'
+import {
+  STRUCTURE_KIND_LATTICE,
+  STRUCTURE_KIND_TOWER,
+} from '../../world/structureContracts.js'
 import {
   CELL,
   CHUNK,
@@ -15,6 +28,7 @@ import {
   WALL_COL_HALF,
   SPRINT_SPEED,
   cIdx,
+  chunkKey3,
   layerY,
 } from '../../world/constants.js'
 
@@ -51,6 +65,62 @@ const CFG = {
   ...DEFAULT_WORLD_CONFIG,
   stairs: { ...DEFAULT_WORLD_CONFIG.stairs, chance: 1 },
   multilevel: { ...DEFAULT_WORLD_CONFIG.multilevel, enabled: false },
+}
+
+function loadedHardVoidFixture(family, { loaded = true, owned = true } = {}) {
+  const id = family === MAP_FAMILY_TOWER ? 0x7100 : 0x1a771ce
+  const participants = family === MAP_FAMILY_TOWER
+    ? [{ cx: 0, cz: 0 }, { cx: 1, cz: 0 }]
+    : Array.from({ length: 9 }, (_, index) => ({
+        cx: index % 3,
+        cz: Math.floor(index / 3),
+      }))
+  const structure = {
+    id,
+    family,
+    kind: family === MAP_FAMILY_TOWER
+      ? STRUCTURE_KIND_TOWER
+      : STRUCTURE_KIND_LATTICE,
+    baseCy: 0,
+    topCy: 2,
+    ...(family === MAP_FAMILY_LATTICE
+      ? { levelCount: 3, district: { x: 0, z: 0, size: 3 } }
+      : {}),
+    participants,
+    anchor: participants[0],
+  }
+  const data = new ChunkData(
+    0,
+    1,
+    0,
+    0,
+    DEFAULT_WORLD_CONFIG.version,
+    family
+  )
+  data.multilevelStructure = structure
+  data.lethalVoidDown = {
+    id,
+    family,
+    lowerCy: 0,
+    cells: [{ lx: 0, lz: 0, deathYmm: -750 }],
+  }
+
+  const cm = Object.create(ChunkManager.prototype)
+  cm.chunks = new Map()
+  if (loaded) {
+    cm.chunks.set(chunkKey3(0, 1, 0), {
+      cx: 0,
+      cy: 1,
+      cz: 0,
+      data,
+      multilevelStructure: structure,
+    })
+  }
+  const adapter = structureAdapterFor(structure)
+  cm._validatedStructure = vi.fn(() =>
+    owned ? { adapter, participants } : null
+  )
+  return { cm, data, structure }
 }
 
 // A simplified copy of the Controller's per-substep vertical resolve + handoff.
@@ -125,6 +195,74 @@ describe('groundHeightAt', () => {
     expect(groundHeightAt(shaft, CELL / 2, CELL / 2, 7)).toBe(layerY(0))
     expect(groundHeightAt(shaft, CELL / 2, CELL / 2, 0)).toBe(layerY(0))
   })
+
+  it('keeps explicit lethal-plane lookup out of the shared numeric ground fallback', () => {
+    const hardVoidAt = vi.fn(() => ({ id: 17, family: 'tower', deathYmm: 10_300 }))
+    const shaft = {
+      stairAt: () => null,
+      floorHoleAt: (_gx, _gz, floor) => floor >= 1 && floor <= 14,
+      hardVoidAt,
+    }
+
+    expect(groundHeightAt(shaft, CELL / 2, CELL / 2, 14)).toBe(layerY(0))
+    expect(hardVoidAt).not.toHaveBeenCalled()
+  })
+})
+
+describe('ChunkManager hardVoidAt', () => {
+  it.each([MAP_FAMILY_TOWER, MAP_FAMILY_LATTICE])(
+    'dispatches a loaded canonically owned %s plane through its structure adapter',
+    (family) => {
+      const { cm, structure } = loadedHardVoidFixture(family)
+
+      expect(cm.hardVoidAt(0, 0, 1)).toEqual({
+        id: structure.id,
+        family,
+        deathYmm: -750,
+      })
+      expect(cm._validatedStructure).toHaveBeenCalledTimes(1)
+      expect(cm._validatedStructure).toHaveBeenCalledWith(structure, 1)
+    }
+  )
+
+  it('fails closed for unloaded, canonically unowned, and malformed lethal data', () => {
+    const unloaded = loadedHardVoidFixture(MAP_FAMILY_TOWER, { loaded: false })
+    expect(unloaded.cm.hardVoidAt(0, 0, 1)).toBeNull()
+    expect(unloaded.cm._validatedStructure).not.toHaveBeenCalled()
+
+    const unowned = loadedHardVoidFixture(MAP_FAMILY_TOWER, { owned: false })
+    expect(unowned.cm.hardVoidAt(0, 0, 1)).toBeNull()
+
+    const malformed = loadedHardVoidFixture(MAP_FAMILY_LATTICE)
+    malformed.data.lethalVoidDown.cells.push(
+      { ...malformed.data.lethalVoidDown.cells[0] }
+    )
+    expect(malformed.cm.hardVoidAt(0, 0, 1)).toBeNull()
+  })
+
+  it.each([MAP_FAMILY_OFFICE, MAP_FAMILY_SEWER])(
+    'does not infer a lethal plane from loaded %s cells',
+    (family) => {
+      const data = new ChunkData(
+        0,
+        1,
+        0,
+        0,
+        DEFAULT_WORLD_CONFIG.version,
+        family
+      )
+      const cm = Object.create(ChunkManager.prototype)
+      cm.chunks = new Map([[chunkKey3(0, 1, 0), {
+        cx: 0,
+        cy: 1,
+        cz: 0,
+        data,
+      }]])
+      cm._validatedStructure = vi.fn(() => null)
+
+      expect(cm.hardVoidAt(0, 0, 1)).toBeNull()
+    }
+  )
 })
 
 describe('stair transit (real generator bytes + real collider)', () => {

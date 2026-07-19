@@ -234,13 +234,65 @@ function participantKey(cx, cz) {
   return `${cx},${cz}`
 }
 
+function compareParticipants(a, b) {
+  return a.cz - b.cz || a.cx - b.cx
+}
+
+function canonicalParticipants(participants) {
+  const unique = new Map()
+  for (const participant of participants) {
+    const key = participantKey(participant.cx, participant.cz)
+    if (!unique.has(key)) unique.set(key, participant)
+  }
+  return [...unique.values()].sort(compareParticipants)
+}
+
 function hasParticipant(structure, cx, cz) {
   return structure.participants.some(
     (participant) => participant.cx === cx && participant.cz === cz
   )
 }
 
-function pairCandidates(districtX, districtZ, normalized, bridgeAxis, avoidSpawn) {
+export function polygonCandidates(
+  districtX,
+  districtZ,
+  normalized,
+  { shape, bridgeAxis = null, avoidSpawn = false } = {}
+) {
+  if (
+    shape === 'lattice3x3' &&
+    Number.isInteger(districtX) &&
+    Number.isInteger(districtZ) &&
+    Number.isInteger(normalized?.districtChunks) &&
+    normalized.districtChunks === 3
+  ) {
+    const originCx = districtX * normalized.districtChunks
+    const originCz = districtZ * normalized.districtChunks
+    const participants = []
+    for (let localZ = 0; localZ < 3; localZ++) {
+      for (let localX = 0; localX < 3; localX++) {
+        participants.push({
+          cx: originCx + localX,
+          cz: originCz + localZ,
+        })
+      }
+    }
+    if (
+      avoidSpawn &&
+      participants.some(({ cx, cz }) => participantKey(cx, cz) === '0,0')
+    ) return []
+    return [{ anchor: participants[0], participants }]
+  }
+
+  // Pair mode retains its exact legacy enumeration and byte order. Lattice is
+  // deliberately one complete polygon rather than a generalized polyomino.
+  if (
+    shape !== 'pair' ||
+    (bridgeAxis !== 'x' && bridgeAxis !== 'z') ||
+    !Number.isInteger(normalized?.districtChunks) ||
+    normalized.districtChunks < 2
+  ) return []
+
   const K = normalized.districtChunks
   const originCx = districtX * K
   const originCz = districtZ * K
@@ -259,10 +311,26 @@ function pairCandidates(districtX, districtZ, normalized, bridgeAxis, avoidSpawn
         (participantKey(anchor.cx, anchor.cz) === '0,0' ||
           participantKey(neighbor.cx, neighbor.cz) === '0,0')
       ) continue
-      candidates.push({ anchor, neighbor })
+      const participants = canonicalParticipants([anchor, neighbor])
+      if (participants.length !== 2) continue
+      candidates.push({ anchor: participants[0], participants })
     }
   }
   return candidates
+}
+
+// Keep the legacy { anchor, neighbor } view as a thin projection while office
+// generation consumes the canonical participant list produced above.
+function pairCandidates(districtX, districtZ, normalized, bridgeAxis, avoidSpawn) {
+  return polygonCandidates(districtX, districtZ, normalized, {
+    shape: 'pair',
+    bridgeAxis,
+    avoidSpawn,
+  }).map(({ anchor, participants }) => ({
+    anchor,
+    neighbor: participants[1],
+    participants,
+  }))
 }
 
 function footprintBounds(seed, districtX, districtZ, bandIndex, pair, bridgeAxis, normalized) {
@@ -410,7 +478,7 @@ function buildStructureForDistrict(seed, districtX, districtZ, baseCy, normalize
     bandIndex,
     districtZ
   ) < normalized.bridgeChance ? 'bridged' : 'openVoid'
-  const participants = [pair.anchor, pair.neighbor]
+  const participants = pair.participants
   const id = hash3i(
     (seed ^ normalized.salt) | 0,
     pair.anchor.cx,

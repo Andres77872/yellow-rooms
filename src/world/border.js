@@ -1,4 +1,10 @@
-import { CHUNK, ZONE_OFFICE, ZONE_WAREHOUSE } from './constants.js'
+import {
+  CHUNK,
+  ZONE_OFFICE,
+  ZONE_PILLARS,
+  ZONE_SEWER,
+  ZONE_WAREHOUSE,
+} from './constants.js'
 import { hash2i } from './core/hash.js'
 import {
   PASSAGE_DOOR,
@@ -19,8 +25,9 @@ import {
 // chunk coordinate, so both neighbours compute an identical wall + passage
 // contract from the same key without communication.
 //
-// The seam style is ZONE-AWARE (see config.border.openness) so the world reads
-// as a continuation rather than a grid of walled boxes:
+// The seam style is ZONE-PAIR-AWARE (see config.border.pairModes) so the world
+// reads as a continuation rather than a grid of walled boxes. Unlisted,
+// unrelated pairs preserve the established config.border.openness fallback:
 //   - both OPEN  (pillars/warehouse): seam left open so halls merge into one
 //     liminal space; two warehouses may get a short wall STUB as a landmark.
 //   - one OPEN   (office<->open): a walled partition with a wide transition
@@ -29,7 +36,51 @@ import {
 //     or a deterministic fallback partition for custom zone openness settings.
 
 const isOpen = (zone, b) => (b.openness[zone] ?? 0) >= 1
+const PAIR_MODES = new Set(['mouth', 'open'])
+const REQUIRED_SEWER_NEIGHBOURS = new Set([
+  ZONE_OFFICE,
+  ZONE_PILLARS,
+  ZONE_WAREHOUSE,
+])
 const doorPos = (salt, kx, kz) => 1 + (hash2i(salt | 0, kx, kz) % (CHUNK - 2)) // [1, CHUNK-2]
+
+const pairKey = (za, zb) => [za, zb].sort((a, b) => a - b).join('<->')
+const configuredPairMode = (pairModes, za, zb) => pairModes?.[za]?.[zb]
+const isRequiredSewerPair = (za, zb) =>
+  (za === ZONE_SEWER && REQUIRED_SEWER_NEIGHBOURS.has(zb)) ||
+  (zb === ZONE_SEWER && REQUIRED_SEWER_NEIGHBOURS.has(za))
+
+// Pair rules are physically symmetric even though configuration entries are
+// ordered. One direction governs both queries; equal reverse duplicates are
+// harmless, while conflicting duplicates are rejected with an order-stable
+// reason. Only unrelated pairs may use the legacy scalar fallback.
+export function borderPairMode(za, zb, config) {
+  const pairModes = config?.border?.pairModes
+  const forward = configuredPairMode(pairModes, za, zb)
+  const reverse = configuredPairMode(pairModes, zb, za)
+  const key = pairKey(za, zb)
+
+  if (forward !== undefined && reverse !== undefined && forward !== reverse) {
+    throw new Error(`conflicting border pair modes: ${key}`)
+  }
+
+  const explicit = forward ?? reverse
+  if (explicit !== undefined) {
+    if (!PAIR_MODES.has(explicit)) throw new Error(`invalid border pair mode: ${key}`)
+    return explicit
+  }
+
+  if (isRequiredSewerPair(za, zb)) {
+    throw new Error(`missing border pair mode: ${key}`)
+  }
+
+  const border = config.border
+  const openA = isOpen(za, border)
+  const openB = isOpen(zb, border)
+  if (openA && openB) return 'open'
+  if (openA || openB) return 'mouth'
+  return 'office'
+}
 
 // warehouse<->warehouse only: drop a short wall fragment along the open seam as a
 // navigational landmark (kept well inside the interior; corners stay open).
@@ -72,13 +123,12 @@ function partition(out, kx, kz, seed, salt) {
 function reconcile(za, zb, kx, kz, seed, salt, config) {
   const b = config.border
   const out = new Uint8Array(CHUNK)
-  const openA = isOpen(za, b)
-  const openB = isOpen(zb, b)
-  if (openA && openB) {
+  const mode = borderPairMode(za, zb, config)
+  if (mode === 'open') {
     if (za === ZONE_WAREHOUSE && zb === ZONE_WAREHOUSE) addStub(out, kx, kz, seed, salt, b)
     return makeContract('open', out)
   }
-  if (openA || openB) return makeContract('mouth', mouth(out, kx, kz, seed, salt, config))
+  if (mode === 'mouth') return makeContract('mouth', mouth(out, kx, kz, seed, salt, config))
   return makeContract('office', partition(out, kx, kz, seed, salt))
 }
 

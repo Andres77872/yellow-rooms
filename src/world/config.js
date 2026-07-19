@@ -1,15 +1,108 @@
 import {
   ZONE_OFFICE,
   ZONE_PILLARS,
+  ZONE_SEWER,
   ZONE_WAREHOUSE,
   WORLD_GEN_VERSION,
 } from './constants.js'
+import {
+  MAP_FAMILY_LATTICE,
+  MAP_FAMILY_OFFICE,
+  MAP_FAMILY_SEWER,
+  MAP_FAMILY_TOWER,
+} from './mapTypes.js'
+
+// Atomic active-family release evidence. These values are deliberately pinned
+// rather than derived from the current constants so a later version/config/
+// corpus change fails closed until every namespace is regenerated together.
+export const SEWER_RELEASE_EVIDENCE = Object.freeze({
+  family: MAP_FAMILY_SEWER,
+  byteImpact: 'changed-output',
+  previousVersion: 17,
+  previousFamilyRepresentativeDigest: 'd066cc789f74283afae5568a22e1fe3b4b4b0c474d5ad6ee1a49910d58d15015',
+  previousFamilyCorpusDigest: 'e679911a0b23461ba4d92c46e5309061b807d870f917abefbe58fc05cdbe2036',
+  generatorVersion: 18,
+  globalGoldenDigest: 'a039e36abf9cabbfb541958a8758b57d6671a5511b9d62f96b7ed4a27720be61',
+  maximumHeightGoldenDigest: '65477b1b23abefc54c85b8fd773e196c4d5630123bd2e71ba34261d6b07c01c8',
+  familyRepresentativeDigest: 'abbd176db8de4d1a8e5e290e9e4e5baef2a019c0d9ee37a609b06d9dcf41bf08',
+  familyCorpusDigest: 'e4e67f19cf457cf0cbdd0656ded293b3d957c524b7f0c68fbc614702482f6f6b',
+  profileIdentity: 'sewer-forced-audit:loops-2:right-0.65:lamp-2-0.35',
+  seedDerivation: 'hashStr("audit-sewer-N#1")',
+  affectsMaximumHeight: false,
+})
+
+export const TOWER_RELEASE_EVIDENCE = Object.freeze({
+  family: MAP_FAMILY_TOWER,
+  byteImpact: 'changed-output',
+  previousVersion: 17,
+  previousFamilyRepresentativeDigest: '956935d7fdc08847b03d8f23663f6936ede93b299ef2c6d579ff3dfb5e9b2966',
+  previousFamilyCorpusDigest: '24332adb8f7f108228e0e4b59f4c9f303043f54969760f29857ab958935c3c24',
+  generatorVersion: 18,
+  globalGoldenDigest: 'a039e36abf9cabbfb541958a8758b57d6671a5511b9d62f96b7ed4a27720be61',
+  maximumHeightGoldenDigest: '65477b1b23abefc54c85b8fd773e196c4d5630123bd2e71ba34261d6b07c01c8',
+  familyRepresentativeDigest: '851e3f60803bb56131f01231d982c9fa660645a68aad081173a0e3b197f4c60f',
+  familyCorpusDigest: 'ea6d5902ccf266384c994598604d1cbd89d65fcd88cc255c19cdd3b09f8876e9',
+  profileIdentity: 'tower-forced-audit:levels-3:participants-2:skybridge-1',
+  seedDerivation: 'fixed-root-seeds(0x5a17,0x7157,0xc0ffee)',
+  affectsMaximumHeight: true,
+})
+
+export const LATTICE_RELEASE_EVIDENCE = Object.freeze({
+  family: MAP_FAMILY_LATTICE,
+  byteImpact: 'first-emission',
+  previousVersion: 17,
+  previousFamilyRepresentativeDigest: '0a8a614050fa03acec997601dbb212594f8c379871f9dd9ebd6ba1c09ba63ee5',
+  previousFamilyCorpusDigest: 'f852bc616c0607b52fadc03693edba47af346988b0f09c4ee589781d4c615988',
+  generatorVersion: 18,
+  globalGoldenDigest: 'a039e36abf9cabbfb541958a8758b57d6671a5511b9d62f96b7ed4a27720be61',
+  maximumHeightGoldenDigest: '65477b1b23abefc54c85b8fd773e196c4d5630123bd2e71ba34261d6b07c01c8',
+  familyRepresentativeDigest: '6b9bb60d6659834dc146915436aa4fb23f7171f075a23cd7f439aa73588686ab',
+  familyCorpusDigest: '06c40bb44ae53e2b99ee06af69c20545acbee5d5032956dc8f45ba175c5df705',
+  profileIdentity: 'lattice-forced-audit:levels-3:district-3:anchors-5:cycles-0.08-0.15:exposure-5-20:cues-8',
+  seedDerivation: 'hashStr("audit-lattice-N#1"), N=0..2',
+  affectsMaximumHeight: true,
+})
 
 // Primary designer-facing tuning surface. Generators read these values through
 // the `config` passed in ctx; structural constants, deterministic salts, and
 // scoring weights remain beside their implementations.
 export const DEFAULT_WORLD_CONFIG = {
   version: WORLD_GEN_VERSION,
+
+  // Family selection remains explicit. Sewer, Tower, and Lattice passed their
+  // independent release gates while Office remains the default selection.
+  mapFamily: {
+    selected: MAP_FAMILY_OFFICE,
+    profiles: {
+      [MAP_FAMILY_OFFICE]: {
+        enabled: true,
+      },
+      [MAP_FAMILY_SEWER]: {
+        enabled: true,
+        zoneBands: [{ id: ZONE_SEWER, max: 1.01 }],
+        maxLoops: 2,
+        rightTurnChance: 0.65,
+        lampPhase: 2,
+        lampChance: 0.35,
+      },
+      [MAP_FAMILY_TOWER]: {
+        enabled: true,
+        levels: 3,
+        participants: 2,
+        skybridgeLevelOffset: 1,
+      },
+      [MAP_FAMILY_LATTICE]: {
+        enabled: true,
+        districtChunks: 3,
+        levels: 3,
+        anchorsPerAxis: 5,
+        cycleRate: [0.08, 0.15],
+        defaultExposureM: 5,
+        maxExposureM: 20,
+        minimumCueCells: 8,
+      },
+    },
+  },
 
   // A domain-warped field characterizes finite macro landmarks; the nested
   // room-dominance contract decides their bounded placement inside the
@@ -55,7 +148,8 @@ export const DEFAULT_WORLD_CONFIG = {
   ],
 
   // Border reconciliation — zone-aware so the world reads as a continuation, not
-  // a lattice of walled boxes. Per-zone OPENNESS (>=1 = open) drives the seam:
+  // a lattice of walled boxes. Explicit pair modes override scalar openness for
+  // adjacency-dependent seams. Other pairs retain the established fallback:
   //   both open   -> seam left open (halls merge); warehouse<->warehouse may get
   //                  a short wall STUB landmark.
   //   one open    -> a wide transition MOUTH (rooms open into the hall).
@@ -68,6 +162,11 @@ export const DEFAULT_WORLD_CONFIG = {
       [ZONE_OFFICE]: 0, // walled (rooms + partitions)
       [ZONE_PILLARS]: 1, // open (column hall)
       [ZONE_WAREHOUSE]: 1, // open (big liminal space)
+    },
+    pairModes: {
+      [ZONE_OFFICE]: { [ZONE_SEWER]: 'mouth' },
+      [ZONE_PILLARS]: { [ZONE_SEWER]: 'open' },
+      [ZONE_WAREHOUSE]: { [ZONE_SEWER]: 'open' },
     },
     mouthWidth: [3, 5], // office<->open: contiguous transition-mouth width (cells)
     thresholdDepth: 2, // cells opened behind seam doors/mouths so transitions read as rooms, not slots

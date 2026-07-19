@@ -143,6 +143,23 @@ export function readout(label) {
   }
 }
 
+// Preformatted multi-line text block (e.g. audit failure lists). set() takes
+// an array of lines (or a string) and diffs like readout. Returns { el, set }.
+export function textBlock() {
+  const root = el('div', 'dbg-block')
+  let last
+  return {
+    el: root,
+    set: (lines) => {
+      const text = Array.isArray(lines) ? lines.join('\n') : (lines ?? '')
+      if (text !== last) {
+        root.textContent = text
+        last = text
+      }
+    },
+  }
+}
+
 // A label + buttons row (e.g. level stepper). Returns { el }.
 export function buttonRow(label, buttons) {
   const root = el('div', 'dbg-row')

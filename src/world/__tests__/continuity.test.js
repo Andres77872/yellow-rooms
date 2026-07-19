@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { buildChunk } from '../pipeline.js'
 import { DEFAULT_WORLD_CONFIG as CFG } from '../config.js'
-import { CHUNK, ZONE_WAREHOUSE, chunkKey } from '../constants.js'
+import {
+  CHUNK,
+  ZONE_OFFICE,
+  ZONE_WAREHOUSE,
+  chunkKey,
+} from '../constants.js'
 import {
   auditPatch,
   classifySeam,
@@ -23,6 +28,17 @@ const X0 = -7
 const Z0 = -7
 const N = 14
 const SEEDS = [1, 42, 0xbeef, 314159, 0xc0ffee, 99999, 7, 2026]
+
+const OFFICE_CONTINUITY_GOLDEN = [
+  { seed: 1, open: 15, mouth: 14, office: 133, cornerWalls: 131, planned: 202, patterns: 55, officeChunks: 185, largestOpen: 11, maxOpenRun: 4 },
+  { seed: 42, open: 0, mouth: 0, office: 140, cornerWalls: 139, planned: 224, patterns: 49, officeChunks: 196, largestOpen: 0, maxOpenRun: 0 },
+  { seed: 0xbeef, open: 16, mouth: 20, office: 130, cornerWalls: 130, planned: 198, patterns: 67, officeChunks: 183, largestOpen: 11, maxOpenRun: 4 },
+  { seed: 314159, open: 1, mouth: 6, office: 137, cornerWalls: 137, planned: 220, patterns: 57, officeChunks: 194, largestOpen: 2, maxOpenRun: 2 },
+  { seed: 0xc0ffee, open: 1, mouth: 6, office: 137, cornerWalls: 136, planned: 220, patterns: 58, officeChunks: 194, largestOpen: 2, maxOpenRun: 2 },
+  { seed: 99999, open: 4, mouth: 12, office: 136, cornerWalls: 136, planned: 212, patterns: 62, officeChunks: 191, largestOpen: 4, maxOpenRun: 2 },
+  { seed: 7, open: 1, mouth: 10, office: 136, cornerWalls: 134, planned: 217, patterns: 53, officeChunks: 193, largestOpen: 2, maxOpenRun: 2 },
+  { seed: 2026, open: 30, mouth: 28, office: 126, cornerWalls: 126, planned: 180, patterns: 56, officeChunks: 174, largestOpen: 11, maxOpenRun: 4 },
+]
 
 const inBounds = (bounds, gx, gz) =>
   gx >= bounds.x0 && gx <= bounds.x1 && gz >= bounds.z0 && gz <= bounds.z1
@@ -145,6 +161,56 @@ function patch(seed) {
   return audit
 }
 
+function continuityPin(seed, audit) {
+  return {
+    seed,
+    open: audit.open.n,
+    mouth: audit.mouth.n,
+    office: audit.office.n,
+    cornerWalls: audit.office.cornerWalls,
+    planned: audit.planned.n,
+    patterns: audit.planned.patterns,
+    officeChunks: audit.architecture.zoneCounts[ZONE_OFFICE],
+    largestOpen: audit.architecture.largestOpenComponent,
+    maxOpenRun: audit.architecture.maxOpenRun,
+  }
+}
+
+function auditBelowOfficeShareFloor() {
+  const size = CFG.region.roomDominance.districtChunks * 2
+  const chunks = new Map()
+  const openCells = []
+  for (let cz = 0; cz < size; cz++) {
+    for (let cx = 0; cx < size; cx++) {
+      if ((cx + cz) % 2 === 0) openCells.push(chunkKey(cx, cz))
+    }
+  }
+  const floor = CFG.region.roomDominance.minOfficeShare
+  const openCount = Math.floor(size * size * (1 - floor)) + 1
+  const openKeys = new Set(openCells.slice(0, openCount))
+
+  for (let cz = 0; cz < size; cz++) {
+    for (let cx = 0; cx < size; cx++) {
+      chunks.set(chunkKey(cx, cz), {
+        cx,
+        cz,
+        zone: openKeys.has(chunkKey(cx, cz)) ? ZONE_WAREHOUSE : ZONE_OFFICE,
+        vAt: () => 0,
+        hAt: () => 0,
+      })
+    }
+  }
+
+  return auditPatch(
+    (cx, cz) => chunks.get(chunkKey(cx, cz)) ?? null,
+    0,
+    0,
+    size,
+    size,
+    CFG
+  )
+}
+
 describe('chunk continuity (not isolated boxes)', () => {
   const audits = SEEDS.map(patch)
 
@@ -197,6 +263,38 @@ describe('chunk continuity (not isolated boxes)', () => {
     expect(sum('mouth', 'n')).toBeGreaterThan(0)
     expect(sum('office', 'n')).toBeGreaterThan(0)
     expect(sum('planned', 'n')).toBeGreaterThan(0)
+  })
+
+  it('pins the unchanged office transition and continuity corpus', () => {
+    expect(SEEDS.map((seed, index) => continuityPin(seed, audits[index])))
+      .toEqual(OFFICE_CONTINUITY_GOLDEN)
+    for (const audit of audits) {
+      expect(audit.sealed).toBe(0)
+      expect(audit.minOpen).toBe(1)
+      expect(audit.openness).toBe(1)
+      expect(audit.mouthCoverage).toBe(1)
+      expect(audit.portalCoverage).toBe(1)
+      expect(audit.officeCornerEvidence.invalid).toEqual([])
+    }
+  })
+
+  it('keeps the default office-share corpus independently gated at 0.75', () => {
+    const floor = CFG.region.roomDominance.minOfficeShare
+    expect(floor).toBe(0.75)
+    for (const audit of audits) {
+      expect(audit.architecture.officeShare).toBeGreaterThanOrEqual(floor)
+      expect(audit.architecture.roomDominant).toBe(true)
+    }
+  })
+
+  it('keeps an office-share regression visible below the independent floor', () => {
+    const audit = auditBelowOfficeShareFloor()
+    expect(audit.architecture.roomDominanceChecked).toBe(true)
+    expect(audit.architecture.boundedOpen).toBe(true)
+    expect(audit.architecture.officeShare)
+      .toBeLessThan(CFG.region.roomDominance.minOfficeShare)
+    expect(audit.architecture.roomDominant).toBe(false)
+    expect(audit.architecture.ok).toBe(false)
   })
 
   it('reports room dominance and rejects the old unbounded-open failure mode', () => {
