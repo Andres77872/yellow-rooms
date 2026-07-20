@@ -275,6 +275,29 @@ function stampTowerRoomFloor(data, slice) {
   }
 }
 
+// Bottom-hall colonnade: two inset rows of columns on a fixed structural bay
+// along the long axis. The hall stops being a bare extruded box — it reads as
+// the load path of the tower above, gives the eye a scale reference, and adds
+// the occlusion rhythm the pillar-perception research values. Columns are
+// never adjacent (3-cell bay) and sit 2 cells clear of the footprint ends, so
+// the open hall stays one navigable component and every perimeter approach
+// keeps a clear mouth; the stair halo carve deletes any column it overlaps.
+function stampTowerColonnade(data, slice) {
+  const { x0, z0, x1, z1 } = slice.localBounds
+  const alongX = x1 - x0 >= z1 - z0
+  const a0 = alongX ? x0 : z0
+  const a1 = alongX ? x1 : z1
+  const lines = alongX ? [z0 + 1, z1 - 1] : [x0 + 1, x1 - 1]
+  for (let along = a0 + 2; along <= a1 - 2; along += 3) {
+    for (const line of lines) {
+      const lx = alongX ? along : line
+      const lz = alongX ? line : along
+      if (lx < 0 || lx >= CHUNK || lz < 0 || lz >= CHUNK) continue
+      data.setCol(lx, lz, 1)
+    }
+  }
+}
+
 function stampTowerPerimeter(data, structure, surface, roomOpenings) {
   const perimeter = data.cy === structure.baseCy
     ? {
@@ -353,6 +376,7 @@ export function stampTowerStructure(data, structure) {
     data.cz
   )
   if (data.cy === structure.baseCy) {
+    stampTowerColonnade(data, surface)
     stampTowerPerimeter(data, structure, surface, roomOpenings)
   } else {
     stampGallery(data, down, roomOpenings)

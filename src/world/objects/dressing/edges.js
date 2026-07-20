@@ -51,7 +51,7 @@ import {
   SPACE_ROLE_MEETING,
   SPACE_ROLE_SERVER,
 } from '../../mapTypes.js'
-import { PROP_TINT, SIGN_TINT } from './palette.js'
+import { PROP_TINT, ROLE_BAND, SIGN_TINT } from './palette.js'
 
 // Wall-edge dressing: thresholds and exit signs at openings, baseboards and
 // crown molding on solid walls, radiators under windows, and the wall-mounted
@@ -132,6 +132,11 @@ export function dressEdge(data, axis, line, cell, trim, props, signs) {
     const ci = cIdx(cx, cz)
     const kind = data.cellKind[ci]
     const role = data.spaceRole[ci]
+    // Role wainscot: a continuous painted band around every role room's
+    // walls, so the room's identity reads architecturally at a glance.
+    if ((kind === CELL_ROOM || kind === CELL_LOBBY) && ROLE_BAND[role]) {
+      box(props, centre, 1.32, plane + s * (THICK / 2 + 0.011), CELL, 0.4, 0.022, ROLE_BAND[role])
+    }
     const r = roll((PROP_SALT ^ (s > 0 ? 0x5eed : 0xface)) | 0, gx, gz)
     if (kind === CELL_CORRIDOR) {
       if (r >= EXT_CHANCE) continue

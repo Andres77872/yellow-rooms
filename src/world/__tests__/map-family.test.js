@@ -431,7 +431,7 @@ describe('void-safety family eligibility', () => {
       tower: true,
       lattice: true,
     })
-    expect(WORLD_GEN_VERSION).toBe(19)
+    expect(WORLD_GEN_VERSION).toBe(20)
     expect(DEFAULT_WORLD_CONFIG.mapFamily.profiles).toMatchObject({
       office: { enabled: true },
       sewer: { enabled: true },
@@ -570,9 +570,9 @@ describe('byte-impact version and atomic pin activation', () => {
     expect(WORLD_GEN_VERSION).toBe(LATTICE_RELEASE_EVIDENCE.generatorVersion)
     expect(LATTICE_RELEASE_EVIDENCE).toMatchObject({
       family: 'lattice',
-      byteImpact: 'first-emission',
-      previousVersion: 18,
-      generatorVersion: 19,
+      byteImpact: 'changed-output',
+      previousVersion: 19,
+      generatorVersion: 20,
       profileIdentity: 'lattice-forced-audit:levels-3:district-3:anchors-5:cycles-0.08-0.15:exposure-5-20:cues-8',
       seedDerivation: 'hashStr("audit-lattice-N#1"), N=0..2',
       affectsMaximumHeight: true,

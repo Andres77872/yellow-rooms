@@ -333,13 +333,15 @@ export const OUTLINE_FADE_FAR = 0.95
 
 // --- Thin-wall model (refactor) ---------------------------------------
 // World-gen version: bump whenever the algorithm changes the bytes a seed
-// produces. Guards the golden determinism test. v19 expands the office
-// furniture library (sofa, bookshelf, whiteboard) and its role placement;
-// v18 was the first release-eligible bounded Lattice stream; v17 introduced
-// the release-eligible bounded Tower/skybridge stream, and v16 introduced
-// the release-eligible bounded Sewer stream while preserving Office
-// geometry. v15 added the collision-real furniture layer.
-export const WORLD_GEN_VERSION = 19
+// produces. Guards the golden determinism test. v20 is the family-identity
+// rework: the Sewer becomes a trunk-and-branch gallery network carved from
+// solid mass (chambers, riser-aligned manholes, seam-routed mouths, sewer
+// lighting cadence), the Lattice widens its arterial spine to two cells, and
+// the Tower gains a bottom-hall colonnade. v19 expanded the office furniture
+// library; v18 was the first release-eligible bounded Lattice stream; v17
+// introduced the bounded Tower/skybridge stream, v16 the bounded Sewer
+// stream; v15 added the collision-real furniture layer.
+export const WORLD_GEN_VERSION = 20
 
 // Interior archetypes. The room-dominant macro planner bounds the two open
 // styles; the registry in zones/index.js maps ids to their chunk compilers.

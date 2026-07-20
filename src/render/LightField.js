@@ -49,7 +49,7 @@ export class LightField {
       for (let i = 0; i < n; i++) {
         const v = cand[i]
         pos[i].copy(v)
-        lampTint(v.x, v.z, v.cy ?? 0, this._tint)
+        lampTint(v.x, v.z, v.cy ?? 0, this._tint, v.role ?? 0)
         char[i].set(this._tint[0], this._tint[1], this._tint[2], 1)
       }
       this.u.uLampCount.value = n

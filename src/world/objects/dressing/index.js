@@ -3,6 +3,10 @@ import { dressEdge } from './edges.js'
 import { dressColumns } from './columns.js'
 import { dressCeiling } from './ceiling.js'
 import { dressTowerLandmarkSockets } from './towerSockets.js'
+import { collectSewerDressing } from './sewer.js'
+import { collectLatticeDressing } from './lattice.js'
+import { collectTowerExtras } from './tower.js'
+import { MAP_FAMILY_LATTICE, MAP_FAMILY_SEWER, MAP_FAMILY_TOWER } from '../../mapTypes.js'
 
 // Interior dressing and props — the "designed building" layer that sits
 // between bare thin-wall geometry and the light field. Like the joinery
@@ -25,6 +29,13 @@ import { dressTowerLandmarkSockets } from './towerSockets.js'
 // floor below ankle height, or hangs above door-head height, so nothing can
 // visibly swallow the player or fake a blocker.
 export function collectInteriorDressing(data) {
+  // Family dispatch: Sewer and Lattice replace the office layer wholesale —
+  // buried infrastructure and exposed steelwork must not inherit radiators,
+  // clocks, and crown molding. Tower keeps the office layer (its fabric IS an
+  // office tower) plus its own deck/floor-identity extras.
+  if (data.mapFamily === MAP_FAMILY_SEWER) return collectSewerDressing(data)
+  if (data.mapFamily === MAP_FAMILY_LATTICE) return collectLatticeDressing(data)
+
   const trim = []
   const props = []
   const signs = []
@@ -37,6 +48,7 @@ export function collectInteriorDressing(data) {
   dressColumns(data, trim)
   dressCeiling(data, props, signs)
   dressTowerLandmarkSockets(data, props, signs)
+  if (data.mapFamily === MAP_FAMILY_TOWER) collectTowerExtras(data, props, signs)
   return { trim, props, signs }
 }
 

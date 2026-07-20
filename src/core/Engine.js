@@ -16,7 +16,7 @@ import {
   STALKER_AMBIENT,
   PANEL_GLOW,
 } from '../world/constants.js'
-import { createGBufferMaterials, disposeGBufferMaterials } from '../render/gbufferMaterials.js'
+import { applyFamilyMaterials, createGBufferMaterials, disposeGBufferMaterials } from '../render/gbufferMaterials.js'
 import { createGeometries, disposeGeometries } from '../render/geometries.js'
 import { ChunkManager } from '../world/ChunkManager.js'
 import { Controller } from '../player/Controller.js'
@@ -112,6 +112,9 @@ export class Engine {
 
     this.deferred = new DeferredRenderer(renderer, scene, camera)
     this.lightField = new LightField(this.deferred.lamps)
+    // Materials/lighting were built with the Office defaults; retarget them to
+    // the URL-selected family before the title prewarm renders its backdrop.
+    this._applyFamilyVisuals(this.state.mapFamily)
 
     this.debug = new DebugOverlay(renderer)
     this.ui = new UI(this.settings)
@@ -199,6 +202,17 @@ export class Engine {
     for (const k of Object.keys(this.settings.data)) this._runSetting(k, this.settings.get(k))
   }
 
+  // Retarget every family-driven visual to `family` in place: surface
+  // textures + trim/leaf/panel colors (shared material set), and the deferred
+  // pipeline's fog/ambient/rim/lamp-cast/grade palette. Chunk meshes keep
+  // their material references, so already-built chunks pick the swap up on
+  // the next frame; level setup rebuilds them anyway.
+  _applyFamilyVisuals(family) {
+    const pal = applyFamilyMaterials(this.materials, this.renderer, family)
+    this.deferred.applyPalette(pal)
+    this.renderer.setClearColor(pal.fog, 1)
+  }
+
   _runSetting(k, v) {
     if (k === 'sensitivity') this.controller.sensitivity = v
     else if (k === 'invertY') this.controller.invertY = v
@@ -230,6 +244,9 @@ export class Engine {
     const fam = worldConfigForFamilyOrOffice(familyText || MAP_FAMILY_OFFICE)
     if (this.cm.config?.mapFamily?.selected !== fam.family) {
       this.cm.config = fam.config
+      // Family changed: swap the whole visual identity (surfaces, lamp cast,
+      // fog/ambient/grade) before _setupLevel rebuilds the chunk meshes.
+      this._applyFamilyVisuals(fam.family)
     }
     this.state.mapFamily = fam.family
     this.ui.setFamilyInput(fam.family)

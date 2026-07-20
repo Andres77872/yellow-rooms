@@ -135,6 +135,21 @@ export class DeferredRenderer {
     this.outlineEnabled = true
   }
 
+  // Retarget the lighting environment to a map-family palette
+  // (world/familyPalette.js): fog, hemispheric ambient, rim ink, lamp cast
+  // color, and the post grade. One family is active per world, so this runs
+  // at family-apply time (boot / startRun), never per frame.
+  applyPalette(pal) {
+    this.lightUniforms.uFogColor.value = linVec(pal.fog)
+    this.lightUniforms.uAmbSky.value = linVec(pal.ambientSky)
+    this.lightUniforms.uAmbGround.value = linVec(pal.ambientGround)
+    this.lightUniforms.uRimColor.value = linVec(pal.rim)
+    this.lightUniforms.uLampColor.value = linVec(pal.panel)
+    this.volUniforms.uLampColor.value = linVec(pal.panel)
+    this.gradeUniforms.sat.value = pal.gradeSat
+    this.gradeUniforms.tint.value.set(pal.gradeTint[0], pal.gradeTint[1], pal.gradeTint[2])
+  }
+
   // Half-res (or any scale) dimensions with a >=1 clamp, shared by the
   // constructor and setSize() so the two can't drift.
   _halfRes(dw, dh, scale) {

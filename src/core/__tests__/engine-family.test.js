@@ -69,6 +69,7 @@ vi.mock('../../render/gbufferMaterials.js', () => ({
   createGBufferMaterials: () => ({
     panel: { uniforms: { uIntensity: { value: 0 } } },
   }),
+  applyFamilyMaterials: () => ({ fog: 0x000000 }),
   disposeGBufferMaterials: vi.fn(),
 }))
 
@@ -186,6 +187,7 @@ vi.mock('../../render/DeferredRenderer.js', () => ({
       this.setSize = vi.fn()
       this.render = vi.fn()
       this.dispose = vi.fn()
+      this.applyPalette = vi.fn()
     }
   },
 }))

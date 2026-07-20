@@ -90,10 +90,27 @@ function computeLatticeFloorGeometry(structure, levelCy) {
     }
   }
   for (const edge of structure.edges) {
+    // The arterial spine walks two cells wide: the route hierarchy the road-
+    // network research asks for (arterial skeleton first, minor spans off it)
+    // becomes something the player can read underfoot instead of a hidden
+    // role tag. Minor bridges stay one cell — the exposed-catwalk register.
+    const widen = edge.role === 'spine'
+    const sameFloor = widen
+      ? edge.cells.filter((cell) => cell.cy === levelCy)
+      : null
     for (const cell of edge.cells) {
-      if (cell.cy === levelCy) {
-        edgeCells.add(latticeHorizontalCellKey(cell.gx, cell.gz))
-      }
+      if (cell.cy !== levelCy) continue
+      edgeCells.add(latticeHorizontalCellKey(cell.gx, cell.gz))
+      if (!widen) continue
+      const alongX = sameFloor.some((other) =>
+        other.gz === cell.gz && Math.abs(other.gx - cell.gx) === 1
+      )
+      addGlobalCell(
+        edgeCells,
+        structure.globalBounds,
+        alongX ? cell.gx : cell.gx + 1,
+        alongX ? cell.gz + 1 : cell.gz
+      )
     }
   }
   for (const link of structure.verticalLinks) {

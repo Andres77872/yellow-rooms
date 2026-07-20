@@ -24,6 +24,7 @@ import { resolveMapFamily } from './mapFamily.js'
 import {
   isConnectedSewerCandidate,
   sewerCandidateSeeds,
+  sewerStairConfig,
 } from './zones/sewer.js'
 import { structureAt } from './structures/contract.js'
 
@@ -32,17 +33,6 @@ const TOPOLOGY_SALT = 0x74a1
 function installOwnedBorders(data, west, north) {
   for (let z = 0; z < CHUNK; z++) data.setPassageV(0, z, west.passages[z])
   for (let x = 0; x < CHUNK; x++) data.setPassageH(x, 0, north.passages[x])
-}
-
-function sewerStairConfig(config) {
-  return {
-    ...config,
-    stairs: {
-      ...config.stairs,
-      enabled: true,
-      chance: 1,
-    },
-  }
 }
 
 // Per-layer seed (v8): every 2D stage below is keyed by this instead of the

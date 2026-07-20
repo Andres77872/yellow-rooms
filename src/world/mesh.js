@@ -364,6 +364,40 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
   // Lattice slices carry bridgeCells but no bridgeAxis/bridgeLine; without the
   // guard the beam math below degenerates to NaN instance transforms that
   // poison the shared wall batch's bounding sphere.
+  // Lattice decks carry per-edge bridgeSegments instead of one bridge line:
+  // give every deck cell a pair of under-slung beams so the catwalk reads as
+  // a supported steel span. The arterial spine gets visibly heavier steel
+  // than minor bridges — the route hierarchy made legible.
+  if (data.structureUp?.bridgeSegments?.length) {
+    const chunkGx = data.cx * CHUNK
+    const chunkGz = data.cz * CHUNK
+    for (const segment of data.structureUp.bridgeSegments) {
+      if (segment.orientation !== 'horizontal') continue
+      const depth = segment.role === 'spine' ? BRIDGE_BEAM_H * 1.5 : BRIDGE_BEAM_H
+      const cellSet = new Set(segment.cells.map((c) => `${c.gx},${c.gz}`))
+      for (const cell of segment.cells) {
+        const lx = cell.gx - chunkGx
+        const lz = cell.gz - chunkGz
+        if (lx < 0 || lx >= CHUNK || lz < 0 || lz >= CHUNK) continue
+        const alongX = cellSet.has(`${cell.gx - 1},${cell.gz}`) ||
+          cellSet.has(`${cell.gx + 1},${cell.gz}`)
+        const cxw = (lx + 0.5) * CELL
+        const czw = (lz + 0.5) * CELL
+        const beamOffset = CELL / 2 - BRIDGE_BEAM_W
+        for (const side of [-1, 1]) {
+          inst.push({
+            px: alongX ? cxw : cxw + side * beamOffset,
+            py: WALL_H - depth / 2,
+            pz: alongX ? czw + side * beamOffset : czw,
+            sx: alongX ? CELL : BRIDGE_BEAM_W,
+            sy: depth,
+            sz: alongX ? BRIDGE_BEAM_W : CELL,
+          })
+        }
+      }
+    }
+  }
+
   if (
     data.structureUp?.bridgeCells.length &&
     (data.structureUp.bridgeAxis === 'x' || data.structureUp.bridgeAxis === 'z') &&
@@ -546,10 +580,12 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
       // light shafts/shadows originate in-room (not coplanar with the ceiling).
       const wx = ox + (l.lx + 0.5) * CELL
       const wz = oz + (l.lz + 0.5) * CELL
+      const role = data.spaceRole[cIdx(l.lx, l.lz)]
       const v = new THREE.Vector3(wx, oy + WALL_H - 0.5, wz)
       v.cy = data.cy // floor tag for the cross-floor light filter
+      v.role = role // room-role tag: the cast pool matches the tube's register
       lamps.push(v)
-      lampPanelTint(wx, wz, data.cy, _tint3)
+      lampPanelTint(wx, wz, data.cy, _tint3, role)
       panels.setColorAt(i, _c.setRGB(_tint3[0], _tint3[1], _tint3[2]))
     })
     panels.instanceMatrix.needsUpdate = true
