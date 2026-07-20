@@ -1,4 +1,4 @@
-import { CHUNK, CHUNK_WORLD, CELL, STAIR_RUN, cIdx } from './constants.js'
+import { CHUNK, CHUNK_WORLD, CELL, STAIR_RUN, cIdx } from '../constants.js'
 import { STAIR_E, STAIR_S, STAIR_W } from './slab.js'
 
 // Precompute the canonical per-cell stair descriptors (the ChunkManager.stairAt

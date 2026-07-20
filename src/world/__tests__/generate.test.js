@@ -47,16 +47,16 @@ import {
   multilevelBandBase,
   multilevelConfig,
   multilevelContract,
-} from '../multilevel.js'
+} from '../structures/multilevel.js'
 import { pillarColumnKindAt } from '../zones/pillars.js'
 import {
   regionLandmark,
   regionLandmarkAt,
   regionLandmarkContains,
-} from '../regions.js'
+} from '../zones/regions.js'
 import { MAP_FAMILY_CODES, worldConfigForFamily } from '../mapFamily.js'
-import { latticeCandidateLinks } from '../lattice.js'
-import { structureAt } from '../structureContracts.js'
+import { latticeCandidateLinks } from '../structures/lattice.js'
+import { structureAt } from '../structures/contract.js'
 import { ZONES } from '../zones/index.js'
 
 const RASTER_FIELDS = [
@@ -373,9 +373,9 @@ function digest(d) {
       foldCells(deck.globalCells, 'gx', 'gz')
     }
   }
-  foldStructure(d.multilevelStructure)
-  foldMultilevel(d.multilevelUp)
-  foldMultilevel(d.multilevelDown)
+  foldStructure(d.structure)
+  foldMultilevel(d.structureUp)
+  foldMultilevel(d.structureDown)
   if (
     d.mapFamily === MAP_FAMILY_TOWER ||
     d.mapFamily === MAP_FAMILY_LATTICE
@@ -436,33 +436,33 @@ function digest(d) {
 // v13 structures. The final twelve entries pin bottom/middle/top in both
 // chunks of deterministic maximum-height bridged and open-void structures.
 const GOLDEN = {
-  '0,0,0': '817d4cbe',
-  '3,0,-2': 'ce110872',
-  '12,0,12': '7bcbcb14',
-  '-10,0,10': '616f477c',
-  '0,1,0': 'ddac7d6f',
-  '3,-1,-2': 'e2a9d53e',
-  '12,2,12': 'b43811bb',
-  '3,-2,-12': '495917d5',
-  '3,-1,-12': '1df8bff4',
-  '1,0,-2': 'c506175e',
-  '2,1,-2': '80798e15',
-  '1,7,-2': '7b87e1d6',
-  '-1,0,2': '2a854ab4',
-  '-1,3,3': 'e7920b72',
-  '-7,9,-8': '1b1e8463',
-  '-3,-15,-1': 'eb64d8f4',
-  '-2,-15,-1': '0d058a8d',
-  '-3,-8,-1': 'def7c05b',
-  '-2,-8,-1': '5ac95e63',
-  '-3,-1,-1': 'ea200902',
-  '-2,-1,-1': 'c6039f23',
-  '-10,0,8': '8b2c1809',
-  '-10,0,9': '74993cf2',
-  '-10,7,8': 'a8efd099',
-  '-10,7,9': '3f5ea498',
-  '-10,14,8': '20cdf2fe',
-  '-10,14,9': '03937b9c',
+  '0,0,0': '930a4913',
+  '3,0,-2': '85a6c7bd',
+  '12,0,12': '97d6bf87',
+  '-10,0,10': '2064c777',
+  '0,1,0': '81271c96',
+  '3,-1,-2': '11bac4fd',
+  '12,2,12': '7e66f5a1',
+  '3,-2,-12': '1712698e',
+  '3,-1,-12': 'c57eaf19',
+  '1,0,-2': '6469de3b',
+  '2,1,-2': 'a38d8cca',
+  '1,7,-2': 'cce6b13e',
+  '-1,0,2': 'ebd14d07',
+  '-1,3,3': 'cf47667b',
+  '-7,9,-8': 'f49c4c1b',
+  '-3,-15,-1': '49b6bf94',
+  '-2,-15,-1': '961ad4a9',
+  '-3,-8,-1': 'e194dda3',
+  '-2,-8,-1': 'a10e4ecd',
+  '-3,-1,-1': 'dd0d5b27',
+  '-2,-1,-1': 'e51b56c6',
+  '-10,0,8': 'd6d4d173',
+  '-10,0,9': '9f87d3e1',
+  '-10,7,8': '298d24ab',
+  '-10,7,9': '31d14979',
+  '-10,14,8': 'cecc3415',
+  '-10,14,9': '78473207',
 }
 
 const MAX_HEIGHT_GOLDEN = {
@@ -471,16 +471,16 @@ const MAX_HEIGHT_GOLDEN = {
 }
 
 const SEWER_GOLDEN = Object.freeze([
-  { key: '24151,2,-1,-3', seed: 24151, cx: 2, cy: -1, cz: -3, digest: '0b94a8cb' },
-  { key: '24151,2,0,-3', seed: 24151, cx: 2, cy: 0, cz: -3, digest: '48be56a9' },
-  { key: '24151,2,1,-3', seed: 24151, cx: 2, cy: 1, cz: -3, digest: 'a75babad' },
+  { key: '24151,2,-1,-3', seed: 24151, cx: 2, cy: -1, cz: -3, digest: 'e3a57e2d' },
+  { key: '24151,2,0,-3', seed: 24151, cx: 2, cy: 0, cz: -3, digest: '5e22383b' },
+  { key: '24151,2,1,-3', seed: 24151, cx: 2, cy: 1, cz: -3, digest: 'b2c66251' },
   {
     key: 'audit-0:4084550820,-3,0,-4',
     seed: 4084550820,
     cx: -3,
     cy: 0,
     cz: -4,
-    digest: 'abc701e9',
+    digest: '29efa99e',
   },
   {
     key: 'audit-15:3752583958,-2,0,-1',
@@ -488,7 +488,7 @@ const SEWER_GOLDEN = Object.freeze([
     cx: -2,
     cy: 0,
     cz: -1,
-    digest: '71070f65',
+    digest: '0fd3ca16',
   },
   {
     key: 'audit-31:3566893867,0,0,-2',
@@ -496,54 +496,54 @@ const SEWER_GOLDEN = Object.freeze([
     cx: 0,
     cy: 0,
     cz: -2,
-    digest: '514be987',
+    digest: '8b72ca88',
   },
 ])
 
-const SEWER_GOLDEN_DIGEST = 'abbd176db8de4d1a8e5e290e9e4e5baef2a019c0d9ee37a609b06d9dcf41bf08'
+const SEWER_GOLDEN_DIGEST = '041267d941536afcc2b97c641dd5ed20ffc8f25b1965679494ed9808bae5f4ee'
 
 const TOWER_GOLDEN = Object.freeze([
-  { key: '23063,-4,-22,-3', seed: 23063, cx: -4, cy: -22, cz: -3, digest: 'ddc8f6c1' },
-  { key: '23063,-4,-22,-2', seed: 23063, cx: -4, cy: -22, cz: -2, digest: '9255ce16' },
-  { key: '23063,-4,-21,-3', seed: 23063, cx: -4, cy: -21, cz: -3, digest: '34d808f1' },
-  { key: '23063,-4,-21,-2', seed: 23063, cx: -4, cy: -21, cz: -2, digest: '98885637' },
-  { key: '23063,-4,-20,-3', seed: 23063, cx: -4, cy: -20, cz: -3, digest: 'c89de7b6' },
-  { key: '23063,-4,-20,-2', seed: 23063, cx: -4, cy: -20, cz: -2, digest: '81ee6605' },
+  { key: '23063,-4,-22,-3', seed: 23063, cx: -4, cy: -22, cz: -3, digest: '27d63652' },
+  { key: '23063,-4,-22,-2', seed: 23063, cx: -4, cy: -22, cz: -2, digest: '5e260bcf' },
+  { key: '23063,-4,-21,-3', seed: 23063, cx: -4, cy: -21, cz: -3, digest: 'fb9a93c4' },
+  { key: '23063,-4,-21,-2', seed: 23063, cx: -4, cy: -21, cz: -2, digest: '35391110' },
+  { key: '23063,-4,-20,-3', seed: 23063, cx: -4, cy: -20, cz: -3, digest: 'a3b1fd39' },
+  { key: '23063,-4,-20,-2', seed: 23063, cx: -4, cy: -20, cz: -2, digest: '2f0dea12' },
 ])
 
-const TOWER_GOLDEN_DIGEST = '851e3f60803bb56131f01231d982c9fa660645a68aad081173a0e3b197f4c60f'
+const TOWER_GOLDEN_DIGEST = '551a3928ed66f8d0099044d22bfd8382679da408a6148f3c1424174dfa353456'
 
 const LATTICE_GOLDEN = Object.freeze([
-  { key: '27750862,3,-24,-6', seed: 27750862, cx: 3, cy: -24, cz: -6, digest: 'ef757fd9' },
-  { key: '27750862,4,-24,-6', seed: 27750862, cx: 4, cy: -24, cz: -6, digest: '583e2cea' },
-  { key: '27750862,5,-24,-6', seed: 27750862, cx: 5, cy: -24, cz: -6, digest: 'a0d5fdfa' },
-  { key: '27750862,3,-24,-5', seed: 27750862, cx: 3, cy: -24, cz: -5, digest: 'd2ab66ea' },
-  { key: '27750862,4,-24,-5', seed: 27750862, cx: 4, cy: -24, cz: -5, digest: '5c102db6' },
-  { key: '27750862,5,-24,-5', seed: 27750862, cx: 5, cy: -24, cz: -5, digest: '75ead205' },
-  { key: '27750862,3,-24,-4', seed: 27750862, cx: 3, cy: -24, cz: -4, digest: '1f5e475d' },
-  { key: '27750862,4,-24,-4', seed: 27750862, cx: 4, cy: -24, cz: -4, digest: '78ffc1f8' },
-  { key: '27750862,5,-24,-4', seed: 27750862, cx: 5, cy: -24, cz: -4, digest: '25c9e0bb' },
-  { key: '27750862,3,-23,-6', seed: 27750862, cx: 3, cy: -23, cz: -6, digest: '165688b4' },
-  { key: '27750862,4,-23,-6', seed: 27750862, cx: 4, cy: -23, cz: -6, digest: '70fa6f05' },
-  { key: '27750862,5,-23,-6', seed: 27750862, cx: 5, cy: -23, cz: -6, digest: '69e3c489' },
-  { key: '27750862,3,-23,-5', seed: 27750862, cx: 3, cy: -23, cz: -5, digest: '5f5e6d7b' },
-  { key: '27750862,4,-23,-5', seed: 27750862, cx: 4, cy: -23, cz: -5, digest: 'b7660e46' },
-  { key: '27750862,5,-23,-5', seed: 27750862, cx: 5, cy: -23, cz: -5, digest: 'aaacecb3' },
-  { key: '27750862,3,-23,-4', seed: 27750862, cx: 3, cy: -23, cz: -4, digest: '3597a08b' },
-  { key: '27750862,4,-23,-4', seed: 27750862, cx: 4, cy: -23, cz: -4, digest: 'd1ee8429' },
-  { key: '27750862,5,-23,-4', seed: 27750862, cx: 5, cy: -23, cz: -4, digest: '9db7001d' },
-  { key: '27750862,3,-22,-6', seed: 27750862, cx: 3, cy: -22, cz: -6, digest: '2489dc62' },
-  { key: '27750862,4,-22,-6', seed: 27750862, cx: 4, cy: -22, cz: -6, digest: '9467d5ec' },
-  { key: '27750862,5,-22,-6', seed: 27750862, cx: 5, cy: -22, cz: -6, digest: 'a0597ed9' },
-  { key: '27750862,3,-22,-5', seed: 27750862, cx: 3, cy: -22, cz: -5, digest: '61d566e9' },
-  { key: '27750862,4,-22,-5', seed: 27750862, cx: 4, cy: -22, cz: -5, digest: '6bc81b07' },
-  { key: '27750862,5,-22,-5', seed: 27750862, cx: 5, cy: -22, cz: -5, digest: '33cc02d7' },
-  { key: '27750862,3,-22,-4', seed: 27750862, cx: 3, cy: -22, cz: -4, digest: '1ccdbd8d' },
-  { key: '27750862,4,-22,-4', seed: 27750862, cx: 4, cy: -22, cz: -4, digest: 'ae230868' },
-  { key: '27750862,5,-22,-4', seed: 27750862, cx: 5, cy: -22, cz: -4, digest: 'a0a9fe18' },
+  { key: '27750862,3,-24,-6', seed: 27750862, cx: 3, cy: -24, cz: -6, digest: 'c372132a' },
+  { key: '27750862,4,-24,-6', seed: 27750862, cx: 4, cy: -24, cz: -6, digest: 'c1b59902' },
+  { key: '27750862,5,-24,-6', seed: 27750862, cx: 5, cy: -24, cz: -6, digest: '61cdbbe3' },
+  { key: '27750862,3,-24,-5', seed: 27750862, cx: 3, cy: -24, cz: -5, digest: 'aeb24a2b' },
+  { key: '27750862,4,-24,-5', seed: 27750862, cx: 4, cy: -24, cz: -5, digest: '52cfdd35' },
+  { key: '27750862,5,-24,-5', seed: 27750862, cx: 5, cy: -24, cz: -5, digest: 'a44863cb' },
+  { key: '27750862,3,-24,-4', seed: 27750862, cx: 3, cy: -24, cz: -4, digest: '06805de4' },
+  { key: '27750862,4,-24,-4', seed: 27750862, cx: 4, cy: -24, cz: -4, digest: '251014b5' },
+  { key: '27750862,5,-24,-4', seed: 27750862, cx: 5, cy: -24, cz: -4, digest: '91f0c877' },
+  { key: '27750862,3,-23,-6', seed: 27750862, cx: 3, cy: -23, cz: -6, digest: '90778993' },
+  { key: '27750862,4,-23,-6', seed: 27750862, cx: 4, cy: -23, cz: -6, digest: '503329e6' },
+  { key: '27750862,5,-23,-6', seed: 27750862, cx: 5, cy: -23, cz: -6, digest: '8d22038d' },
+  { key: '27750862,3,-23,-5', seed: 27750862, cx: 3, cy: -23, cz: -5, digest: '0149ee08' },
+  { key: '27750862,4,-23,-5', seed: 27750862, cx: 4, cy: -23, cz: -5, digest: '37cd666c' },
+  { key: '27750862,5,-23,-5', seed: 27750862, cx: 5, cy: -23, cz: -5, digest: '097b22a7' },
+  { key: '27750862,3,-23,-4', seed: 27750862, cx: 3, cy: -23, cz: -4, digest: '7a6510dd' },
+  { key: '27750862,4,-23,-4', seed: 27750862, cx: 4, cy: -23, cz: -4, digest: '7b96aab1' },
+  { key: '27750862,5,-23,-4', seed: 27750862, cx: 5, cy: -23, cz: -4, digest: '19b994a1' },
+  { key: '27750862,3,-22,-6', seed: 27750862, cx: 3, cy: -22, cz: -6, digest: '4af38dd9' },
+  { key: '27750862,4,-22,-6', seed: 27750862, cx: 4, cy: -22, cz: -6, digest: '5e9902a5' },
+  { key: '27750862,5,-22,-6', seed: 27750862, cx: 5, cy: -22, cz: -6, digest: '4b601a2d' },
+  { key: '27750862,3,-22,-5', seed: 27750862, cx: 3, cy: -22, cz: -5, digest: 'a972f6cb' },
+  { key: '27750862,4,-22,-5', seed: 27750862, cx: 4, cy: -22, cz: -5, digest: '591d7af5' },
+  { key: '27750862,5,-22,-5', seed: 27750862, cx: 5, cy: -22, cz: -5, digest: '7ebe4283' },
+  { key: '27750862,3,-22,-4', seed: 27750862, cx: 3, cy: -22, cz: -4, digest: '51eb63e6' },
+  { key: '27750862,4,-22,-4', seed: 27750862, cx: 4, cy: -22, cz: -4, digest: '170983c2' },
+  { key: '27750862,5,-22,-4', seed: 27750862, cx: 5, cy: -22, cz: -4, digest: '5ab17abd' },
 ])
 
-const LATTICE_GOLDEN_DIGEST = '6b9bb60d6659834dc146915436aa4fb23f7171f075a23cd7f439aa73588686ab'
+const LATTICE_GOLDEN_DIGEST = 'f7ac5b9dc46b5c773da344450632945bdf86205438d7010f233a317518f0c949'
 
 const OFFICE_PAIR_DESCRIPTOR_GOLDEN = {
   id: 1394823709,
@@ -871,9 +871,9 @@ describe('determinism', () => {
         expect(a.repairs).toEqual(b.repairs)
         expect(a.stairUp).toEqual(b.stairUp)
         expect(a.stairDown).toEqual(b.stairDown)
-        expect(a.multilevelStructure).toEqual(b.multilevelStructure)
-        expect(a.multilevelUp).toEqual(b.multilevelUp)
-        expect(a.multilevelDown).toEqual(b.multilevelDown)
+        expect(a.structure).toEqual(b.structure)
+        expect(a.structureUp).toEqual(b.structureUp)
+        expect(a.structureDown).toEqual(b.structureDown)
       }
     }
   })
@@ -891,7 +891,7 @@ describe('determinism', () => {
       for (const key of keys) {
         maximumHeightPins[key] = actual[key]
         const [cx, cy, cz] = key.split(',').map(Number)
-        const structure = buildChunk(12345, cx, cy, cz, CFG).multilevelStructure
+        const structure = buildChunk(12345, cx, cy, cz, CFG).structure
         expect(structure?.kind).toBe(kind)
         expect(structure?.levelCount).toBe(15)
         expect(structure?.topCy - structure?.baseCy).toBe(14)
@@ -919,7 +919,7 @@ describe('determinism', () => {
     expect(rasterSnapshot(publicResult)).toEqual(rasterSnapshot(direct))
     expect(publicResult.lamps).toEqual(direct.lamps)
     expect(publicResult.furniture).toEqual(direct.furniture)
-    expect(publicResult.multilevelStructure).toEqual(direct.multilevelStructure)
+    expect(publicResult.structure).toEqual(direct.structure)
     expect(digest(publicResult)).toBe(GOLDEN['0,0,0'])
     expect(digest(direct)).toBe(GOLDEN['0,0,0'])
   })
@@ -939,9 +939,9 @@ describe('determinism', () => {
       for (const coords of order) buildChunk(12345, ...coords, CFG)
       const actual = buildChunk(12345, ...target, CFG)
       expect(rasterSnapshot(actual)).toEqual(rasterSnapshot(expected))
-      expect(actual.multilevelStructure).toEqual(expected.multilevelStructure)
-      expect(actual.multilevelUp).toEqual(expected.multilevelUp)
-      expect(actual.multilevelDown).toEqual(expected.multilevelDown)
+      expect(actual.structure).toEqual(expected.structure)
+      expect(actual.structureUp).toEqual(expected.structureUp)
+      expect(actual.structureDown).toEqual(expected.structureDown)
       expect(digest(actual)).toBe(GOLDEN[target.join(',')])
     }
   })
@@ -949,10 +949,10 @@ describe('determinism', () => {
   it('pins the established office multilevel descriptor as one exact pair', () => {
     const first = buildChunk(12345, -3, -15, -1, CFG)
     const second = buildChunk(12345, -2, -15, -1, CFG)
-    const structure = first.multilevelStructure
+    const structure = first.structure
 
     expect(structure).not.toBeNull()
-    expect(structure).toEqual(second.multilevelStructure)
+    expect(structure).toEqual(second.structure)
     expect(structure.participants).toHaveLength(2)
     expect(structure.participantChunks).toEqual(structure.participants)
     expect(structure).not.toHaveProperty('family')
@@ -976,9 +976,9 @@ describe('determinism', () => {
     const familyVariant = { ...office, mapFamily: 'tower' }
     const descriptorVariant = {
       ...office,
-      multilevelStructure: {
-        ...office.multilevelStructure,
-        id: (office.multilevelStructure.id + 1) >>> 0,
+      structure: {
+        ...office.structure,
+        id: (office.structure.id + 1) >>> 0,
       },
     }
 
@@ -1025,7 +1025,7 @@ describe('determinism', () => {
     const data = buildChunk(12345, 0, 65, 0, CFG)
     expect(data.version).toBe(WORLD_GEN_VERSION)
     expect(data.cy).toBe(65)
-    expect(data.multilevelStructure).toBeNull()
+    expect(data.structure).toBeNull()
     expect(data.wallV.length).toBeGreaterThan(0)
   })
 })
@@ -1250,8 +1250,8 @@ describe('forced Tower stamping (task 4.5 GREEN)', () => {
 
     for (const data of chunks.values()) {
       expect(data.mapFamily).toBe(MAP_FAMILY_TOWER)
-      expect(data.multilevelStructure).toEqual(structure)
-      expect(recursivelyFrozen(data.multilevelStructure)).toBe(true)
+      expect(data.structure).toEqual(structure)
+      expect(recursivelyFrozen(data.structure)).toBe(true)
       expect(data).not.toHaveProperty('towerStructure')
       expect(data).not.toHaveProperty('approaches')
       expect(data).not.toHaveProperty('stamping')
@@ -1262,7 +1262,7 @@ describe('forced Tower stamping (task 4.5 GREEN)', () => {
       for (const participant of structure.participants) {
         const lower = chunks.get(`${participant.cx},${lowerCy},${participant.cz}`)
         const upper = chunks.get(`${participant.cx},${lowerCy + 1},${participant.cz}`)
-        expect(lower.multilevelUp).toEqual(upper.multilevelDown)
+        expect(lower.structureUp).toEqual(upper.structureDown)
         expect(lower.lethalVoidUp).toEqual(upper.lethalVoidDown)
         expect(recursivelyFrozen(lower.lethalVoidUp)).toBe(true)
         expect(lower.lethalVoidUp).toMatchObject({
@@ -1297,48 +1297,48 @@ describe('forced Tower stamping (task 4.5 GREEN)', () => {
     )
     const baseline = digest(data)
     const mutations = [
-      ['structure family', (value) => { value.multilevelStructure.family = 'office' }],
-      ['structure id', (value) => { value.multilevelStructure.id++ }],
-      ['structure kind', (value) => { value.multilevelStructure.kind = 'unknown' }],
-      ['district', (value) => { value.multilevelStructure.district.x++ }],
-      ['base floor', (value) => { value.multilevelStructure.baseCy++ }],
-      ['top floor', (value) => { value.multilevelStructure.topCy++ }],
-      ['level count', (value) => { value.multilevelStructure.levelCount++ }],
+      ['structure family', (value) => { value.structure.family = 'office' }],
+      ['structure id', (value) => { value.structure.id++ }],
+      ['structure kind', (value) => { value.structure.kind = 'unknown' }],
+      ['district', (value) => { value.structure.district.x++ }],
+      ['base floor', (value) => { value.structure.baseCy++ }],
+      ['top floor', (value) => { value.structure.topCy++ }],
+      ['level count', (value) => { value.structure.levelCount++ }],
       ['bridge axis', (value) => {
-        value.multilevelStructure.bridgeAxis = value.multilevelStructure.bridgeAxis === 'x' ? 'z' : 'x'
+        value.structure.bridgeAxis = value.structure.bridgeAxis === 'x' ? 'z' : 'x'
       }],
-      ['anchor', (value) => { value.multilevelStructure.anchor.cx++ }],
-      ['participant', (value) => { value.multilevelStructure.participants[0].cz++ }],
-      ['structure bounds', (value) => { value.multilevelStructure.globalBounds.x0++ }],
-      ['deck floor', (value) => { value.multilevelStructure.decks[0].levelCy++ }],
-      ['deck lower floor', (value) => { value.multilevelStructure.decks[0].lowerCy++ }],
-      ['deck line', (value) => { value.multilevelStructure.decks[0].globalBridgeLine++ }],
-      ['deck bounds', (value) => { value.multilevelStructure.decks[0].globalBounds.z0++ }],
-      ['deck cells', (value) => { value.multilevelStructure.decks[0].globalCells[0].gx++ }],
-      ['link floor', (value) => { value.multilevelStructure.verticalLinks[0].lowerCy++ }],
-      ['link participant x', (value) => { value.multilevelStructure.verticalLinks[0].cx++ }],
-      ['link participant z', (value) => { value.multilevelStructure.verticalLinks[0].cz++ }],
-      ['link direction', (value) => { value.multilevelStructure.verticalLinks[0].stair.dir++ }],
-      ['link landing', (value) => { value.multilevelStructure.verticalLinks[0].stair.landing.lx++ }],
-      ['link run', (value) => { value.multilevelStructure.verticalLinks[0].stair.run[0].lz++ }],
-      ['link exit', (value) => { value.multilevelStructure.verticalLinks[0].stair.exit.lx++ }],
-      ['socket slot', (value) => { value.multilevelStructure.landmarkSockets[0].slot = 'bridgeApproach' }],
-      ['socket kind', (value) => { value.multilevelStructure.landmarkSockets[0].kind = 'clock' }],
-      ['socket x', (value) => { value.multilevelStructure.landmarkSockets[0].gx++ }],
-      ['socket z', (value) => { value.multilevelStructure.landmarkSockets[0].gz++ }],
-      ['socket floor', (value) => { value.multilevelStructure.landmarkSockets[0].cy++ }],
+      ['anchor', (value) => { value.structure.anchor.cx++ }],
+      ['participant', (value) => { value.structure.participants[0].cz++ }],
+      ['structure bounds', (value) => { value.structure.globalBounds.x0++ }],
+      ['deck floor', (value) => { value.structure.decks[0].levelCy++ }],
+      ['deck lower floor', (value) => { value.structure.decks[0].lowerCy++ }],
+      ['deck line', (value) => { value.structure.decks[0].globalBridgeLine++ }],
+      ['deck bounds', (value) => { value.structure.decks[0].globalBounds.z0++ }],
+      ['deck cells', (value) => { value.structure.decks[0].globalCells[0].gx++ }],
+      ['link floor', (value) => { value.structure.verticalLinks[0].lowerCy++ }],
+      ['link participant x', (value) => { value.structure.verticalLinks[0].cx++ }],
+      ['link participant z', (value) => { value.structure.verticalLinks[0].cz++ }],
+      ['link direction', (value) => { value.structure.verticalLinks[0].stair.dir++ }],
+      ['link landing', (value) => { value.structure.verticalLinks[0].stair.landing.lx++ }],
+      ['link run', (value) => { value.structure.verticalLinks[0].stair.run[0].lz++ }],
+      ['link exit', (value) => { value.structure.verticalLinks[0].stair.exit.lx++ }],
+      ['socket slot', (value) => { value.structure.landmarkSockets[0].slot = 'bridgeApproach' }],
+      ['socket kind', (value) => { value.structure.landmarkSockets[0].kind = 'clock' }],
+      ['socket x', (value) => { value.structure.landmarkSockets[0].gx++ }],
+      ['socket z', (value) => { value.structure.landmarkSockets[0].gz++ }],
+      ['socket floor', (value) => { value.structure.landmarkSockets[0].cy++ }],
       ['socket axis', (value) => {
-        const socket = value.multilevelStructure.landmarkSockets[0]
+        const socket = value.structure.landmarkSockets[0]
         socket.axis = socket.axis === 'x' ? 'z' : 'x'
       }],
-      ['socket side', (value) => { value.multilevelStructure.landmarkSockets[0].side *= -1 }],
-      ['socket salt', (value) => { value.multilevelStructure.landmarkSockets[0].salt++ }],
-      ['slice id', (value) => { value.multilevelDown.id++ }],
-      ['slice floor', (value) => { value.multilevelDown.lowerCy++ }],
-      ['slice kind', (value) => { value.multilevelDown.kind = 'unknown' }],
-      ['slice bridge line', (value) => { value.multilevelDown.globalBridgeLine++ }],
-      ['slice void cells', (value) => { value.multilevelDown.voidCells[0].lx++ }],
-      ['slice bridge cells', (value) => { value.multilevelDown.bridgeCells[0].lz++ }],
+      ['socket side', (value) => { value.structure.landmarkSockets[0].side *= -1 }],
+      ['socket salt', (value) => { value.structure.landmarkSockets[0].salt++ }],
+      ['slice id', (value) => { value.structureDown.id++ }],
+      ['slice floor', (value) => { value.structureDown.lowerCy++ }],
+      ['slice kind', (value) => { value.structureDown.kind = 'unknown' }],
+      ['slice bridge line', (value) => { value.structureDown.globalBridgeLine++ }],
+      ['slice void cells', (value) => { value.structureDown.voidCells[0].lx++ }],
+      ['slice bridge cells', (value) => { value.structureDown.bridgeCells[0].lz++ }],
       ['lethal id', (value) => { value.lethalVoidDown.id++ }],
       ['lethal family', (value) => { value.lethalVoidDown.family = 'lattice' }],
       ['lethal floor', (value) => { value.lethalVoidDown.lowerCy++ }],
@@ -1391,8 +1391,8 @@ describe('forced Lattice stamping (task 5.5 GREEN)', () => {
 
     for (const data of chunks.values()) {
       expect(data.mapFamily).toBe(MAP_FAMILY_LATTICE)
-      expect(data.multilevelStructure).toEqual(structure)
-      expect(recursivelyFrozen(data.multilevelStructure)).toBe(true)
+      expect(data.structure).toEqual(structure)
+      expect(recursivelyFrozen(data.structure)).toBe(true)
       expect(data).not.toHaveProperty('latticeStructure')
       expect(data).not.toHaveProperty('candidateLinks')
       expect(data).not.toHaveProperty('stamping')
@@ -1432,15 +1432,15 @@ describe('forced Lattice stamping (task 5.5 GREEN)', () => {
       for (const participant of structure.participants) {
         const lower = chunks.get(`${participant.cx},${lowerCy},${participant.cz}`)
         const upper = chunks.get(`${participant.cx},${lowerCy + 1},${participant.cz}`)
-        expect(lower.multilevelUp).toEqual(upper.multilevelDown)
-        expect(recursivelyFrozen(lower.multilevelUp)).toBe(true)
-        expect(lower.multilevelUp).not.toHaveProperty('bridgeAxis')
-        expect(lower.multilevelUp).not.toHaveProperty('bridgeLine')
-        expect(lower.multilevelUp).not.toHaveProperty('globalBridgeLine')
-        expect(Array.isArray(lower.multilevelUp.bridgeSegments)).toBe(true)
+        expect(lower.structureUp).toEqual(upper.structureDown)
+        expect(recursivelyFrozen(lower.structureUp)).toBe(true)
+        expect(lower.structureUp).not.toHaveProperty('bridgeAxis')
+        expect(lower.structureUp).not.toHaveProperty('bridgeLine')
+        expect(lower.structureUp).not.toHaveProperty('globalBridgeLine')
+        expect(Array.isArray(lower.structureUp.bridgeSegments)).toBe(true)
 
         const localBridgeCells = new Set()
-        for (const segment of lower.multilevelUp.bridgeSegments) {
+        for (const segment of lower.structureUp.bridgeSegments) {
           const descriptorEdge = descriptorEdges.get(latticeEdgeKey(segment))
           expect(descriptorEdge).toBeDefined()
           expect(segment.role).toBe(descriptorEdge.role)
@@ -1461,7 +1461,7 @@ describe('forced Lattice stamping (task 5.5 GREEN)', () => {
             )
           }
         }
-        expect(new Set(lower.multilevelUp.bridgeCells.map(
+        expect(new Set(lower.structureUp.bridgeCells.map(
           ({ lx, lz }) => `${lx},${lz}`
         ))).toEqual(localBridgeCells)
       }
@@ -1508,7 +1508,7 @@ describe('forced Lattice stamping (task 5.5 GREEN)', () => {
           lowerCy,
         })
         expect(lower.lethalVoidUp.cells.map(({ lx, lz }) => ({ lx, lz })))
-          .toEqual(lower.multilevelUp.voidCells)
+          .toEqual(lower.structureUp.voidCells)
         expect(lower.lethalVoidUp.cells).toEqual(
           [...lower.lethalVoidUp.cells].sort((left, right) =>
             left.lz - right.lz || left.lx - right.lx
@@ -1541,36 +1541,36 @@ describe('forced Lattice stamping (task 5.5 GREEN)', () => {
   it('[R03-S02][D02/D05/D08] digest-covers canonical Lattice graph, slice, segment, exposure, stair, and lethal fields without touching Office pins', () => {
     const { chunks } = forcedLatticeFixture()
     const data = [...chunks.values()].find((candidate) =>
-      candidate.multilevelDown?.bridgeSegments?.length > 0 &&
-      candidate.multilevelDown?.voidCells?.length > 0 &&
+      candidate.structureDown?.bridgeSegments?.length > 0 &&
+      candidate.structureDown?.voidCells?.length > 0 &&
       candidate.lethalVoidDown?.cells?.length > 0
     )
     const baseline = digest(data)
     const mutations = [
-      ['structure family', (value) => { value.multilevelStructure.family = 'office' }],
-      ['structure id', (value) => { value.multilevelStructure.id++ }],
-      ['structure kind', (value) => { value.multilevelStructure.kind = 'unknown' }],
-      ['district', (value) => { value.multilevelStructure.district.x++ }],
-      ['anchor identity', (value) => { value.multilevelStructure.anchors[0].id++ }],
-      ['anchor x', (value) => { value.multilevelStructure.anchors[0].gx++ }],
-      ['anchor floor', (value) => { value.multilevelStructure.anchors[0].levelCy++ }],
-      ['anchor exposure', (value) => { value.multilevelStructure.anchors[0].exposureM = 6 }],
-      ['edge endpoint', (value) => { value.multilevelStructure.edges[0].a++ }],
-      ['edge role', (value) => { value.multilevelStructure.edges[0].role = 'cycle' }],
-      ['edge cell x', (value) => { value.multilevelStructure.edges[0].cells[0].gx++ }],
-      ['edge cell floor', (value) => { value.multilevelStructure.edges[0].cells[0].cy++ }],
-      ['eligible cycles', (value) => { value.multilevelStructure.eligibleNonBackboneLinks++ }],
-      ['link floor', (value) => { value.multilevelStructure.verticalLinks[0].lowerCy++ }],
-      ['link participant', (value) => { value.multilevelStructure.verticalLinks[0].cx++ }],
-      ['link stair', (value) => { value.multilevelStructure.verticalLinks[0].stair.run[0].lx++ }],
-      ['slice family', (value) => { value.multilevelDown.family = 'tower' }],
-      ['slice id', (value) => { value.multilevelDown.id++ }],
-      ['slice void cell', (value) => { value.multilevelDown.voidCells[0].lx++ }],
-      ['slice bridge cell', (value) => { value.multilevelDown.bridgeCells[0].lz++ }],
-      ['segment endpoint', (value) => { value.multilevelDown.bridgeSegments[0].a++ }],
-      ['segment role', (value) => { value.multilevelDown.bridgeSegments[0].role = 'cycle' }],
-      ['segment orientation', (value) => { value.multilevelDown.bridgeSegments[0].orientation = 'vertical' }],
-      ['segment cell', (value) => { value.multilevelDown.bridgeSegments[0].cells[0].gz++ }],
+      ['structure family', (value) => { value.structure.family = 'office' }],
+      ['structure id', (value) => { value.structure.id++ }],
+      ['structure kind', (value) => { value.structure.kind = 'unknown' }],
+      ['district', (value) => { value.structure.district.x++ }],
+      ['anchor identity', (value) => { value.structure.anchors[0].id++ }],
+      ['anchor x', (value) => { value.structure.anchors[0].gx++ }],
+      ['anchor floor', (value) => { value.structure.anchors[0].levelCy++ }],
+      ['anchor exposure', (value) => { value.structure.anchors[0].exposureM = 6 }],
+      ['edge endpoint', (value) => { value.structure.edges[0].a++ }],
+      ['edge role', (value) => { value.structure.edges[0].role = 'cycle' }],
+      ['edge cell x', (value) => { value.structure.edges[0].cells[0].gx++ }],
+      ['edge cell floor', (value) => { value.structure.edges[0].cells[0].cy++ }],
+      ['eligible cycles', (value) => { value.structure.eligibleNonBackboneLinks++ }],
+      ['link floor', (value) => { value.structure.verticalLinks[0].lowerCy++ }],
+      ['link participant', (value) => { value.structure.verticalLinks[0].cx++ }],
+      ['link stair', (value) => { value.structure.verticalLinks[0].stair.run[0].lx++ }],
+      ['slice family', (value) => { value.structureDown.family = 'tower' }],
+      ['slice id', (value) => { value.structureDown.id++ }],
+      ['slice void cell', (value) => { value.structureDown.voidCells[0].lx++ }],
+      ['slice bridge cell', (value) => { value.structureDown.bridgeCells[0].lz++ }],
+      ['segment endpoint', (value) => { value.structureDown.bridgeSegments[0].a++ }],
+      ['segment role', (value) => { value.structureDown.bridgeSegments[0].role = 'cycle' }],
+      ['segment orientation', (value) => { value.structureDown.bridgeSegments[0].orientation = 'vertical' }],
+      ['segment cell', (value) => { value.structureDown.bridgeSegments[0].cells[0].gz++ }],
       ['lethal id', (value) => { value.lethalVoidDown.id++ }],
       ['lethal family', (value) => { value.lethalVoidDown.family = 'tower' }],
       ['lethal floor', (value) => { value.lethalVoidDown.lowerCy++ }],
@@ -1597,10 +1597,10 @@ describe('seam consistency', () => {
   )
 
   const sharedStructure = (a, b, axis) => {
-    const structure = a.multilevelStructure
+    const structure = a.structure
     if (
       !structure ||
-      structure.id !== b.multilevelStructure?.id ||
+      structure.id !== b.structure?.id ||
       structure.bridgeAxis !== axis ||
       a.cy !== b.cy ||
       a.cy < structure.baseCy ||

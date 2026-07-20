@@ -12,7 +12,7 @@ import {
   WALL_RAIL,
 } from '../mapTypes.js'
 import { buildChunk } from '../pipeline.js'
-import { structureAt } from '../structureContracts.js'
+import { structureAt } from '../structures/contract.js'
 
 const FAMILY_AUDIT_MODULE = '../familyAudit.js'
 const NEXT_VERSION = WORLD_GEN_VERSION + 1
@@ -492,13 +492,13 @@ function latticeFixture(seed = LATTICE_AUDIT_SEED) {
 }
 
 function latticeDescriptorFromFixture(fixture) {
-  return fixture.chunks.values().next().value?.multilevelStructure ?? null
+  return fixture.chunks.values().next().value?.structure ?? null
 }
 
 function replaceLatticeDescriptor(fixture, damage) {
   const descriptor = structuredClone(latticeDescriptorFromFixture(fixture))
   damage(descriptor)
-  for (const data of fixture.chunks.values()) data.multilevelStructure = descriptor
+  for (const data of fixture.chunks.values()) data.structure = descriptor
   return descriptor
 }
 
@@ -1957,7 +1957,7 @@ describe('Lattice audit registration and bounded stamp evidence (task 5.2 RED)',
     expect(fixture.chunks.size).toBe(27)
     expect([...fixture.chunks.values()].every((data) =>
       data.mapFamily === MAP_FAMILY_LATTICE &&
-      data.multilevelStructure?.id === descriptor.id
+      data.structure?.id === descriptor.id
     )).toBe(true)
     expect(descriptor.verticalLinks.map(({ lowerCy }) => lowerCy))
       .toEqual([descriptor.baseCy, descriptor.baseCy + 1])
@@ -2007,7 +2007,7 @@ describe('Lattice malformed fixtures fail only the Lattice row (task 5.2 RED)', 
       label: 'orphaned canonical descriptor',
       reason: 'lattice:orphan-descriptor',
       damage(fixture) {
-        for (const data of fixture.chunks.values()) data.multilevelStructure = null
+        for (const data of fixture.chunks.values()) data.structure = null
       },
     },
     {

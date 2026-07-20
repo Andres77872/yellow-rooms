@@ -2,12 +2,12 @@ import { CHUNK, ZONE_OFFICE } from './constants.js'
 import { ChunkData } from './ChunkData.js'
 import { RNG } from './core/rng.js'
 import { ZONES } from './zones/index.js'
-import { selectZone } from './regions.js'
+import { selectZone } from './zones/regions.js'
 import { vBorderContract, hBorderContract } from './border.js'
 import { placeLights } from './lamps.js'
-import { stampStairs } from './stairStamp.js'
-import { stampMultilevelRooms, stampTowerStructure } from './multilevelStamp.js'
-import { stampLatticeStructure } from './latticeStamp.js'
+import { stampStairs } from './structures/stairStamp.js'
+import { stampMultilevelRooms, stampTowerStructure } from './structures/multilevelStamp.js'
+import { stampLatticeStructure } from './structures/latticeStamp.js'
 import { DEFAULT_WORLD_CONFIG } from './config.js'
 import {
   MAP_FAMILY_OFFICE,
@@ -25,7 +25,7 @@ import {
   isConnectedSewerCandidate,
   sewerCandidateSeeds,
 } from './zones/sewer.js'
-import { structureAt } from './structureContracts.js'
+import { structureAt } from './structures/contract.js'
 
 const TOPOLOGY_SALT = 0x74a1
 
@@ -153,7 +153,7 @@ export function buildChunk(seed, cx, cy, cz, config = DEFAULT_WORLD_CONFIG, exit
     // 15-storey volume. The monotone hall/gallery carve explicitly opens its
     // owned chunk seam; protected windows, approaches and bridge guards survive
     // later anomalies. Lamps see the exact per-storey aperture/bridge mask.
-    stampMultilevelRooms(data, seed, cx, cy, cz, config)
+    stampMultilevelRooms(data, structureAt(seed, cx, cz, cy, config))
   } else if (profile.family === MAP_FAMILY_SEWER) {
     // Every emitted manhole-up/down module gets a real canonical riser half.
     // Reusing root-seeded slab contracts keeps adjacent layers byte-identical;

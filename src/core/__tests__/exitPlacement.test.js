@@ -9,7 +9,7 @@ import { CHUNK, LAYER_H } from '../../world/constants.js'
 import { DEFAULT_WORLD_CONFIG } from '../../world/config.js'
 import { hashStr } from '../../world/core/hash.js'
 import { generateChunk } from '../../world/generate.js'
-import { chunkStairs, stairStrip } from '../../world/slab.js'
+import { chunkStairs, stairStrip } from '../../world/structures/slab.js'
 
 const placement = (seedText, level) => {
   const worldSeed = hashStr(`${seedText}#${level}`)

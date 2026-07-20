@@ -7,6 +7,7 @@ import {
   EYE_H,
   CHUNK,
   CELL,
+  SPAWN_WORLD,
   PROXIMITY_SLOW_RADIUS,
   PROXIMITY_SLOW_MAX,
   STARE_LIMIT_BASE,
@@ -45,8 +46,7 @@ import { createExitPlacement, evaluateExit } from './exitPlacement.js'
 // linVec (DeferredRenderer) / lin (gbufferMaterials) / _setColors (LightTool).
 THREE.ColorManagement.enabled = true
 
-const HUBC = (CHUNK / 2) | 0
-const SPAWN = (HUBC + 0.5) * CELL
+const SPAWN = SPAWN_WORLD
 
 export class Engine {
   constructor(app) {

@@ -20,7 +20,7 @@ import {
 } from '../src/world/constants.js'
 import { hashStr } from '../src/world/core/hash.js'
 import { ASCII_LEGEND, renderAsciiPatch } from '../src/world/asciiMap.js'
-import { regionLandmark, roomDominanceConfig, selectZone } from '../src/world/regions.js'
+import { regionLandmark, roomDominanceConfig, selectZone } from '../src/world/zones/regions.js'
 import { auditLayeredPatch } from '../src/world/audit.js'
 import { borderPairMode } from '../src/world/border.js'
 import {
@@ -30,10 +30,10 @@ import {
   validateActivationEvidence,
 } from '../src/world/familyAudit.js'
 import { worldConfigForFamily } from '../src/world/mapFamily.js'
-import { structureAt } from '../src/world/structureContracts.js'
-import { structureAdapterFor } from '../src/world/structureAdapters.js'
-import { LATTICE_STRUCTURE_KIND } from '../src/world/lattice.js'
-import { TOWER_LANDMARK_SOCKET_KINDS } from '../src/world/tower.js'
+import { structureAt } from '../src/world/structures/contract.js'
+import { structureAdapterFor } from '../src/world/structures/contract.js'
+import { LATTICE_STRUCTURE_KIND } from '../src/world/structures/lattice.js'
+import { TOWER_LANDMARK_SOCKET_KINDS } from '../src/world/structures/tower.js'
 import {
   MAP_FAMILY_LATTICE,
   MAP_FAMILY_OFFICE,
@@ -200,9 +200,11 @@ function sewerPinSnapshot(data) {
     stairUp: data.stairUp,
     stairDown: data.stairDown,
     sewerDescriptor: data.sewerDescriptor,
-    multilevelStructure: data.multilevelStructure,
-    multilevelUp: data.multilevelUp,
-    multilevelDown: data.multilevelDown,
+    // Snapshot keys keep their historical names: these digests are pinned
+    // release evidence, and the carrier-field rename must not rewrite them.
+    multilevelStructure: data.structure,
+    multilevelUp: data.structureUp,
+    multilevelDown: data.structureDown,
   }
 }
 
@@ -238,9 +240,11 @@ function towerPinSnapshot(data) {
     lamps: data.lamps,
     stairUp: data.stairUp,
     stairDown: data.stairDown,
-    multilevelStructure: data.multilevelStructure,
-    multilevelUp: data.multilevelUp,
-    multilevelDown: data.multilevelDown,
+    // Snapshot keys keep their historical names: these digests are pinned
+    // release evidence, and the carrier-field rename must not rewrite them.
+    multilevelStructure: data.structure,
+    multilevelUp: data.structureUp,
+    multilevelDown: data.structureDown,
     lethalVoidUp: data.lethalVoidUp,
     lethalVoidDown: data.lethalVoidDown,
   }
@@ -271,9 +275,11 @@ function latticePinSnapshot(data) {
     lamps: data.lamps,
     stairUp: data.stairUp,
     stairDown: data.stairDown,
-    multilevelStructure: data.multilevelStructure,
-    multilevelUp: data.multilevelUp,
-    multilevelDown: data.multilevelDown,
+    // Snapshot keys keep their historical names: these digests are pinned
+    // release evidence, and the carrier-field rename must not rewrite them.
+    multilevelStructure: data.structure,
+    multilevelUp: data.structureUp,
+    multilevelDown: data.structureDown,
     lethalVoidUp: data.lethalVoidUp,
     lethalVoidDown: data.lethalVoidDown,
   }
@@ -678,9 +684,9 @@ function towerApproachMatches(descriptor, chunks) {
   const deck = descriptor.decks[0]
   return descriptor.participants.filter((participant) => {
     const data = chunks.get(`${participant.cx},${deck.levelCy},${participant.cz}`)
-    return data?.multilevelDown?.id === descriptor.id &&
-      data.multilevelDown.kind === descriptor.kind &&
-      data.multilevelDown.levelCy === deck.levelCy
+    return data?.structureDown?.id === descriptor.id &&
+      data.structureDown.kind === descriptor.kind &&
+      data.structureDown.levelCy === deck.levelCy
   }).length
 }
 

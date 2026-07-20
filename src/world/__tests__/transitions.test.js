@@ -10,7 +10,7 @@ import {
   PASSAGE_WALL,
   PASSAGE_WIDE,
 } from '../mapTypes.js'
-import { sampleRegionValue, selectZone } from '../regions.js'
+import { sampleRegionValue, selectZone } from '../zones/regions.js'
 import * as borderContracts from '../border.js'
 import * as pillars from '../zones/pillars.js'
 

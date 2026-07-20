@@ -270,10 +270,12 @@ and the interior-architecture review for the dressing layer is in
 - `src/world/audit.js` — 2D seam and canonical layered-connectivity validation
 - `src/world/mapTypes.js` — semantic cell and passage vocabulary
 - `src/world/pipeline.js` — pure public generation pipeline
-- `src/world/trimwork.js` / `src/world/props.js` — joinery and interior
-  dressing builders consumed by `src/world/mesh.js`
-- `src/world/furniture.js` / `src/world/furnitureModels.js` — collision-real
-  furniture placement and piece models
+- `src/world/objects/` — organized section for all object definitions:
+  `joinery/` (door casings + leaves, window trim), `dressing/` (baseboards,
+  wall props, signs, vents), `furniture/` (collision-real piece models);
+  consumed by `src/world/mesh.js`
+- `src/world/furniture.js` — collision-real furniture placement (models live
+  in `src/world/objects/furniture/`)
 
 Generation is covered by deterministic golden tests, macro-plan and seam
 invariants, multi-chunk wall/navigation flood tests, region-distribution tests,

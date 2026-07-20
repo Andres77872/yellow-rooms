@@ -1,8 +1,8 @@
 import { DEFAULT_WORLD_CONFIG } from '../config.js'
 import { worldConfigForFamily } from '../mapFamily.js'
 import { MAP_FAMILY_TOWER } from '../mapTypes.js'
-import { structureAt } from '../structureContracts.js'
-import { TOWER_STRUCTURE_KIND } from '../tower.js'
+import { structureAt } from '../structures/contract.js'
+import { TOWER_STRUCTURE_KIND } from '../structures/tower.js'
 
 export const TOWER_SCAN_SEEDS = Object.freeze([0x5a17, 0x7157, 0xc0ffee])
 

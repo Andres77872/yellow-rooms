@@ -1,5 +1,5 @@
-import { CHUNK, LAYER_H, cIdx } from './constants.js'
-import { deepFreeze } from './mapFamily.js'
+import { CHUNK, LAYER_H, cIdx } from '../constants.js'
+import { deepFreeze } from '../mapFamily.js'
 import {
   CELL_ATRIUM,
   CELL_BRIDGE,
@@ -7,15 +7,25 @@ import {
   PASSAGE_WALL,
   PASSAGE_WIDE,
   WALL_RAIL,
-} from './mapTypes.js'
+} from '../mapTypes.js'
 import {
   analyzeLatticeDescriptor,
   compareLatticeEdges,
   latticeHorizontalCellKey,
 } from './lattice.js'
+import { lethalVoidHalfFromSlice } from './lethalVoid.js'
 import { stampStructureVerticalLinks } from './stairStamp.js'
 
 const CHAMBER_RADIUS = 1
+
+// Every chunk in a district re-derives the same per-floor geometry and the
+// same chunk-column slices (a floor's `structureUp` and the floor above's
+// `structureDown` are the identical slice). Descriptors are frozen and the
+// producers are pure, so cache per descriptor identity; entries die with the
+// descriptor.
+const FLOOR_GEOMETRY_CACHE = new WeakMap() // structure -> Map<levelCy, geometry>
+const SLICE_CACHE = new WeakMap() // structure -> Map<'cx,cz,lowerCy', slice>
+const LETHAL_VOID_CACHE = new WeakMap() // slice -> frozen lethal-void half
 
 const compareLocalCells = (left, right) =>
   left.lz - right.lz || left.lx - right.lx
@@ -45,6 +55,24 @@ function addGlobalCell(target, bounds, gx, gz) {
 }
 
 export function latticeFloorGeometry(structure, levelCy) {
+  const cacheable = Object.isFrozen(structure)
+  if (cacheable) {
+    const cached = FLOOR_GEOMETRY_CACHE.get(structure)?.get(levelCy)
+    if (cached) return cached
+  }
+  const geometry = computeLatticeFloorGeometry(structure, levelCy)
+  if (cacheable) {
+    let byLevel = FLOOR_GEOMETRY_CACHE.get(structure)
+    if (!byLevel) {
+      byLevel = new Map()
+      FLOOR_GEOMETRY_CACHE.set(structure, byLevel)
+    }
+    byLevel.set(levelCy, geometry)
+  }
+  return geometry
+}
+
+function computeLatticeFloorGeometry(structure, levelCy) {
   const chamberCells = new Set()
   const edgeCells = new Set()
   const stairSafeCells = new Set()
@@ -125,6 +153,15 @@ export function latticeStructureSlice(structure, cx, cz, lowerCy, profile) {
     lowerCy >= structure.topCy
   ) return null
 
+  let byKey = SLICE_CACHE.get(structure)
+  if (!byKey) {
+    byKey = new Map()
+    SLICE_CACHE.set(structure, byKey)
+  }
+  const sliceKey = `${cx},${cz},${lowerCy}`
+  const cached = byKey.get(sliceKey)
+  if (cached) return cached
+
   const levelCy = lowerCy + 1
   const geometry = latticeFloorGeometry(structure, levelCy)
   const chunkGx = cx * CHUNK
@@ -147,7 +184,7 @@ export function latticeStructureSlice(structure, cx, cz, lowerCy, profile) {
     })
   )).values()].sort(compareLocalCells)
   const localBounds = { x0: 0, z0: 0, x1: CHUNK - 1, z1: CHUNK - 1 }
-  return deepFreeze({
+  const slice = deepFreeze({
     id: structure.id,
     family: structure.family,
     kind: structure.kind,
@@ -163,6 +200,8 @@ export function latticeStructureSlice(structure, cx, cz, lowerCy, profile) {
     bridgeCells,
     bridgeSegments,
   })
+  byKey.set(sliceKey, slice)
+  return slice
 }
 
 function resetLatticeRaster(data, structure, geometry) {
@@ -330,28 +369,24 @@ export function latticeNearestAnchor(anchors, gx, gz) {
 
 function lethalVoidHalf(structure, slice, profile, cx, cz) {
   if (!slice || slice.voidCells.length === 0) return null
+  const cached = LETHAL_VOID_CACHE.get(slice)
+  if (cached) return cached
+  const half = computeLethalVoidHalf(structure, slice, profile, cx, cz)
+  if (half) LETHAL_VOID_CACHE.set(slice, half)
+  return half
+}
+
+function computeLethalVoidHalf(structure, slice, profile, cx, cz) {
   const anchors = structure.anchors.filter(
     (anchor) => anchor.levelCy === slice.levelCy
   )
   if (anchors.length === 0) return null
   const chunkGx = cx * CHUNK
   const chunkGz = cz * CHUNK
-  const cells = slice.voidCells.map(({ lx, lz }) => {
-    const gx = chunkGx + lx
-    const gz = chunkGz + lz
-    const nearest = latticeNearestAnchor(anchors, gx, gz)
+  return lethalVoidHalfFromSlice(structure, slice, (lx, lz) => {
+    const nearest = latticeNearestAnchor(anchors, chunkGx + lx, chunkGz + lz)
     const exposureM = latticeEffectiveExposureM(nearest, profile)
-    return {
-      lx,
-      lz,
-      deathYmm: Math.round((slice.levelCy * LAYER_H - exposureM) * 1000),
-    }
-  })
-  return deepFreeze({
-    id: structure.id,
-    family: structure.family,
-    lowerCy: slice.lowerCy,
-    cells,
+    return Math.round((slice.levelCy * LAYER_H - exposureM) * 1000)
   })
 }
 
@@ -370,11 +405,11 @@ export function stampLatticeStructure(data, structure, profile) {
   resetLatticeRaster(data, structure, geometry)
   stampRetainedBoundaryRails(data, geometry)
 
-  data.multilevelStructure = structure
-  data.multilevelUp = data.cy < structure.topCy
+  data.structure = structure
+  data.structureUp = data.cy < structure.topCy
     ? latticeStructureSlice(structure, data.cx, data.cz, data.cy, profile)
     : null
-  data.multilevelDown = data.cy > structure.baseCy
+  data.structureDown = data.cy > structure.baseCy
     ? latticeStructureSlice(structure, data.cx, data.cz, data.cy - 1, profile)
     : null
   stampStructureVerticalLinks(data, structure)
@@ -386,14 +421,14 @@ export function stampLatticeStructure(data, structure, profile) {
   stampChamberCueRails(data, structure)
   data.lethalVoidUp = lethalVoidHalf(
     structure,
-    data.multilevelUp,
+    data.structureUp,
     profile,
     data.cx,
     data.cz
   )
   data.lethalVoidDown = lethalVoidHalf(
     structure,
-    data.multilevelDown,
+    data.structureDown,
     profile,
     data.cx,
     data.cz

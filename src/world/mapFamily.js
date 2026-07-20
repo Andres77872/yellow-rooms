@@ -187,11 +187,28 @@ function selectedProfile(config) {
   return { family, profile }
 }
 
+// Chunk builds and per-frame structure validation resolve the same profile
+// thousands of times. Raw profiles are static once a config is built, so cache
+// the frozen normalized profile by raw-profile identity; a stable identity
+// also lets downstream planner caches key on the resolved profile object.
+const RESOLVED_PROFILE_CACHE = new WeakMap()
+
 // Resolve exactly one selected family. Invalid explicit selections fail before
 // generation can construct or partially stamp ChunkData.
 export function resolveMapFamily(config = DEFAULT_WORLD_CONFIG) {
   const { family, profile } = selectedProfile(config)
-  return normalizeProfile(family, profile, true)
+  if (!isRecord(profile)) return normalizeProfile(family, profile, true)
+
+  const cached = RESOLVED_PROFILE_CACHE.get(profile)?.get(family)
+  if (cached) return cached
+  const normalized = normalizeProfile(family, profile, true)
+  let byFamily = RESOLVED_PROFILE_CACHE.get(profile)
+  if (!byFamily) {
+    byFamily = new Map()
+    RESOLVED_PROFILE_CACHE.set(profile, byFamily)
+  }
+  byFamily.set(family, normalized)
+  return normalized
 }
 
 function applySewerSettings(config, profile) {

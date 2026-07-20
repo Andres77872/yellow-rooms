@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { ChunkData } from '../ChunkData.js'
-import { collectInteriorDressing, PROP_TINT, SIGN_TINT } from '../props.js'
+import { collectInteriorDressing, PROP_TINT, SIGN_TINT } from '../objects/dressing/index.js'
 import {
   CELL,
   CHUNK,
@@ -240,7 +240,7 @@ describe('collectInteriorDressing', () => {
     data.setPassageV(5, 8, PASSAGE_WIDE)
     data.setPassageV(5, 10, PASSAGE_DOOR)
     data.lamps.push({ lx: 7, lz: 12, lit: true })
-    data.multilevelStructure = Object.freeze({
+    data.structure = Object.freeze({
       id: 17,
       family: MAP_FAMILY_TOWER,
       kind: 'towerSkybridge',
@@ -252,13 +252,13 @@ describe('collectInteriorDressing', () => {
         Object.freeze({ slot: 'anchorFloor', kind: 'fixture', gx: 7, gz: 12, cy: 4, axis: 'z', side: 1, salt: 0x745105 }),
       ]),
     })
-    const descriptorBefore = structuredClone(data.multilevelStructure)
+    const descriptorBefore = structuredClone(data.structure)
 
     const first = collectInteriorDressing(data)
     const second = collectInteriorDressing(data)
 
     expect(second).toEqual(first)
-    expect(data.multilevelStructure).toEqual(descriptorBefore)
+    expect(data.structure).toEqual(descriptorBefore)
     expect(first.signs.some(isTint(SIGN_TINT.blade))).toBe(true)
     expect(first.signs.some(isTint(SIGN_TINT.exit))).toBe(true)
     expect(first.props.some(isTint(PROP_TINT.clock))).toBe(true)

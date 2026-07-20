@@ -1,7 +1,7 @@
 import { CELL, CHUNK, CHUNK_WORLD, layerY } from '../world/constants.js'
 import { RNG } from '../world/core/rng.js'
-import { chunkMultilevelRooms } from '../world/multilevel.js'
-import { chunkStairs, stairStrip } from '../world/slab.js'
+import { chunkMultilevelRooms } from '../world/structures/multilevel.js'
+import { chunkStairs, stairStrip } from '../world/structures/slab.js'
 
 export const EXIT_FLOORS = Object.freeze([-5, -4, -3, -2, -1, 1, 2, 3, 4, 5])
 export const EXIT_REACH = 1.8

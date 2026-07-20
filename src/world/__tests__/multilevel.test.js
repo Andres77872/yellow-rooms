@@ -3,7 +3,7 @@ import { DEFAULT_WORLD_CONFIG } from '../config.js'
 import { CHUNK, LOAD_RADIUS } from '../constants.js'
 import { hash2i } from '../core/hash.js'
 import { layerSeed, SALT_LAYER } from '../layerSeed.js'
-import * as multilevelApi from '../multilevel.js'
+import * as multilevelApi from '../structures/multilevel.js'
 
 const {
   chunkMultilevelRooms,
@@ -68,7 +68,7 @@ function globalCells(slice, cx, cz, field) {
   }))
 }
 
-const STRUCTURE_ADAPTERS_PATH = '../structureAdapters.js'
+const STRUCTURE_ADAPTERS_PATH = '../structures/contract.js'
 
 async function validateStructureFixture(structure, ownership) {
   let api

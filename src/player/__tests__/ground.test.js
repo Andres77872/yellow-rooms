@@ -4,8 +4,8 @@ import { moveAndCollide } from '../collision.js'
 import { buildChunk } from '../../world/pipeline.js'
 import { ChunkData } from '../../world/ChunkData.js'
 import { ChunkManager } from '../../world/ChunkManager.js'
-import { buildStairCells } from '../../world/stairCells.js'
-import { slabContract, STAIR_DX, STAIR_DZ } from '../../world/slab.js'
+import { buildStairCells } from '../../world/structures/stairCells.js'
+import { slabContract, STAIR_DX, STAIR_DZ } from '../../world/structures/slab.js'
 import { DEFAULT_WORLD_CONFIG } from '../../world/config.js'
 import {
   MAP_FAMILY_LATTICE,
@@ -13,11 +13,11 @@ import {
   MAP_FAMILY_SEWER,
   MAP_FAMILY_TOWER,
 } from '../../world/mapTypes.js'
-import { structureAdapterFor } from '../../world/structureAdapters.js'
+import { structureAdapterFor } from '../../world/structures/contract.js'
 import {
   STRUCTURE_KIND_LATTICE,
   STRUCTURE_KIND_TOWER,
-} from '../../world/structureContracts.js'
+} from '../../world/structures/contract.js'
 import {
   CELL,
   CHUNK,
@@ -97,7 +97,7 @@ function loadedHardVoidFixture(family, { loaded = true, owned = true } = {}) {
     DEFAULT_WORLD_CONFIG.version,
     family
   )
-  data.multilevelStructure = structure
+  data.structure = structure
   data.lethalVoidDown = {
     id,
     family,
@@ -113,7 +113,7 @@ function loadedHardVoidFixture(family, { loaded = true, owned = true } = {}) {
       cy: 1,
       cz: 0,
       data,
-      multilevelStructure: structure,
+      structure: structure,
     })
   }
   const adapter = structureAdapterFor(structure)

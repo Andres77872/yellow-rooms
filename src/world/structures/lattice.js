@@ -1,11 +1,16 @@
-import { CHUNK } from './constants.js'
-import { hash2i, hash3i } from './core/hash.js'
-import { deepFreeze } from './mapFamily.js'
-import { MAP_FAMILY_LATTICE } from './mapTypes.js'
+import { CHUNK } from '../constants.js'
+import { hash2i, hash3i } from '../core/hash.js'
+import { deepFreeze } from '../mapFamily.js'
+import { MAP_FAMILY_LATTICE } from '../mapTypes.js'
 import {
-  MAX_MULTILEVEL_TOP_CY,
+  MAX_STRUCTURE_TOP_CY,
+  STRUCTURE_VERTICAL_PERIOD,
+  bandBaseAtLevel as sharedBandBaseAtLevel,
+  bandIndexAtBase as sharedBandIndexAtBase,
+  districtCoordinate as sharedDistrictCoordinate,
+  plannerHash,
   polygonCandidates,
-} from './multilevel.js'
+} from './districtBand.js'
 
 export const LATTICE_STRUCTURE_KIND = 'latticeDistrict'
 
@@ -71,7 +76,7 @@ export const LATTICE_DESCRIPTOR_REASONS = Object.freeze({
 })
 
 const DISTRICT_CHUNKS = 3
-const VERTICAL_PERIOD = 17
+const VERTICAL_PERIOD = STRUCTURE_VERTICAL_PERIOD
 const ANCHORS_PER_AXIS = 5
 const ANCHOR_LOCAL_COORDINATES = Object.freeze([3, 11, 20, 29, 38])
 const FLOOR_BAND_WIDTHS = Object.freeze([
@@ -106,6 +111,25 @@ const SALTS = Object.freeze({
 const LATTICE_POLYGON_CONFIG = Object.freeze({
   districtChunks: DISTRICT_CHUNKS,
 })
+
+// Streaming, per-frame ownership validation, and audits all recover the same
+// immutable district descriptor. Cache it like the multilevel planner does so
+// the anchor/candidate/Kruskal recomputation runs once per district instead of
+// once per lookup. Canonical profiles pin every planner input except cycleRate,
+// so the profile contributes only that pair to the key. Null results (bands
+// with no structure) are cached too — they are the common case.
+const STRUCTURE_CACHE = new Map()
+const STRUCTURE_CACHE_LIMIT = 512
+
+function structureCacheKey(seed, districtX, districtZ, baseCy, profile) {
+  return `${seed >>> 0}:${districtX},${districtZ},${baseCy}:` +
+    `${profile.cycleRate[0]},${profile.cycleRate[1]}`
+}
+
+// analyzeLatticeDescriptor is pure over a frozen descriptor + profile, and the
+// stamp path re-validates the same descriptor several times per chunk build.
+// Key by descriptor identity (WeakMap) and profile identity (inner Map).
+const ANALYSIS_CACHE = new WeakMap()
 
 const isRecord = (value) =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -227,35 +251,29 @@ export function latticeSliceCoordinates(structure) {
 }
 
 function districtCoordinate(chunkCoordinate) {
-  return Math.floor(chunkCoordinate / DISTRICT_CHUNKS)
-}
-
-function plannerHash(seed, salt, districtX, bandIndex, districtZ) {
-  return hash3i(
-    ((seed >>> 0) ^ salt) | 0,
-    districtX,
-    bandIndex,
-    districtZ
-  )
-}
-
-function verticalPhase(seed, districtX, districtZ) {
-  return hash3i(
-    ((seed >>> 0) ^ SALTS.verticalPhase) | 0,
-    districtX,
-    0,
-    districtZ
-  ) % VERTICAL_PERIOD
+  return sharedDistrictCoordinate(chunkCoordinate, DISTRICT_CHUNKS)
 }
 
 function bandBaseAtLevel(seed, districtX, districtZ, levelCy) {
-  const phase = verticalPhase(seed, districtX, districtZ)
-  return phase + Math.floor((levelCy - phase) / VERTICAL_PERIOD) * VERTICAL_PERIOD
+  return sharedBandBaseAtLevel(
+    seed,
+    SALTS.verticalPhase,
+    districtX,
+    districtZ,
+    levelCy,
+    VERTICAL_PERIOD
+  )
 }
 
 function bandIndexAtBase(seed, districtX, districtZ, baseCy) {
-  const phase = verticalPhase(seed, districtX, districtZ)
-  return (baseCy - phase) / VERTICAL_PERIOD
+  return sharedBandIndexAtBase(
+    seed,
+    SALTS.verticalPhase,
+    districtX,
+    districtZ,
+    baseCy,
+    VERTICAL_PERIOD
+  )
 }
 
 function floorOffsetAtGridIndex(index, widths) {
@@ -673,6 +691,24 @@ export function analyzeLatticeDescriptor(structure, profile) {
       LATTICE_DESCRIPTOR_REASONS.orphanDescriptor
     )
   }
+  const cacheable = Object.isFrozen(structure)
+  if (cacheable) {
+    const cached = ANALYSIS_CACHE.get(structure)?.get(profile)
+    if (cached) return cached
+  }
+  const analysis = computeLatticeAnalysis(structure, profile)
+  if (cacheable) {
+    let byProfile = ANALYSIS_CACHE.get(structure)
+    if (!byProfile) {
+      byProfile = new Map()
+      ANALYSIS_CACHE.set(structure, byProfile)
+    }
+    byProfile.set(profile, analysis)
+  }
+  return analysis
+}
+
+function computeLatticeAnalysis(structure, profile) {
   if (
     structure.family !== MAP_FAMILY_LATTICE ||
     structure.kind !== LATTICE_STRUCTURE_KIND ||
@@ -1018,7 +1054,7 @@ export function analyzeLatticeDescriptor(structure, profile) {
 
 function structureForDistrict(seed, districtX, districtZ, baseCy, profile) {
   const topCy = baseCy + profile.levels - 1
-  if (topCy > MAX_MULTILEVEL_TOP_CY) return null
+  if (topCy > MAX_STRUCTURE_TOP_CY) return null
 
   const bandIndex = bandIndexAtBase(seed, districtX, districtZ, baseCy)
   if (!Number.isInteger(bandIndex)) return null
@@ -1093,7 +1129,7 @@ function structureForDistrict(seed, districtX, districtZ, baseCy, profile) {
 
 // Recover one immutable bounded Lattice descriptor from any declared
 // participant and floor in its three-level band. Runtime carriage remains the
-// existing data.multilevelStructure field; this planner exposes no parallel DTO.
+// existing data.structure field; this planner exposes no parallel DTO.
 export function latticeStructureAt(seed, cx, cz, levelCy, profile) {
   if (
     !isCanonicalLatticeProfile(profile) ||
@@ -1106,13 +1142,25 @@ export function latticeStructureAt(seed, cx, cz, levelCy, profile) {
   const districtX = districtCoordinate(cx)
   const districtZ = districtCoordinate(cz)
   const baseCy = bandBaseAtLevel(seed, districtX, districtZ, levelCy)
-  const structure = structureForDistrict(
-    seed,
-    districtX,
-    districtZ,
-    baseCy,
-    profile
-  )
+  const key = structureCacheKey(seed, districtX, districtZ, baseCy, profile)
+  let structure
+  if (STRUCTURE_CACHE.has(key)) {
+    structure = STRUCTURE_CACHE.get(key)
+    STRUCTURE_CACHE.delete(key)
+    STRUCTURE_CACHE.set(key, structure)
+  } else {
+    structure = structureForDistrict(
+      seed,
+      districtX,
+      districtZ,
+      baseCy,
+      profile
+    )
+    STRUCTURE_CACHE.set(key, structure)
+    if (STRUCTURE_CACHE.size > STRUCTURE_CACHE_LIMIT) {
+      STRUCTURE_CACHE.delete(STRUCTURE_CACHE.keys().next().value)
+    }
+  }
   if (
     !structure ||
     levelCy < structure.baseCy ||

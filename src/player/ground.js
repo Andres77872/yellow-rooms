@@ -1,5 +1,5 @@
 import { CELL, LAYER_H, layerY, worldToCell } from '../world/constants.js'
-import { DEFAULT_MULTILEVEL_CONFIG } from '../world/multilevel.js'
+import { DEFAULT_MULTILEVEL_CONFIG } from '../world/structures/multilevel.js'
 
 // Walkable ground height for a feet point on layer `cy` (v8). Pure — shared by
 // the player controller and the AI path follower, and unit-tested headless.

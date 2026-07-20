@@ -1,6 +1,6 @@
-import { ZONE_OFFICE, ZONE_PILLARS, ZONE_WAREHOUSE } from './constants.js'
-import { domainWarp2D, valueNoise2D } from './core/noise.js'
-import { hash3i } from './core/hash.js'
+import { ZONE_OFFICE, ZONE_PILLARS, ZONE_WAREHOUSE } from '../constants.js'
+import { domainWarp2D, valueNoise2D } from '../core/noise.js'
+import { hash3i } from '../core/hash.js'
 
 const U32 = 4294967296
 

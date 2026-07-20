@@ -1,5 +1,5 @@
-import { cIdx, CHUNK } from './constants.js'
-import { PASSAGE_WALL, PASSAGE_WIDE, CELL_LOBBY, CELL_STAIR } from './mapTypes.js'
+import { cIdx, CHUNK } from '../constants.js'
+import { PASSAGE_WALL, PASSAGE_WIDE, CELL_LOBBY, CELL_STAIR } from '../mapTypes.js'
 import {
   chunkStairs,
   stairStrip,

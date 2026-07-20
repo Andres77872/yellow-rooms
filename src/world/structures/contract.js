@@ -1,21 +1,114 @@
+import { CHUNK } from '../constants.js'
+import { DEFAULT_WORLD_CONFIG } from '../config.js'
 import {
-  CHUNK,
-} from './constants.js'
-import {
-  STRUCTURE_KIND_LATTICE,
-  STRUCTURE_KIND_OFFICE,
-  STRUCTURE_KIND_TOWER,
-  compareStructureParticipants,
-  structureOwnershipAt,
-  structureFamily,
-  structureKind,
-} from './structureContracts.js'
+  LATTICE_STRUCTURE_KIND,
+  hasCanonicalLatticeOwnershipShape,
+  latticeStructureAt,
+} from './lattice.js'
+import { deepFreeze, resolveMapFamily } from '../mapFamily.js'
 import {
   MAP_FAMILY_LATTICE,
   MAP_FAMILY_OFFICE,
   MAP_FAMILY_TOWER,
-} from './mapTypes.js'
-import { hasCanonicalLatticeOwnershipShape } from './lattice.js'
+} from '../mapTypes.js'
+import { multilevelStructureAt } from './multilevel.js'
+import { TOWER_STRUCTURE_KIND, towerStructureAt } from './tower.js'
+
+export const STRUCTURE_KIND_OFFICE = 'officeMultilevel'
+export const STRUCTURE_KIND_TOWER = TOWER_STRUCTURE_KIND
+export const STRUCTURE_KIND_LATTICE = LATTICE_STRUCTURE_KIND
+
+const LEGACY_OFFICE_STRUCTURE_KINDS = Object.freeze([
+  'bridged',
+  'openVoid',
+  STRUCTURE_KIND_OFFICE,
+])
+
+const isRecord = (value) =>
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+
+const hasOwn = (value, key) =>
+  value !== null &&
+  typeof value === 'object' &&
+  Object.prototype.hasOwnProperty.call(value, key)
+
+export function structureFamily(structure) {
+  return hasOwn(structure, 'family') && structure.family !== undefined
+    ? structure.family
+    : MAP_FAMILY_OFFICE
+}
+
+export function structureKind(structure) {
+  const family = structureFamily(structure)
+  const kind = structure?.kind ?? null
+  if (
+    family === MAP_FAMILY_OFFICE &&
+    LEGACY_OFFICE_STRUCTURE_KINDS.includes(kind)
+  ) {
+    return STRUCTURE_KIND_OFFICE
+  }
+  return kind
+}
+
+// Canonical participant arrays sort by (cz, cx). Consumers import this one
+// comparator rather than silently choosing a different coordinate priority.
+export function compareStructureParticipants(a, b) {
+  return a.cz - b.cz || a.cx - b.cx
+}
+
+function noStructure(family, levelCy) {
+  return deepFreeze({ family, levelCy, hasRoom: false })
+}
+
+// Resolve the selected family's canonical descriptor without consulting
+// generated ChunkData. Tower planning is still release-inert: only a valid,
+// explicitly enabled forced profile can reach it until the activation gate.
+export function structureAt(
+  seed,
+  cx,
+  cz,
+  cy,
+  config = DEFAULT_WORLD_CONFIG
+) {
+  const profile = resolveMapFamily(config)
+  const { family } = profile
+  const structure = family === MAP_FAMILY_OFFICE
+    ? multilevelStructureAt(seed, cx, cz, cy, config)
+    : family === MAP_FAMILY_TOWER
+      ? towerStructureAt(seed, cx, cz, cy, profile) ?? noStructure(family, cy)
+      : family === MAP_FAMILY_LATTICE
+        ? latticeStructureAt(seed, cx, cz, cy, profile) ?? noStructure(family, cy)
+    : noStructure(family, cy)
+  return deepFreeze(structure)
+}
+
+// Canonical ownership is evidence from a family lookup, not an inference from
+// a descriptor's non-empty participant list. The identity field is always
+// `id`; legacy `canonicalId` aliases are deliberately not projected here.
+export function structureOwnershipAt(
+  seed,
+  cx,
+  cz,
+  cy,
+  config = DEFAULT_WORLD_CONFIG
+) {
+  const structure = structureAt(seed, cx, cz, cy, config)
+  const ownsChunk = structure?.hasRoom === true &&
+    Array.isArray(structure.participants) &&
+    structure.participants.some(
+      (participant) => participant?.cx === cx && participant?.cz === cz
+    )
+  if (!ownsChunk) return null
+
+  return deepFreeze({
+    cx,
+    cz,
+    id: structure.id,
+    family: structureFamily(structure),
+    baseCy: structure.baseCy,
+    topCy: structure.topCy,
+  })
+}
 
 const EMPTY_PARTICIPANTS = Object.freeze([])
 const EMPTY_REGIONS = Object.freeze([])
@@ -38,12 +131,6 @@ const REASON_ORDER = Object.freeze([
   'vertical-band',
   'family-mismatch',
 ])
-
-const isRecord = (value) =>
-  value !== null && typeof value === 'object' && !Array.isArray(value)
-
-const hasOwn = (value, key) =>
-  isRecord(value) && Object.prototype.hasOwnProperty.call(value, key)
 
 const participantKey = (participant) => `${participant.cx},${participant.cz}`
 
@@ -408,7 +495,7 @@ export function validateLethalVoidHalf(data, half, direction) {
   }
   validateLethalVoidCells(half.cells, reasons)
 
-  const structure = data?.multilevelStructure
+  const structure = data?.structure
   const adapter = structureAdapterFor(structure)
   if (isRecord(structure)) {
     if (structure.id !== half.id) addReason(reasons, 'canonical-id-mismatch')
@@ -554,6 +641,27 @@ export function structureAdapterFor(structure) {
   return adapter?.family === family ? adapter : null
 }
 
+// Streaming re-validates every loaded structure chunk each frame, and chunks
+// of one district share the same frozen descriptor. The verdict is pure over
+// (seed, config, descriptor, level), so cache it by those identities; frozen
+// results keep the shared evidence safe from caller mutation.
+const RUNTIME_VALIDATION_CACHE = new WeakMap()
+
+function cachedRuntimeValidation(structure, config) {
+  if (!Object.isFrozen(structure)) return null
+  let byConfig = RUNTIME_VALIDATION_CACHE.get(structure)
+  if (!byConfig) {
+    byConfig = new WeakMap()
+    RUNTIME_VALIDATION_CACHE.set(structure, byConfig)
+  }
+  let verdicts = byConfig.get(config)
+  if (!verdicts) {
+    verdicts = new Map()
+    byConfig.set(config, verdicts)
+  }
+  return verdicts
+}
+
 // Runtime ownership must be resolved through the same explicit adapter and
 // canonical structure lookup for apertures, residency, visibility, and lethal
 // planes. Keep that fail-closed evidence construction in one place so runtime
@@ -568,6 +676,23 @@ export function validatedRuntimeStructure(
   const adapter = structureAdapterFor(structure)
   if (!adapter) return null
 
+  const verdicts = config !== null && typeof config === 'object'
+    ? cachedRuntimeValidation(structure, config)
+    : null
+  const verdictKey = `${seed >>> 0}:${levelCy}`
+  if (verdicts?.has(verdictKey)) return verdicts.get(verdictKey)
+  const verdict = computeRuntimeStructureValidation(
+    seed,
+    config,
+    structure,
+    levelCy,
+    adapter
+  )
+  verdicts?.set(verdictKey, verdict)
+  return verdict
+}
+
+function computeRuntimeStructureValidation(seed, config, structure, levelCy, adapter) {
   try {
     const participants = adapter.expectedParticipants(structure)
     const ownership = participants.flatMap((participant) => {
@@ -585,7 +710,11 @@ export function validatedRuntimeStructure(
       return claim ? [claim] : []
     })
     if (!adapter.validateStructure(structure, { ownership }).ok) return null
-    return { adapter, ownership, participants }
+    return Object.freeze({
+      adapter,
+      ownership: Object.freeze(ownership),
+      participants,
+    })
   } catch {
     return null
   }

@@ -48,10 +48,10 @@ const participantsInclude = (structure, chunk) => structure.participants.some(
 )
 
 function sharedStructure(a, b, axis) {
-  const structure = a.multilevelStructure
+  const structure = a.structure
   if (
     !structure ||
-    structure.id !== b.multilevelStructure?.id ||
+    structure.id !== b.structure?.id ||
     structure.bridgeAxis !== axis ||
     a.cy !== b.cy ||
     a.cy < structure.baseCy ||

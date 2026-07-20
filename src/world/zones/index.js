@@ -20,4 +20,4 @@ export {
   sampleRegionValue,
   selectRawZone,
   selectZone,
-} from '../regions.js'
+} from './regions.js'

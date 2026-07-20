@@ -24,11 +24,11 @@ import {
   SPACE_ROLE_SERVER,
   SPACE_ROLE_STORAGE,
 } from '../world/mapTypes.js'
-import { structureKind } from '../world/structureContracts.js'
-import { structureAdapterFor } from '../world/structureAdapters.js'
+import { structureKind } from '../world/structures/contract.js'
+import { structureAdapterFor } from '../world/structures/contract.js'
 import { worldConfigForFamilyOrOffice } from '../world/mapFamily.js'
-import { TOWER_STRUCTURE_KIND } from '../world/tower.js'
-import { LATTICE_STRUCTURE_KIND } from '../world/lattice.js'
+import { TOWER_STRUCTURE_KIND } from '../world/structures/tower.js'
+import { LATTICE_STRUCTURE_KIND } from '../world/structures/lattice.js'
 
 export const validStructureBounds = (bounds) =>
   Number.isInteger(bounds?.x0) &&
@@ -260,7 +260,7 @@ export function describeCell(data, lx, lz) {
     const role = SPACE_ROLE_LABEL[data.spaceRole[i]]
     parts.push(`space ${space}${role ? ` ${role}` : ''}`)
   }
-  const structure = data.multilevelStructure
+  const structure = data.structure
   if (structure?.hasRoom) {
     parts.push(`#${structure.id}`)
     const adapter = structureAdapterFor(structure)

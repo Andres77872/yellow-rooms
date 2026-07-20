@@ -1,10 +1,10 @@
-import { CHUNK, LOAD_RADIUS, fmod } from './constants.js'
-import { hash3i, hash3f } from './core/hash.js'
+import { CHUNK, LOAD_RADIUS, fmod } from '../constants.js'
+import { hash3i, hash3f } from '../core/hash.js'
 import {
   structureAt,
   structureOwnershipAt,
-} from './structureContracts.js'
-import { structureAdapterFor } from './structureAdapters.js'
+} from './contract.js'
+import { structureAdapterFor } from './contract.js'
 
 // Slab contracts (v9). The slab between layer cy and cy+1 is ONE shared object,
 // keyed by the LOWER layer — the vertical analogue of the border contracts in

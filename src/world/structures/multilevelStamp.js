@@ -1,4 +1,4 @@
-import { CHUNK, LAYER_H, cIdx } from './constants.js'
+import { CHUNK, LAYER_H, cIdx } from '../constants.js'
 import {
   CELL_ATRIUM,
   CELL_BRIDGE,
@@ -10,13 +10,13 @@ import {
   PASSAGE_WIDE,
   WALL_RAIL,
   WALL_WINDOW,
-} from './mapTypes.js'
-import { deepFreeze } from './mapFamily.js'
+} from '../mapTypes.js'
+import { deepFreeze } from '../mapFamily.js'
 import {
-  chunkMultilevelRooms,
   multilevelStructureSlice,
   multilevelTerminalOverlookLine,
 } from './multilevel.js'
+import { lethalVoidHalfFromSlice } from './lethalVoid.js'
 import { stampStructureVerticalLinks } from './stairStamp.js'
 import {
   TOWER_STRUCTURE_KIND,
@@ -325,18 +325,12 @@ function stampTowerDoorSocket(data, structure) {
 }
 
 function lethalVoidHalf(structure, slice) {
-  if (!slice?.hasRoom || slice.voidCells.length === 0) return null
   const deathYmm = Math.round(structure.baseCy * LAYER_H * 1000)
-  return deepFreeze({
-    id: structure.id,
-    family: structure.family,
-    lowerCy: slice.lowerCy,
-    cells: slice.voidCells.map(({ lx, lz }) => ({ lx, lz, deathYmm })),
-  })
+  return lethalVoidHalfFromSlice(structure, slice, () => deathYmm)
 }
 
 // Stamp one slice of the already-planned canonical Tower descriptor. The
-// descriptor remains data.multilevelStructure; all other fields below are the
+// descriptor remains data.structure; all other fields below are the
 // established multilevel, stair, and lethal slab-half carriers.
 export function stampTowerStructure(data, structure) {
   if (
@@ -364,9 +358,9 @@ export function stampTowerStructure(data, structure) {
     stampGallery(data, down, roomOpenings)
   }
 
-  data.multilevelStructure = structure
-  data.multilevelUp = up.hasRoom ? up : null
-  data.multilevelDown = down.hasRoom ? down : null
+  data.structure = structure
+  data.structureUp = up.hasRoom ? up : null
+  data.structureDown = down.hasRoom ? down : null
   stampStructureVerticalLinks(data, structure)
   // A stair flank can coincide with a deck rail edge. Both require the same
   // closed collision guard, but the deck owns its final visual rail semantic.
@@ -374,20 +368,23 @@ export function stampTowerStructure(data, structure) {
   // stair primitive has written its complete canonical halves.
   stampTowerPerimeter(data, structure, surface, roomOpenings)
   stampTowerDoorSocket(data, structure)
-  data.lethalVoidUp = lethalVoidHalf(structure, data.multilevelUp)
-  data.lethalVoidDown = lethalVoidHalf(structure, data.multilevelDown)
+  data.lethalVoidUp = lethalVoidHalf(structure, data.structureUp)
+  data.lethalVoidDown = lethalVoidHalf(structure, data.structureDown)
 }
 
-export function stampMultilevelRooms(data, seed, cx, cy, cz, config) {
-  const { structure, up, down } = chunkMultilevelRooms(seed, cx, cz, cy, config)
-  if (!structure.hasRoom) return
+// Same pre-resolved descriptor contract as the tower/lattice stamps: the
+// pipeline passes the canonical structure; the stamp derives its own slices.
+export function stampMultilevelRooms(data, structure) {
+  if (!structure?.hasRoom) return
+  const up = multilevelStructureSlice(structure, data.cx, data.cz, data.cy)
+  const down = multilevelStructureSlice(structure, data.cx, data.cz, data.cy - 1)
 
   const surface = down.hasRoom ? down : up
   carveStructure(data, surface)
-  if (cy === structure.baseCy) stampBottom(data, surface)
+  if (data.cy === structure.baseCy) stampBottom(data, surface)
   else stampGallery(data, down)
 
-  data.multilevelStructure = structure
-  data.multilevelUp = up.hasRoom ? up : null
-  data.multilevelDown = down.hasRoom ? down : null
+  data.structure = structure
+  data.structureUp = up.hasRoom ? up : null
+  data.structureDown = down.hasRoom ? down : null
 }

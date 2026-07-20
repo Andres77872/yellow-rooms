@@ -18,6 +18,12 @@ import {
   PLANT_W,
   RACK_W,
   RACK_D,
+  SOFA_W,
+  SOFA_D,
+  BOOKSHELF_W,
+  BOOKSHELF_D,
+  WHITEBOARD_W,
+  WHITEBOARD_D,
   cIdx,
 } from './constants.js'
 import { hash2i } from './core/hash.js'
@@ -60,6 +66,9 @@ export const FURN_COPIER = 5
 export const FURN_COOLER = 6
 export const FURN_PLANT = 7
 export const FURN_RACK = 8
+export const FURN_SOFA = 9
+export const FURN_BOOKSHELF = 10
+export const FURN_WHITEBOARD = 11
 
 // facing: the direction the piece fronts toward, 0=+z 1=-z 2=+x 3=-x.
 const DIR = [
@@ -212,6 +221,9 @@ const PIECE_DIMS = {
   [FURN_COOLER]: [COOLER_W, COOLER_W],
   [FURN_PLANT]: [PLANT_W, PLANT_W],
   [FURN_RACK]: [RACK_W, RACK_D],
+  [FURN_SOFA]: [SOFA_W, SOFA_D],
+  [FURN_BOOKSHELF]: [BOOKSHELF_W, BOOKSHELF_D],
+  [FURN_WHITEBOARD]: [WHITEBOARD_W, WHITEBOARD_D],
 }
 
 // Wall-hugging placement of one piece kind across candidate wall cells.
@@ -271,10 +283,12 @@ function furnishStorage(data, space, candidates, added) {
   return placed
 }
 
-// Break room: the water cooler is mandatory, then a small table set and a
-// cabinet or plant — the one place the office admits people were here.
+// Break room: the water cooler is mandatory, then a sofa against a wall, a
+// small table set and a cabinet or plant — the one place the office admits
+// people were here.
 function furnishBreak(data, space, candidates, added) {
   furnishRow(data, candidates, added, FURN_COOLER, 1, 1, FURN_SALT ^ 0xb3e9)
+  furnishRow(data, candidates, added, FURN_SOFA, 1, 0.7, FURN_SALT ^ 0x50fa)
   if (space.area >= 8) furnishConference(data, space, candidates, added)
   furnishStorage(data, space, candidates, added)
 }
@@ -288,6 +302,8 @@ function furnishSpecial(data, space, candidates, added, role) {
       const n0 = added.length
       furnishConference(data, space, candidates, added)
       if (added.length === n0) furnishWorkstations(data, space, candidates, added)
+      // The whiteboard is the meeting room's wall landmark.
+      furnishRow(data, candidates, added, FURN_WHITEBOARD, 1, 0.8, FURN_SALT ^ 0x9b1d)
       return
     }
     case SPACE_ROLE_BREAK:
@@ -298,7 +314,9 @@ function furnishSpecial(data, space, candidates, added, role) {
       furnishRow(data, candidates, added, FURN_CABINET, 1, 0.4, FURN_SALT ^ 0xc0b1)
       return
     case SPACE_ROLE_ARCHIVE:
-      furnishRow(data, candidates, added, FURN_CABINET, 4, 0.6, FURN_SALT ^ 0xa2c4)
+      // Book rows with an occasional cabinet — the shelf wall is the read.
+      furnishRow(data, candidates, added, FURN_BOOKSHELF, 4, 0.6, FURN_SALT ^ 0xb00c)
+      furnishRow(data, candidates, added, FURN_CABINET, 1, 0.5, FURN_SALT ^ 0xa2c4)
       return
     case SPACE_ROLE_SERVER:
       furnishRow(data, candidates, added, FURN_RACK, 5, 0.6, FURN_SALT ^ 0x5e22)

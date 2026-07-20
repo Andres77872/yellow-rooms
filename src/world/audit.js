@@ -5,8 +5,8 @@ import {
   ZONE_WAREHOUSE,
   cIdx,
 } from './constants.js'
-import { STAIR_DX, STAIR_DZ } from './slab.js'
-import { multilevelTerminalOverlookLine } from './multilevel.js'
+import { STAIR_DX, STAIR_DZ } from './structures/slab.js'
+import { multilevelTerminalOverlookLine } from './structures/multilevel.js'
 import { PASSAGE_WALL, PASSAGE_WIDE } from './mapTypes.js'
 import {
   CELL_ATRIUM,
@@ -20,7 +20,7 @@ import {
   WALL_WINDOW,
 } from './mapTypes.js'
 import { chunksShareOfficeDistrict } from './zones/officePlan.js'
-import { roomDominanceConfig } from './regions.js'
+import { roomDominanceConfig } from './zones/regions.js'
 import {
   auditChunkFamilyRegistrations,
   auditLethalVoidHalf,
@@ -379,8 +379,8 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
           }
         }
 
-        const roomUp = lower.multilevelUp
-        const roomDown = upper.multilevelDown
+        const roomUp = lower.structureUp
+        const roomDown = upper.structureDown
         if (roomUp || roomDown) audit.multilevelRooms++
         if (!!roomUp !== !!roomDown) {
           audit.orphanedMultilevelHalves++
@@ -388,7 +388,7 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
             cx,
             cy,
             cz,
-            half: roomUp ? 'lower.multilevelUp' : 'upper.multilevelDown',
+            half: roomUp ? 'lower.structureUp' : 'upper.structureDown',
           })
         } else if (roomUp && roomDown) {
           pairedLowerRooms.add(key3(cx, cy, cz))
@@ -493,41 +493,41 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
       }
     }
 
-    if (data.multilevelDown) {
+    if (data.structureDown) {
       if (!pairedUpperRooms.has(key)) {
         const reasons = (
           data.mapFamily === MAP_FAMILY_TOWER &&
-          data.multilevelDown.kind === 'towerSkybridge'
+          data.structureDown.kind === 'towerSkybridge'
         ) || (
           data.mapFamily === MAP_FAMILY_LATTICE &&
-          data.multilevelDown.kind === 'latticeDistrict'
+          data.structureDown.kind === 'latticeDistrict'
         )
           ? []
-          : multilevelSurfaceErrors(data, data.multilevelDown)
+          : multilevelSurfaceErrors(data, data.structureDown)
         if (reasons.length > 0) {
           const [cx, cy, cz] = key.split(',').map(Number)
           audit.invalidMultilevelRooms++
           details.invalidMultilevelRooms.push({
             cx,
-            cy: data.multilevelDown.lowerCy ?? cy - 1,
+            cy: data.structureDown.lowerCy ?? cy - 1,
             cz,
-            id: data.multilevelDown.id,
+            id: data.structureDown.id,
             reasons,
-            boundaryHalf: 'upper.multilevelDown',
+            boundaryHalf: 'upper.structureDown',
           })
         }
       }
     }
-    if (data.multilevelUp && !pairedLowerRooms.has(key)) {
+    if (data.structureUp && !pairedLowerRooms.has(key)) {
       const reasons = (
         data.mapFamily === MAP_FAMILY_TOWER &&
-        data.multilevelUp.kind === 'towerSkybridge'
+        data.structureUp.kind === 'towerSkybridge'
       ) || (
         data.mapFamily === MAP_FAMILY_LATTICE &&
-        data.multilevelUp.kind === 'latticeDistrict'
+        data.structureUp.kind === 'latticeDistrict'
       )
         ? []
-        : multilevelLowerHalfErrors(data, data.multilevelUp)
+        : multilevelLowerHalfErrors(data, data.structureUp)
       if (reasons.length > 0) {
         const [cx, cy, cz] = key.split(',').map(Number)
         audit.invalidMultilevelRooms++
@@ -535,9 +535,9 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
           cx,
           cy,
           cz,
-          id: data.multilevelUp.id,
+          id: data.structureUp.id,
           reasons,
-          boundaryHalf: 'lower.multilevelUp',
+          boundaryHalf: 'lower.structureUp',
         })
       }
     }
@@ -546,11 +546,11 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
     // categorically stray. In particular, the bottom hall has `up` but no
     // `down`, and must remain completely window/rail-free.
     if (
-      data.multilevelDown ||
+      data.structureDown ||
       (data.mapFamily === MAP_FAMILY_TOWER &&
-        data.multilevelStructure?.kind === 'towerSkybridge') ||
+        data.structure?.kind === 'towerSkybridge') ||
       (data.mapFamily === MAP_FAMILY_LATTICE &&
-        data.multilevelStructure?.kind === 'latticeDistrict')
+        data.structure?.kind === 'latticeDistrict')
     ) continue
     let count = 0
     for (let i = 0; i < data.wallFeatureV.length; i++) {
@@ -955,7 +955,7 @@ function multilevelLowerHalfErrors(lower, room) {
         reasons.push('room identity missing from footprint')
       }
       // Only the actual base is an atrium hall. A lower chunk in any later
-      // slab is itself a gallery stamped from its `multilevelDown` slice.
+      // slab is itself a gallery stamped from its `structureDown` slice.
       if (lower.cy === room.baseCy && lower.cellKind[cIdx(x, z)] !== CELL_ATRIUM) {
         reasons.push('lower atrium semantic missing')
       }
@@ -1170,8 +1170,8 @@ function auditMultilevelStructureGroups(chunks) {
   for (const [key, data] of chunks) {
     const [cx, cy, cz] = key.split(',').map(Number)
     for (const [half, slice] of [
-      ['up', data.multilevelUp],
-      ['down', data.multilevelDown],
+      ['up', data.structureUp],
+      ['down', data.structureDown],
     ]) {
       if (!slice) continue
       slices++
@@ -1232,8 +1232,8 @@ function auditMultilevelStructureGroups(chunks) {
         if (lowerCy < canonical.baseCy || lowerCy >= canonical.topCy) continue
         const upper = chunks.get(key3(cx, lowerCy + 1, cz))
         if (!upper || !chunkIntersectsGlobalBounds(lower, global)) continue
-        const up = lower.multilevelUp
-        const down = upper.multilevelDown
+        const up = lower.structureUp
+        const down = upper.structureDown
         if (
           up?.id === id && down?.id === id &&
           up.lowerCy === lowerCy && down.lowerCy === lowerCy

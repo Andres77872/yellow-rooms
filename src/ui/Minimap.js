@@ -1,5 +1,5 @@
 import { CELL, CHUNK, FOV, COL_HALF, chunkKey3 } from '../world/constants.js'
-import { STAIR_DX, STAIR_DZ } from '../world/slab.js'
+import { STAIR_DX, STAIR_DZ } from '../world/structures/slab.js'
 import { CELL_BRIDGE, WALL_RAIL, WALL_WINDOW } from '../world/mapTypes.js'
 
 // Player-explored HUD minimap — a small circular "locator" disc, north-up and

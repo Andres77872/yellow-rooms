@@ -1,8 +1,16 @@
-import { CHUNK, LOAD_RADIUS, fmod } from './constants.js'
-import { DEFAULT_WORLD_CONFIG } from './config.js'
-import { hash3f, hash3i } from './core/hash.js'
+import { CHUNK, LOAD_RADIUS, fmod } from '../constants.js'
+import { DEFAULT_WORLD_CONFIG } from '../config.js'
+import { hash3f, hash3i } from '../core/hash.js'
+import {
+  MAX_STRUCTURE_TOP_CY,
+  bandBaseAtLevel as sharedBandBaseAtLevel,
+  districtCoordinate,
+  polygonCandidates,
+  verticalBandPhase,
+} from './districtBand.js'
 
-export const MAX_MULTILEVEL_TOP_CY = 64
+export { polygonCandidates } from './districtBand.js'
+export const MAX_MULTILEVEL_TOP_CY = MAX_STRUCTURE_TOP_CY
 
 // Canonical multi-floor structures are planned in horizontal districts and
 // vertical bands. A structure always occupies exactly two adjacent chunks and
@@ -176,24 +184,25 @@ export function multilevelConfig(config) {
 
 export const normalizeMultilevelConfig = multilevelConfig
 
-function districtCoordinate(chunkCoordinate, districtChunks) {
-  return Math.floor(chunkCoordinate / districtChunks)
-}
-
 function verticalPhase(seed, districtX, districtZ, normalized) {
-  return hash3i(
-    (seed ^ normalized.baseSalt) | 0,
+  return verticalBandPhase(
+    seed,
+    normalized.baseSalt,
     districtX,
-    0,
-    districtZ
-  ) % normalized.verticalPeriod
+    districtZ,
+    normalized.verticalPeriod
+  )
 }
 
 function bandBaseAtLevel(seed, districtX, districtZ, levelCy, normalized) {
-  const phase = verticalPhase(seed, districtX, districtZ, normalized)
-  return phase + Math.floor(
-    (levelCy - phase) / normalized.verticalPeriod
-  ) * normalized.verticalPeriod
+  return sharedBandBaseAtLevel(
+    seed,
+    normalized.baseSalt,
+    districtX,
+    districtZ,
+    levelCy,
+    normalized.verticalPeriod
+  )
 }
 
 function bandIndexAtBase(seed, districtX, districtZ, baseCy, normalized) {
@@ -230,93 +239,10 @@ export function multilevelBandBase(
   )
 }
 
-function participantKey(cx, cz) {
-  return `${cx},${cz}`
-}
-
-function compareParticipants(a, b) {
-  return a.cz - b.cz || a.cx - b.cx
-}
-
-function canonicalParticipants(participants) {
-  const unique = new Map()
-  for (const participant of participants) {
-    const key = participantKey(participant.cx, participant.cz)
-    if (!unique.has(key)) unique.set(key, participant)
-  }
-  return [...unique.values()].sort(compareParticipants)
-}
-
 function hasParticipant(structure, cx, cz) {
   return structure.participants.some(
     (participant) => participant.cx === cx && participant.cz === cz
   )
-}
-
-export function polygonCandidates(
-  districtX,
-  districtZ,
-  normalized,
-  { shape, bridgeAxis = null, avoidSpawn = false } = {}
-) {
-  if (
-    shape === 'lattice3x3' &&
-    Number.isInteger(districtX) &&
-    Number.isInteger(districtZ) &&
-    Number.isInteger(normalized?.districtChunks) &&
-    normalized.districtChunks === 3
-  ) {
-    const originCx = districtX * normalized.districtChunks
-    const originCz = districtZ * normalized.districtChunks
-    const participants = []
-    for (let localZ = 0; localZ < 3; localZ++) {
-      for (let localX = 0; localX < 3; localX++) {
-        participants.push({
-          cx: originCx + localX,
-          cz: originCz + localZ,
-        })
-      }
-    }
-    if (
-      avoidSpawn &&
-      participants.some(({ cx, cz }) => participantKey(cx, cz) === '0,0')
-    ) return []
-    return [{ anchor: participants[0], participants }]
-  }
-
-  // Pair mode retains its exact legacy enumeration and byte order. Lattice is
-  // deliberately one complete polygon rather than a generalized polyomino.
-  if (
-    shape !== 'pair' ||
-    (bridgeAxis !== 'x' && bridgeAxis !== 'z') ||
-    !Number.isInteger(normalized?.districtChunks) ||
-    normalized.districtChunks < 2
-  ) return []
-
-  const K = normalized.districtChunks
-  const originCx = districtX * K
-  const originCz = districtZ * K
-  const candidates = []
-
-  const xCount = bridgeAxis === 'x' ? K - 1 : K
-  const zCount = bridgeAxis === 'z' ? K - 1 : K
-  for (let localZ = 0; localZ < zCount; localZ++) {
-    for (let localX = 0; localX < xCount; localX++) {
-      const anchor = { cx: originCx + localX, cz: originCz + localZ }
-      const neighbor = bridgeAxis === 'x'
-        ? { cx: anchor.cx + 1, cz: anchor.cz }
-        : { cx: anchor.cx, cz: anchor.cz + 1 }
-      if (
-        avoidSpawn &&
-        (participantKey(anchor.cx, anchor.cz) === '0,0' ||
-          participantKey(neighbor.cx, neighbor.cz) === '0,0')
-      ) continue
-      const participants = canonicalParticipants([anchor, neighbor])
-      if (participants.length !== 2) continue
-      candidates.push({ anchor: participants[0], participants })
-    }
-  }
-  return candidates
 }
 
 // Keep the legacy { anchor, neighbor } view as a thin projection while office
@@ -765,42 +691,6 @@ export function multilevelStructureSlice(structure, cx, cz, lowerCy) {
     bridgeCells,
     hasRoom: true,
   })
-}
-
-// Operation-oriented aliases plus seed/chunk helpers for callers that do not
-// already hold the global structure descriptor.
-export const multilevelSlice = multilevelStructureSlice
-export const sliceMultilevelStructure = multilevelStructureSlice
-
-export function multilevelSliceAt(
-  seed,
-  cx,
-  cz,
-  lowerCy,
-  config = DEFAULT_WORLD_CONFIG
-) {
-  const structure = multilevelStructureAt(seed, cx, cz, lowerCy, config)
-  return multilevelStructureSlice(structure, cx, cz, lowerCy)
-}
-
-export function multilevelUpSlice(
-  seed,
-  cx,
-  cz,
-  cy,
-  config = DEFAULT_WORLD_CONFIG
-) {
-  return multilevelSliceAt(seed, cx, cz, cy, config)
-}
-
-export function multilevelDownSlice(
-  seed,
-  cx,
-  cz,
-  cy,
-  config = DEFAULT_WORLD_CONFIG
-) {
-  return multilevelSliceAt(seed, cx, cz, cy - 1, config)
 }
 
 // A floor sees the same global `structure` from either participant. `up` is

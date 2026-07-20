@@ -19,14 +19,14 @@ import {
   MAP_FAMILY_SEWER,
   MAP_FAMILY_TOWER,
 } from '../mapTypes.js'
-import { slabContract } from '../slab.js'
-import { structureAt } from '../structureContracts.js'
+import { slabContract } from '../structures/slab.js'
+import { structureAt } from '../structures/contract.js'
 import {
   chunkMultilevelRooms,
   multilevelBandBase,
   multilevelConfig,
   multilevelContract,
-} from '../multilevel.js'
+} from '../structures/multilevel.js'
 import { discoverTowerFixture } from './tower-fixture.js'
 
 const LOAD_COUNT = (LOAD_RADIUS * 2 + 1) ** 2 * (LOAD_RADIUS_Y * 2 + 1)
@@ -93,8 +93,8 @@ function makeManager(seed = 1, config = ordinaryConfig()) {
       cx: request.cx,
       cy: request.cy,
       cz: request.cz,
-      multilevelStructure: structure,
-      data: { multilevelStructure: structure },
+      structure: structure,
+      data: { structure: structure },
       apertures: [],
       lamps: [],
       group: { visible: true },
@@ -132,8 +132,8 @@ function registerStructureAperture(seed, config, structure, slice, participant, 
     cy,
     cz: participant.cz,
     data: {
-      multilevelStructure: structure,
-      multilevelUp: slice,
+      structure: structure,
+      structureUp: slice,
     },
     apertures: [],
   })
@@ -174,8 +174,8 @@ function makeTowerManager(seed, config) {
       cx: request.cx,
       cy: request.cy,
       cz: request.cz,
-      multilevelStructure: structure,
-      data: { multilevelStructure: structure },
+      structure: structure,
+      data: { structure: structure },
       apertures: [],
       lamps: [],
       group: { visible: true },
@@ -254,8 +254,8 @@ function makeLatticeManager(seed, config) {
       cx: request.cx,
       cy: request.cy,
       cz: request.cz,
-      multilevelStructure: structure,
-      data: { multilevelStructure: structure },
+      structure: structure,
+      data: { structure: structure },
       apertures: [],
       lamps: [],
       group: { visible: true },
@@ -428,8 +428,8 @@ describe('ChunkManager streaming queue', () => {
       cx: playerChunk.cx,
       cy: structure.baseCy + LOAD_RADIUS_Y + 1,
       cz: playerChunk.cz,
-      multilevelStructure: forged,
-      data: { multilevelStructure: forged },
+      structure: forged,
+      data: { structure: forged },
     })).toBe(false)
 
     widened.structure = forged
@@ -514,7 +514,7 @@ describe('ChunkManager streaming queue', () => {
         const key = chunkKey3(participant.cx, cy, participant.cz)
         structureKeys.push(key)
         const chunk = cm.chunks.get(key)
-        expect(chunk?.multilevelStructure).toBe(structure)
+        expect(chunk?.structure).toBe(structure)
         expect(chunk?.group.visible).toBe(true)
       }
     }
@@ -528,7 +528,7 @@ describe('ChunkManager streaming queue', () => {
     // A normal column never inherits the tall structure's vertical lifetime.
     const ordinary = [...cm.chunks.values()].find((chunk) =>
       chunk.cy === structure.baseCy &&
-      !chunk.multilevelStructure &&
+      !chunk.structure &&
       Math.abs(chunk.cx - playerChunk.cx) <= LOAD_RADIUS &&
       Math.abs(chunk.cz - playerChunk.cz) <= LOAD_RADIUS
     )
@@ -561,8 +561,8 @@ describe('ChunkManager streaming queue', () => {
       cx: playerChunk.cx,
       cy: structure.baseCy + 5,
       cz: playerChunk.cz + 2,
-      multilevelStructure: null,
-      data: { multilevelStructure: null },
+      structure: null,
+      data: { structure: null },
       apertures: [],
       lamps: [],
       group: { visible: true },
@@ -617,7 +617,7 @@ describe('bounded Tower streaming evidence (task 4.3 RED)', () => {
       for (const participant of structure.participants) {
         const key = chunkKey3(participant.cx, cy, participant.cz)
         structureKeys.push(key)
-        expect(cm.chunks.get(key)?.multilevelStructure).toEqual(structure)
+        expect(cm.chunks.get(key)?.structure).toEqual(structure)
       }
     }
     expect(structureKeys).toHaveLength(6)
@@ -655,8 +655,8 @@ describe('bounded Tower streaming evidence (task 4.3 RED)', () => {
       cx: participant.cx,
       cy: structure.topCy,
       cz: participant.cz,
-      multilevelStructure: crossCanonical,
-      data: { multilevelStructure: crossCanonical },
+      structure: crossCanonical,
+      data: { structure: crossCanonical },
     })).toBe(false)
 
     // Reused office vocabulary is not Tower registration. Residency and
@@ -668,8 +668,8 @@ describe('bounded Tower streaming evidence (task 4.3 RED)', () => {
       cx: participant.cx,
       cy: structure.topCy,
       cz: participant.cz,
-      multilevelStructure: inferredKind,
-      data: { multilevelStructure: inferredKind },
+      structure: inferredKind,
+      data: { structure: inferredKind },
     })).toBe(false)
   })
 })
@@ -714,7 +714,7 @@ describe('bounded Lattice streaming evidence (task 5.3 RED)', () => {
         const key = chunkKey3(participant.cx, cy, participant.cz)
         structureKeys.push(key)
         coveredFloors.add(cy)
-        expect(cm.chunks.get(key)?.multilevelStructure).toEqual(structure)
+        expect(cm.chunks.get(key)?.structure).toEqual(structure)
       }
     }
     expect(structureKeys).toHaveLength(27)
@@ -776,8 +776,8 @@ describe('bounded Lattice streaming evidence (task 5.3 RED)', () => {
         cx: participant.cx,
         cy: structure.topCy,
         cz: participant.cz,
-        multilevelStructure: descriptor,
-        data: { multilevelStructure: descriptor },
+        structure: descriptor,
+        data: { structure: descriptor },
       })).toBe(false)
     }
   })

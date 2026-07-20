@@ -7,7 +7,7 @@ import {
   PASSAGE_WIDE,
   WALL_PLAIN,
 } from './mapTypes.js'
-import { lethalVoidCellAt } from './structureAdapters.js'
+import { lethalVoidCellAt } from './structures/contract.js'
 
 function stairHoleAt(stair, lx, lz) {
   return !!stair?.run?.some((cell) => cell.lx === lx && cell.lz === lz)
@@ -95,14 +95,14 @@ export class ChunkData {
     // Global immutable descriptor for the tall structure intersecting this
     // chunk/floor, if any. Runtime streaming uses its participant chunks and
     // inclusive vertical range without widening the world's normal Y radius.
-    this.multilevelStructure = null
-    // Canonical per-slab slices of a possibly tall structure. `multilevelUp`
-    // describes this layer's ceiling and `multilevelDown` its floor. Middle
+    this.structure = null
+    // Canonical per-slab slices of a possibly tall structure. `structureUp`
+    // describes this layer's ceiling and `structureDown` its floor. Middle
     // storeys legitimately own both. Rectilinear Office/Tower slices retain a
     // single bridge line; Lattice slices instead carry derived bridgeSegments
     // while the same voidCells mask remains the slab-hole authority.
-    this.multilevelUp = null
-    this.multilevelDown = null
+    this.structureUp = null
+    this.structureDown = null
     // Descriptor-scoped lethal slab halves. A lower layer owns `Up` for its
     // ceiling; the layer above owns the byte-equal `Down` half for its floor.
     // Null remains the only default for Office, Sewer, and unstamped families.
@@ -171,13 +171,13 @@ export class ChunkData {
 
   hasCeilHole(lx, lz) {
     return stairHoleAt(this.stairUp, lx, lz) ||
-      multilevelHoleAt(this.multilevelUp, lx, lz) ||
+      multilevelHoleAt(this.structureUp, lx, lz) ||
       lethalVoidCellAt(this, 'up', lx, lz) !== null
   }
 
   hasFloorHole(lx, lz) {
     return stairHoleAt(this.stairDown, lx, lz) ||
-      multilevelHoleAt(this.multilevelDown, lx, lz) ||
+      multilevelHoleAt(this.structureDown, lx, lz) ||
       lethalVoidCellAt(this, 'down', lx, lz) !== null
   }
 

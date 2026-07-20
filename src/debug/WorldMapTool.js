@@ -9,6 +9,7 @@ import {
   COL_HALF,
   MONUMENTAL_COL_HALF,
   FOV,
+  SPAWN_WORLD,
   chunkKey3,
   worldToCell,
 } from '../world/constants.js'
@@ -43,8 +44,7 @@ export { multilevelAuditBox, structureAtCell, formatMultilevelStructure, formatM
 
 const LOGW = 322
 const LOGH = 322
-const HUBC = (CHUNK / 2) | 0
-const SPAWN = (HUBC + 0.5) * CELL
+const SPAWN = SPAWN_WORLD
 
 // World-gen top-down map for the thin-wall model, one floor (v13 layer) at a
 // time. Draws wall edges, columns, border openings, lamps (lit/dead), stair
@@ -481,7 +481,7 @@ export class WorldMapTool {
         const d = this._chunkData(ccx, ccz)
         if (!d) continue
         knownChunks++
-        const structure = d.multilevelStructure
+        const structure = d.structure
         if (structure?.hasRoom) {
           structuresByKey.set(
             `${structure.id}:${structure.baseCy}:${structure.topCy}`,

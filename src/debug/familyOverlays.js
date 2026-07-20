@@ -5,9 +5,9 @@
 import { CELL, CHUNK, CHUNK_WORLD } from '../world/constants.js'
 import { CELL_ATRIUM, CELL_BRIDGE } from '../world/mapTypes.js'
 import { auditLethalVoidHalf } from '../world/familyAudit.js'
-import { structureFamily, structureKind } from '../world/structureContracts.js'
-import { TOWER_STRUCTURE_KIND } from '../world/tower.js'
-import { LATTICE_STRUCTURE_KIND } from '../world/lattice.js'
+import { structureFamily, structureKind } from '../world/structures/contract.js'
+import { TOWER_STRUCTURE_KIND } from '../world/structures/tower.js'
+import { LATTICE_STRUCTURE_KIND } from '../world/structures/lattice.js'
 import {
   LATTICE_EDGE_COLORS,
   SPACE_ROLE_PALETTE,
@@ -41,7 +41,7 @@ function lethalHalves(d) {
 }
 
 function chunkParticipant(d, ccx, ccz) {
-  const structure = d.multilevelStructure
+  const structure = d.structure
   if (!structure?.hasRoom) return null
   const participates = Array.isArray(structure.participants) &&
     structure.participants.some((p) => p.cx === ccx && p.cz === ccz)

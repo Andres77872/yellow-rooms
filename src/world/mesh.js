@@ -26,12 +26,16 @@ import {
   cIdx,
 } from './constants.js'
 import { collectDoorways } from './doors.js'
-import { pushDoorFrame, pushDoorLeaves, pushWindowTrim } from './trimwork.js'
-import { collectInteriorDressing } from './props.js'
-import { pushFurnitureModel } from './furnitureModels.js'
+import {
+  pushDoorFrame,
+  pushDoorLeaves,
+  pushWindowTrim,
+  collectInteriorDressing,
+  pushFurnitureModel,
+} from './objects/index.js'
 import { hash2i } from './core/hash.js'
 import { lampPanelTint } from './lampCharacter.js'
-import { STAIR_E, STAIR_S, STAIR_W } from './slab.js'
+import { STAIR_E, STAIR_S, STAIR_W } from './structures/slab.js'
 import {
   COLUMN_FURNITURE,
   COLUMN_MONUMENTAL,
@@ -196,7 +200,7 @@ function collectHoles(data, ceiling) {
 // to answer the one-cell halo queried by appendHoleRims without generating the
 // neighbouring chunk.
 function multilevelHoleOutsideChunk(data, lx, lz) {
-  const room = data.multilevelUp
+  const room = data.structureUp
   if (!room?.hasRoom) return false
   const gx = data.cx * CHUNK + lx
   const gz = data.cz * CHUNK + lz
@@ -260,8 +264,9 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
     const sz = vertical ? CELL : THICK
     if (feature === WALL_WINDOW) {
       // Collision-solid sill + header (wallpaper); the joinery (casings, stool,
-      // glazing) comes from the shared trimwork builder, with a deterministic
-      // per-window tone selecting cross / single-bar / venetian-blind glazing.
+      // glazing) comes from the shared objects/joinery builder, with a
+      // deterministic per-window tone selecting cross / single-bar /
+      // venetian-blind glazing.
       inst.push({ px, py: WINDOW_SILL_H / 2, pz, sx, sy: WINDOW_SILL_H, sz })
       inst.push({
         px,
@@ -356,8 +361,15 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
   // supported structural span, not a paper-thin strip floating over the hall.
   // They belong to the lower/slab-owner chunk and sit below the retained bridge
   // underside, well above player head height.
-  if (data.multilevelUp?.bridgeCells.length) {
-    const room = data.multilevelUp
+  // Lattice slices carry bridgeCells but no bridgeAxis/bridgeLine; without the
+  // guard the beam math below degenerates to NaN instance transforms that
+  // poison the shared wall batch's bounding sphere.
+  if (
+    data.structureUp?.bridgeCells.length &&
+    (data.structureUp.bridgeAxis === 'x' || data.structureUp.bridgeAxis === 'z') &&
+    Number.isInteger(data.structureUp.bridgeLine)
+  ) {
+    const room = data.structureUp
     const { x0, z0, x1, z1 } = room.bounds
     const alongX = room.bridgeAxis === 'x'
     const alongCenter = alongX
@@ -487,7 +499,7 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
   }
 
   // --- Furniture (collision-real pieces from ChunkData.furniture) ---
-  // Multi-part models (furnitureModels.js) batched into one instanced draw
+  // Multi-part models (objects/furniture/) batched into one instanced draw
   // with per-part tints. These are the ONLY props the collision raster knows
   // about: their cells carry COLUMN_FURNITURE and the player sweeps the
   // precise piece AABBs.

@@ -1,12 +1,17 @@
-import { CHUNK } from './constants.js'
-import { hash2i, hash3i } from './core/hash.js'
-import { layerSeed } from './layerSeed.js'
-import { deepFreeze } from './mapFamily.js'
-import { MAP_FAMILY_TOWER } from './mapTypes.js'
+import { CHUNK } from '../constants.js'
+import { hash2i, hash3i } from '../core/hash.js'
+import { layerSeed } from '../layerSeed.js'
+import { deepFreeze } from '../mapFamily.js'
+import { MAP_FAMILY_TOWER } from '../mapTypes.js'
 import {
-  MAX_MULTILEVEL_TOP_CY,
+  MAX_STRUCTURE_TOP_CY,
+  STRUCTURE_VERTICAL_PERIOD,
+  bandBaseAtLevel as sharedBandBaseAtLevel,
+  bandIndexAtBase as sharedBandIndexAtBase,
+  districtCoordinate as sharedDistrictCoordinate,
+  plannerHash,
   polygonCandidates,
-} from './multilevel.js'
+} from './districtBand.js'
 
 export const TOWER_STRUCTURE_KIND = 'towerSkybridge'
 
@@ -77,7 +82,7 @@ export function hasExactTowerSocketKinds(kinds) {
 // always remains one finite adjacent pair across three floors regardless of how
 // many independent districts can be recovered elsewhere in the world.
 const DISTRICT_CHUNKS = 4
-const VERTICAL_PERIOD = 17
+const VERTICAL_PERIOD = STRUCTURE_VERTICAL_PERIOD
 const LONG_SPAN = CHUNK + 8
 const SHORT_SPAN = 6
 const TOWER_FIXTURE_LAMP_STEP = 4
@@ -114,35 +119,29 @@ function validProfile(profile) {
 }
 
 function districtCoordinate(chunkCoordinate) {
-  return Math.floor(chunkCoordinate / DISTRICT_CHUNKS)
-}
-
-function plannerHash(seed, salt, districtX, bandIndex, districtZ) {
-  return hash3i(
-    ((seed >>> 0) ^ salt) | 0,
-    districtX,
-    bandIndex,
-    districtZ
-  )
-}
-
-function verticalPhase(seed, districtX, districtZ) {
-  return hash3i(
-    ((seed >>> 0) ^ SALTS.verticalPhase) | 0,
-    districtX,
-    0,
-    districtZ
-  ) % VERTICAL_PERIOD
+  return sharedDistrictCoordinate(chunkCoordinate, DISTRICT_CHUNKS)
 }
 
 function bandBaseAtLevel(seed, districtX, districtZ, levelCy) {
-  const phase = verticalPhase(seed, districtX, districtZ)
-  return phase + Math.floor((levelCy - phase) / VERTICAL_PERIOD) * VERTICAL_PERIOD
+  return sharedBandBaseAtLevel(
+    seed,
+    SALTS.verticalPhase,
+    districtX,
+    districtZ,
+    levelCy,
+    VERTICAL_PERIOD
+  )
 }
 
 function bandIndexAtBase(seed, districtX, districtZ, baseCy) {
-  const phase = verticalPhase(seed, districtX, districtZ)
-  return (baseCy - phase) / VERTICAL_PERIOD
+  return sharedBandIndexAtBase(
+    seed,
+    SALTS.verticalPhase,
+    districtX,
+    districtZ,
+    baseCy,
+    VERTICAL_PERIOD
+  )
 }
 
 function footprintBounds(seed, districtX, districtZ, bandIndex, anchor, bridgeAxis) {
@@ -411,7 +410,7 @@ function landmarkSockets(seed, districtX, districtZ, bandIndex, baseCy, bridgeAx
 
 function structureForDistrict(seed, districtX, districtZ, baseCy, profile) {
   const topCy = baseCy + profile.levels - 1
-  if (topCy > MAX_MULTILEVEL_TOP_CY) return null
+  if (topCy > MAX_STRUCTURE_TOP_CY) return null
 
   const bandIndex = bandIndexAtBase(seed, districtX, districtZ, baseCy)
   if (!Number.isInteger(bandIndex)) return null

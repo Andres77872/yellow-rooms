@@ -1,11 +1,11 @@
 import { CHUNK_WORLD, CELL, layerY } from './constants.js'
 import { generateChunk } from './generate.js'
-import { latticeStructureSlice } from './latticeStamp.js'
+import { latticeStructureSlice } from './structures/latticeStamp.js'
 import { resolveMapFamily } from './mapFamily.js'
 import { MAP_FAMILY_LATTICE } from './mapTypes.js'
 import { buildChunkMeshes } from './mesh.js'
-import { buildStairCells } from './stairCells.js'
-import { validatedRuntimeStructure } from './structureAdapters.js'
+import { buildStairCells } from './structures/stairCells.js'
+import { validatedRuntimeStructure } from './structures/contract.js'
 
 function worldApertureRegion(region, cx, cz) {
   return {
@@ -30,7 +30,13 @@ function canonicalLatticeApertureSlice(
       return null
     }
     const expected = latticeStructureSlice(structure, cx, cz, cy, profile)
-    if (!expected || JSON.stringify(slice) !== JSON.stringify(expected)) return null
+    if (!expected) return null
+    // The slice cache makes recomputation return the stamped object itself;
+    // the stringify comparison remains only for descriptors built elsewhere.
+    if (
+      slice !== expected &&
+      JSON.stringify(slice) !== JSON.stringify(expected)
+    ) return null
     return expected
   } catch {
     return null
@@ -102,7 +108,7 @@ export class Chunk {
     this.exitWorld = mesh.exitWorld
     this._mesh = mesh
     this.stairCells = buildStairCells(this.data, cx, cy, cz)
-    this.multilevelStructure = this.data.multilevelStructure
+    this.structure = this.data.structure
 
     // Vertical openings through this chunk's CEILING (slab cy). Stairs expose
     // a point-like centre; multilevel rooms expose exact void regions around
@@ -129,8 +135,8 @@ export class Chunk {
   }
 
   _registerStructureAperture(seed, config) {
-    const structure = this.data.multilevelStructure
-    const slice = this.data.multilevelUp
+    const structure = this.data.structure
+    const slice = this.data.structureUp
     if (!structure || !slice) return
 
     const validated = validatedRuntimeStructure(

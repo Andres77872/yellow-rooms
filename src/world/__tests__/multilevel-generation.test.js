@@ -24,8 +24,8 @@ import {
   multilevelConfig,
   multilevelContract,
   multilevelTerminalOverlookLine,
-} from '../multilevel.js'
-import { structureAt } from '../structureContracts.js'
+} from '../structures/multilevel.js'
+import { structureAt } from '../structures/contract.js'
 import { countChunkComponents } from '../topology.js'
 import { discoverTowerFixture } from './tower-fixture.js'
 
@@ -329,8 +329,8 @@ describe('generated tall structures', () => {
 
     for (const { cx, cz } of structure.participants) {
       const bottom = get(chunks, cx, structure.baseCy, cz)
-      expect(bottom.multilevelStructure).toEqual(structure)
-      expect(bottom.multilevelDown).toBeNull()
+      expect(bottom.structure).toEqual(structure)
+      expect(bottom.structureDown).toBeNull()
       expect(bottom.stairDown).toBeNull()
       expect(bottom.stairUp).toBeNull()
       expect(countChunkComponents(bottom, true)).toBe(1)
@@ -346,8 +346,8 @@ describe('generated tall structures', () => {
       for (const { cx, cz } of structure.participants) {
         const lower = get(chunks, cx, lowerCy, cz)
         const upper = get(chunks, cx, lowerCy + 1, cz)
-        expect(lower.multilevelUp).toEqual(upper.multilevelDown)
-        expect(lower.multilevelUp.lowerCy).toBe(lowerCy)
+        expect(lower.structureUp).toEqual(upper.structureDown)
+        expect(lower.structureUp.lowerCy).toBe(lowerCy)
         expect(lower.stairUp).toBeNull()
         expect(upper.stairDown).toBeNull()
         for (let z = 0; z < CHUNK; z++) {
@@ -355,7 +355,7 @@ describe('generated tall structures', () => {
             expect(lower.hasCeilHole(x, z)).toBe(upper.hasFloorHole(x, z))
           }
         }
-        slabCells += lower.multilevelUp.voidCells.length + lower.multilevelUp.bridgeCells.length
+        slabCells += lower.structureUp.voidCells.length + lower.structureUp.bridgeCells.length
       }
       expect(slabCells).toBe(footprintArea)
       matchingSlabPairs++
@@ -422,9 +422,9 @@ describe('generated tall structures', () => {
       expect(features.rails).toBe(cy === structure.topCy ? 2 : 0)
       for (const { cx, cz } of structure.participants) {
         const data = get(chunks, cx, cy, cz)
-        expect(data.multilevelDown.bridgeCells).toEqual([])
-        expect(data.multilevelDown.globalBridgeLine).toBeNull()
-        for (const { lx, lz } of data.multilevelDown.voidCells) {
+        expect(data.structureDown.bridgeCells).toEqual([])
+        expect(data.structureDown.globalBridgeLine).toBeNull()
+        for (const { lx, lz } of data.structureDown.voidCells) {
           expect(data.hasFloorHole(lx, lz)).toBe(true)
           expect(data.cellKind[cIdx(lx, lz)]).toBe(CELL_VOID)
         }
@@ -476,8 +476,8 @@ describe('generated tall structures', () => {
         featureH: [...data.wallFeatureH],
         cellKind: [...data.cellKind],
         spaceId: [...data.spaceId],
-        up: data.multilevelUp,
-        down: data.multilevelDown,
+        up: data.structureUp,
+        down: data.structureDown,
       }))
     }
     for (const request of requests.reverse()) {
@@ -491,8 +491,8 @@ describe('generated tall structures', () => {
         featureH: [...data.wallFeatureH],
         cellKind: [...data.cellKind],
         spaceId: [...data.spaceId],
-        up: data.multilevelUp,
-        down: data.multilevelDown,
+        up: data.structureUp,
+        down: data.structureDown,
       })).toBe(snapshots.get(key3(request.cx, request.cy, request.cz)))
     }
   })
@@ -542,7 +542,7 @@ describe('tall-structure audit integration', () => {
       const chunks = generateStructure(seed, structure, config)
       const participant = structure.participants[0]
       const lower = get(chunks, participant.cx, structure.baseCy + 1, participant.cz)
-      lower.multilevelUp = null
+      lower.structureUp = null
       const audit = auditLayeredPatch(
         (cx, cy, cz) => get(chunks, cx, cy, cz),
         Math.min(...structure.participants.map((p) => p.cx)),
@@ -656,8 +656,8 @@ describe('generated Tower aperture and bounded-audit integration (task 4.3 RED)'
 
     for (const data of chunks.values()) {
       expect(data.mapFamily).toBe(MAP_FAMILY_TOWER)
-      expect(data.multilevelStructure).toEqual(structure)
-      expect(data.multilevelStructure.landmarkSockets).toEqual(
+      expect(data.structure).toEqual(structure)
+      expect(data.structure.landmarkSockets).toEqual(
         structure.landmarkSockets
       )
     }
@@ -666,8 +666,8 @@ describe('generated Tower aperture and bounded-audit integration (task 4.3 RED)'
       for (const participant of structure.participants) {
         const lower = get(chunks, participant.cx, lowerCy, participant.cz)
         const upper = get(chunks, participant.cx, lowerCy + 1, participant.cz)
-        expect(lower.multilevelUp).toEqual(upper.multilevelDown)
-        expect(lower.multilevelUp).toMatchObject({
+        expect(lower.structureUp).toEqual(upper.structureDown)
+        expect(lower.structureUp).toMatchObject({
           id: structure.id,
           kind: 'towerSkybridge',
           lowerCy,
@@ -708,7 +708,7 @@ describe('generated Tower aperture and bounded-audit integration (task 4.3 RED)'
       cz: inferredParticipant.cz,
       data: {
         ...inferredData,
-        multilevelStructure: inferredKind,
+        structure: inferredKind,
       },
       apertures: [],
     })
@@ -801,7 +801,7 @@ describe('generated Lattice aperture and bounded-audit integration (task 5.3 RED
 
     for (const data of chunks.values()) {
       expect(data.mapFamily).toBe(MAP_FAMILY_LATTICE)
-      expect(data.multilevelStructure).toEqual(structure)
+      expect(data.structure).toEqual(structure)
     }
 
     for (const anchor of structure.anchors) {
@@ -839,15 +839,15 @@ describe('generated Lattice aperture and bounded-audit integration (task 5.3 RED
       for (const participant of structure.participants) {
         const lower = get(chunks, participant.cx, lowerCy, participant.cz)
         const upper = get(chunks, participant.cx, lowerCy + 1, participant.cz)
-        expect(lower.multilevelUp).toEqual(upper.multilevelDown)
-        expect(lower.multilevelUp).toMatchObject({
+        expect(lower.structureUp).toEqual(upper.structureDown)
+        expect(lower.structureUp).toMatchObject({
           id: structure.id,
           kind: 'latticeDistrict',
           lowerCy,
           hasRoom: true,
         })
-        expect(Array.isArray(lower.multilevelUp.bridgeSegments)).toBe(true)
-        bridgeSegments += lower.multilevelUp.bridgeSegments.length
+        expect(Array.isArray(lower.structureUp.bridgeSegments)).toBe(true)
+        bridgeSegments += lower.structureUp.bridgeSegments.length
 
         if (lower.lethalVoidUp || upper.lethalVoidDown) {
           expect(lower.lethalVoidUp).toEqual(upper.lethalVoidDown)
@@ -887,9 +887,9 @@ describe('generated Lattice aperture and bounded-audit integration (task 5.3 RED
           participant.cz
         )
         expect(apertureCells).toEqual(new Set(
-          lower.multilevelUp.voidCells.map(({ lx, lz }) => `${lx},${lz}`)
+          lower.structureUp.voidCells.map(({ lx, lz }) => `${lx},${lz}`)
         ))
-        for (const { lx, lz } of lower.multilevelUp.bridgeCells) {
+        for (const { lx, lz } of lower.structureUp.bridgeCells) {
           expect(apertureCells).not.toContain(`${lx},${lz}`)
         }
         apertureFloors.add(lowerCy)
@@ -904,7 +904,7 @@ describe('generated Lattice aperture and bounded-audit integration (task 5.3 RED
 
     const parityParticipant = structure.participants.find(({ cx, cz }) => {
       const data = get(chunks, cx, structure.baseCy, cz)
-      return data.multilevelUp.voidCells.length > 1
+      return data.structureUp.voidCells.length > 1
     })
     expect(parityParticipant).toBeDefined()
     const parityData = get(
@@ -915,14 +915,14 @@ describe('generated Lattice aperture and bounded-audit integration (task 5.3 RED
     )
 
     const mismatchedSlice = deepFreeze({
-      ...structuredClone(parityData.multilevelUp),
-      voidCells: parityData.multilevelUp.voidCells.slice(1),
+      ...structuredClone(parityData.structureUp),
+      voidCells: parityData.structureUp.voidCells.slice(1),
     })
     const mismatchedSliceChunk = Object.assign(Object.create(Chunk.prototype), {
       cx: parityParticipant.cx,
       cy: structure.baseCy,
       cz: parityParticipant.cz,
-      data: { ...parityData, multilevelUp: mismatchedSlice },
+      data: { ...parityData, structureUp: mismatchedSlice },
       apertures: [],
     })
     mismatchedSliceChunk._registerStructureAperture(seed, config)
@@ -937,7 +937,7 @@ describe('generated Lattice aperture and bounded-audit integration (task 5.3 RED
       cz: parityParticipant.cz,
       data: {
         ...parityData,
-        multilevelStructure: mismatchedGraph,
+        structure: mismatchedGraph,
       },
       apertures: [],
     })

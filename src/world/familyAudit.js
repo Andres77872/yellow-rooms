@@ -34,12 +34,12 @@ import {
   LETHAL_VOID_REASON_ORDER,
   structureAdapterFor,
   validateLethalVoidHalf,
-} from './structureAdapters.js'
+} from './structures/contract.js'
 import {
   STRUCTURE_KIND_LATTICE,
   STRUCTURE_KIND_OFFICE,
   STRUCTURE_KIND_TOWER,
-} from './structureContracts.js'
+} from './structures/contract.js'
 import {
   TOWER_FLOOR_OFFSETS,
   TOWER_LANDMARK_SOCKET_KINDS,
@@ -50,7 +50,7 @@ import {
   towerDeckEndpoints,
   towerParticipantKey,
   towerSliceCoordinates,
-} from './tower.js'
+} from './structures/tower.js'
 import {
   LATTICE_DESCRIPTOR_REASONS,
   LATTICE_FLOOR_OFFSETS,
@@ -60,7 +60,7 @@ import {
   latticeEdgeKey,
   latticeHorizontalCellKey,
   latticeSliceCoordinates,
-} from './lattice.js'
+} from './structures/lattice.js'
 import {
   latticeChamberApproaches,
   latticeChamberPerimeter,
@@ -68,7 +68,7 @@ import {
   latticeFloorGeometry,
   latticeNearestAnchor,
   latticeProjectedSegments,
-} from './latticeStamp.js'
+} from './structures/latticeStamp.js'
 import {
   compareSewerEdges,
   SEWER_DESCRIPTOR_KIND,
@@ -715,7 +715,7 @@ function validateTowerChunkStamp(chunkSource, descriptor, reasons) {
 
   for (const key of expectedKeys) {
     const data = chunks.get(key)
-    const structure = data?.multilevelStructure
+    const structure = data?.structure
     if (
       data?.mapFamily !== MAP_FAMILY_TOWER ||
       structure?.id !== descriptor.id ||
@@ -748,7 +748,7 @@ function validateTowerChunkStamp(chunkSource, descriptor, reasons) {
   const deck = descriptor.decks[0]
   for (const cell of deck.globalCells) {
     const local = towerGlobalCellData(chunks, cell, deck.levelCy)
-    const sliceOwnsDeckCell = local?.data?.multilevelDown?.bridgeCells?.some(
+    const sliceOwnsDeckCell = local?.data?.structureDown?.bridgeCells?.some(
       (candidate) => candidate.lx === local.lx && candidate.lz === local.lz
     )
     if (
@@ -785,7 +785,7 @@ function validateTowerChunkStamp(chunkSource, descriptor, reasons) {
   for (let index = 0; index < endpoints.length; index++) {
     const endpoint = endpoints[index]
     const local = towerGlobalCellData(chunks, endpoint, deck.levelCy)
-    const slice = local?.data?.multilevelDown
+    const slice = local?.data?.structureDown
     const edge = !local
       ? null
       : descriptor.bridgeAxis === 'x'
@@ -1010,7 +1010,7 @@ function auditLatticeRaster(chunks, analysis) {
     const data = chunks.get(key)
     if (
       data?.mapFamily !== MAP_FAMILY_LATTICE ||
-      JSON.stringify(data.multilevelStructure) !== descriptorJson
+      JSON.stringify(data.structure) !== descriptorJson
     ) {
       result.stampMismatch = true
       return result
@@ -1054,7 +1054,7 @@ function auditLatticeRaster(chunks, analysis) {
           }
         }
       }
-      for (const slice of [data.multilevelUp, data.multilevelDown]) {
+      for (const slice of [data.structureUp, data.structureDown]) {
         if (!slice) continue
         const expected = latticeProjectedSegments(
           descriptor,
@@ -1177,12 +1177,12 @@ function auditLatticeRaster(chunks, analysis) {
 function latticeFixtureAudit(fixture) {
   const chunks = latticeChunkMap(fixture?.chunks)
   const descriptorChunks = [...chunks.values()].filter((data) =>
-    data?.multilevelStructure?.kind === STRUCTURE_KIND_LATTICE ||
+    data?.structure?.kind === STRUCTURE_KIND_LATTICE ||
     data?.mapFamily === MAP_FAMILY_LATTICE
   )
   const descriptor = descriptorChunks.find((data) =>
-    isRecord(data?.multilevelStructure)
-  )?.multilevelStructure
+    isRecord(data?.structure)
+  )?.structure
   if (!descriptor) {
     return {
       reasons: [LATTICE_AUDIT_REASONS.orphanDescriptor],
@@ -1197,9 +1197,9 @@ function latticeFixtureAudit(fixture) {
   }
   const descriptorJson = JSON.stringify(descriptor)
   if (descriptorChunks.some((data) =>
-    !isRecord(data.multilevelStructure) ||
-    data.multilevelStructure.id !== descriptor.id ||
-    JSON.stringify(data.multilevelStructure) !== descriptorJson
+    !isRecord(data.structure) ||
+    data.structure.id !== descriptor.id ||
+    JSON.stringify(data.structure) !== descriptorJson
   )) {
     return {
       reasons: [LATTICE_AUDIT_REASONS.canonicalIdMismatch],
@@ -2830,7 +2830,7 @@ function bestPartialLatticeChamber(data, descriptor) {
 }
 
 function partialLatticeGuardGap(data) {
-  const slice = data.multilevelDown ?? data.multilevelUp
+  const slice = data.structureDown ?? data.structureUp
   const cells = slice?.bridgeCells
   if (!Array.isArray(cells) || cells.length < 2) return false
   const xs = [...new Set(cells.map(({ lx }) => lx))]
@@ -2960,7 +2960,7 @@ export function auditChunkFamilyRegistrations(
       }
     }
 
-    const structureDescriptor = data?.multilevelStructure
+    const structureDescriptor = data?.structure
     if (!structureDescriptor) continue
     const structureAdapter = structureAdapterFor(structureDescriptor)
     const structureKind = structureAdapter?.kind ?? null

@@ -9,8 +9,8 @@ import {
   PASSAGE_WALL,
   WALL_RAIL,
 } from '../mapTypes.js'
-import { collectInteriorDressing, PROP_TINT, SIGN_TINT } from '../props.js'
-import { structureAt } from '../structureContracts.js'
+import { collectInteriorDressing, PROP_TINT, SIGN_TINT } from '../objects/dressing/index.js'
+import { structureAt } from '../structures/contract.js'
 
 const FIXED_SEEDS = Object.freeze([0x5a17, 0x7157, 0xc0ffee])
 const REQUIRED_SOCKET_KINDS = Object.freeze([
@@ -183,8 +183,8 @@ function generateTowerFixture(seed, config = forcedTowerConfig()) {
   const approaches = (descriptor.participants ?? []).map((participant) => {
     const data = chunks.get(key3(participant.cx, deck?.levelCy, participant.cz))
     return {
-      id: data?.multilevelDown?.id,
-      levelCy: data?.multilevelDown?.levelCy,
+      id: data?.structureDown?.id,
+      levelCy: data?.structureDown?.levelCy,
       participant: { ...participant },
     }
   })
@@ -424,9 +424,9 @@ function chunkSnapshot(data) {
     cellKind: [...data.cellKind],
     stairUp: data.stairUp,
     stairDown: data.stairDown,
-    multilevelStructure: data.multilevelStructure,
-    multilevelUp: data.multilevelUp,
-    multilevelDown: data.multilevelDown,
+    structure: data.structure,
+    structureUp: data.structureUp,
+    structureDown: data.structureDown,
     lethalVoidUp: data.lethalVoidUp,
     lethalVoidDown: data.lethalVoidDown,
     lamps: data.lamps.map((lamp) => ({ ...lamp })),
@@ -461,8 +461,8 @@ describe('bounded canonical Tower/skybridge generation', () => {
     expect(TOWER_RELEASE_EVIDENCE).toMatchObject({
       family: 'tower',
       byteImpact: 'changed-output',
-      previousVersion: 17,
-      generatorVersion: 18,
+      previousVersion: 18,
+      generatorVersion: 19,
       profileIdentity: 'tower-forced-audit:levels-3:participants-2:skybridge-1',
       seedDerivation: 'fixed-root-seeds(0x5a17,0x7157,0xc0ffee)',
       affectsMaximumHeight: true,
@@ -537,7 +537,7 @@ describe('bounded canonical Tower/skybridge generation', () => {
       }))
 
       for (const data of fixture.chunks.values()) {
-        expect(data.multilevelStructure).not.toHaveProperty('landmarks')
+        expect(data.structure).not.toHaveProperty('landmarks')
         expect(data).not.toHaveProperty('towerStructure')
       }
     }

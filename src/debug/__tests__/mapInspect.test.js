@@ -21,7 +21,7 @@ import {
   MAP_FAMILY_LATTICE,
   SPACE_ROLE_SERVER,
 } from '../../world/mapTypes.js'
-import { structureAt } from '../../world/structureContracts.js'
+import { structureAt } from '../../world/structures/contract.js'
 import { discoverTowerFixture } from '../../world/__tests__/tower-fixture.js'
 
 const LATTICE_SCAN_SEEDS = Object.freeze([0x1a771ce, 0x5a17, 0xc0ffee])

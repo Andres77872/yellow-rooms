@@ -24,12 +24,12 @@ import {
   clearOfficePlanCache,
   officeDistrictCoords,
 } from '../zones/officePlan.js'
-import { warehouseWallH, warehouseWallV } from '../warehouseStructure.js'
+import { warehouseWallH, warehouseWallV } from '../zones/warehouseFragments.js'
 import {
   multilevelBandBase,
   multilevelConfig,
   multilevelContract,
-} from '../multilevel.js'
+} from '../structures/multilevel.js'
 
 function forcedZone(zone) {
   const cfg = structuredClone(CFG)
@@ -419,8 +419,8 @@ describe('multi-chunk office district plan', () => {
 
         const stamped = buildChunk(rootSeed, participant.cx, cy, participant.cz, structureCfg)
         const surface = cy === structure.baseCy
-          ? stamped.multilevelUp
-          : stamped.multilevelDown
+          ? stamped.structureUp
+          : stamped.structureDown
         expect(surface).toEqual(lobby.room)
       }
     }

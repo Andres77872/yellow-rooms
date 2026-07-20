@@ -12,7 +12,7 @@ import {
   ZONE_WAREHOUSE,
   cIdx,
 } from '../constants.js'
-import { buildStairCells } from '../stairCells.js'
+import { buildStairCells } from '../structures/stairCells.js'
 import { buildChunk } from '../pipeline.js'
 import { DEFAULT_WORLD_CONFIG } from '../config.js'
 import { worldConfigForFamily } from '../mapFamily.js'
@@ -22,7 +22,7 @@ import {
   MAP_FAMILY_SEWER,
   MAP_FAMILY_TOWER,
 } from '../mapTypes.js'
-import { structureAt } from '../structureContracts.js'
+import { structureAt } from '../structures/contract.js'
 import { discoverTowerFixture } from './tower-fixture.js'
 
 // Cross-floor pathfinding over hand-built layers: a two-layer mock CM with a

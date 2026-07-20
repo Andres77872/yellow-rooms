@@ -18,9 +18,9 @@ import {
   SPACE_ROLE_SERVER,
   SPACE_ROLE_STORAGE,
 } from '../mapTypes.js'
-import { selectZone } from '../regions.js'
-import { chunkStairs, stairStrip, STAIR_DX, STAIR_DZ } from '../slab.js'
-import { chunkMultilevelRooms } from '../multilevel.js'
+import { selectZone } from './regions.js'
+import { chunkStairs, stairStrip, STAIR_DX, STAIR_DZ } from '../structures/slab.js'
+import { chunkMultilevelRooms } from '../structures/multilevel.js'
 import { bsp } from './ZoneGenerator.js'
 
 // Office planning happens on a district grid above streaming chunks. Boundary

@@ -3,6 +3,7 @@ import {
   CHUNK,
   CHUNK_WORLD,
   CELL,
+  HUB_CELL,
   COL_HALF,
   MONUMENTAL_COL_HALF,
   MAX_COL_HALF,
@@ -24,8 +25,8 @@ import {
   worldToCell,
 } from './constants.js'
 import { DEFAULT_WORLD_CONFIG } from './config.js'
-import { slabContract } from './slab.js'
-import { chunkMultilevelRooms } from './multilevel.js'
+import { slabContract } from './structures/slab.js'
+import { chunkMultilevelRooms } from './structures/multilevel.js'
 import { Chunk } from './Chunk.js'
 import {
   COLUMN_FURNITURE,
@@ -34,9 +35,8 @@ import {
   MAP_FAMILY_TOWER,
   wallFeatureSeesThrough,
 } from './mapTypes.js'
-import { validatedRuntimeStructure } from './structureAdapters.js'
+import { validatedRuntimeStructure } from './structures/contract.js'
 
-const HUB = (CHUNK / 2) | 0
 const UINT32_MAX = 0xffffffff
 const HARD_VOID_PLANE_KEYS = Object.freeze(['deathYmm', 'family', 'id'])
 
@@ -65,7 +65,7 @@ function structureHasParticipant(participants, cx, cz) {
 }
 
 function chunkStructure(chunk) {
-  return chunk?.multilevelStructure ?? chunk?.data?.multilevelStructure ?? null
+  return chunk?.structure ?? chunk?.data?.structure ?? null
 }
 
 // Cross-floor lamp assignment does not widen residency or chunk visibility.
@@ -160,7 +160,7 @@ export class ChunkManager {
     this.config = DEFAULT_WORLD_CONFIG
     // Forced-open clearings applied at generation. The spawn cell (chunk 0,0
     // layer 0 hub) is always cleared so the player never spawns boxed in.
-    this.clearings = [{ cx: 0, cy: 0, cz: 0, lx: HUB, lz: HUB, r: 1 }]
+    this.clearings = [{ cx: 0, cy: 0, cz: 0, lx: HUB_CELL, lz: HUB_CELL, r: 1 }]
     // Vertical openings of loaded chunks (stairs and multilevel rooms). Keys
     // include feature identity so one column/slab can never overwrite another.
     // Bounds feed cross-floor light/sight; chunk coords feed visibility gating.
@@ -624,7 +624,7 @@ export class ChunkManager {
       data.cz !== cz
     ) return null
 
-    const structure = data.multilevelStructure
+    const structure = data.structure
     const validated = this._validatedStructure(structure, cy)
     const adapter = validated?.adapter
     if (

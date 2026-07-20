@@ -16,18 +16,18 @@ import {
 } from '../mapTypes.js'
 import { buildChunk } from '../pipeline.js'
 import { worldConfigForFamily } from '../mapFamily.js'
-import { STAIR_DX, STAIR_DZ } from '../slab.js'
-import { structureAt } from '../structureContracts.js'
+import { STAIR_DX, STAIR_DZ } from '../structures/slab.js'
+import { structureAt } from '../structures/contract.js'
 import {
   OFFICE_STRUCTURE_ADAPTER,
   structureAdapterFor,
   TOWER_STRUCTURE_ADAPTER,
-} from '../structureAdapters.js'
+} from '../structures/contract.js'
 import {
   STRUCTURE_KIND_LATTICE,
   STRUCTURE_KIND_OFFICE,
   STRUCTURE_KIND_TOWER,
-} from '../structureContracts.js'
+} from '../structures/contract.js'
 
 const denseConfig = () => ({
   ...DEFAULT_WORLD_CONFIG,
@@ -116,7 +116,7 @@ function lethalVoidFixture(family = MAP_FAMILY_TOWER, seed = 16031) {
 
   for (const data of [lower, upper]) {
     data.mapFamily = family
-    data.multilevelStructure = descriptor
+    data.structure = descriptor
   }
   lower.lethalVoidUp = structuredClone(half)
   upper.lethalVoidDown = structuredClone(half)
@@ -207,8 +207,8 @@ function authoredTowerVoidFixture(seed = 16031) {
     ],
   }
   fixture.descriptor = descriptor
-  fixture.lower.multilevelStructure = descriptor
-  fixture.upper.multilevelStructure = descriptor
+  fixture.lower.structure = descriptor
+  fixture.upper.structure = descriptor
   return fixture
 }
 
@@ -367,14 +367,14 @@ function damageGeneratedLatticeGuard(chunks, descriptor) {
 }
 
 function replaceGeneratedLatticeDescriptor(chunks, damage) {
-  const descriptor = structuredClone(chunks.values().next().value.multilevelStructure)
+  const descriptor = structuredClone(chunks.values().next().value.structure)
   damage(descriptor)
-  for (const data of chunks.values()) data.multilevelStructure = descriptor
+  for (const data of chunks.values()) data.structure = descriptor
   return descriptor
 }
 
 function auditLatticeFixture(chunks) {
-  const descriptor = chunks.values().next().value.multilevelStructure
+  const descriptor = chunks.values().next().value.structure
   const xs = descriptor.participants.map(({ cx }) => cx)
   const zs = descriptor.participants.map(({ cz }) => cz)
   const x0 = Math.min(...xs)
@@ -406,7 +406,7 @@ function officeAtriumFixture() {
   const id = 0x0ff1ce
   const participants = [{ cx: 0, cz: 0 }, { cx: 1, cz: 0 }]
   const atriumCell = { lx: 5, lz: 5 }
-  data.multilevelStructure = {
+  data.structure = {
     id,
     kind: STRUCTURE_KIND_OFFICE,
     baseCy: 0,
@@ -414,7 +414,7 @@ function officeAtriumFixture() {
     participants,
     anchor: participants[0],
   }
-  data.multilevelDown = {
+  data.structureDown = {
     id,
     hasRoom: true,
     kind: 'openVoid',
@@ -712,7 +712,7 @@ describe('descriptor-scoped lethal void audit (task 3.1 RED)', () => {
     const { lx, lz, deathYmm } = cells[0]
     const validPlane = adapter.hardVoidAt(upper, lx, lz)
     const participants = [{ cx: 1, cz: 0 }, { cx: 2, cz: 0 }]
-    upper.multilevelStructure = {
+    upper.structure = {
       ...descriptor,
       participants,
       anchor: participants[0],
@@ -748,11 +748,11 @@ describe('descriptor-scoped lethal void audit (task 3.1 RED)', () => {
   it('R13/D06 rejects a lethal half whose structure kind has no explicit adapter', () => {
     const { chunks, lower, upper } = lethalVoidFixture(MAP_FAMILY_TOWER)
     const unregistered = {
-      ...lower.multilevelStructure,
+      ...lower.structure,
       kind: 'unregisteredVoidStructure',
     }
-    lower.multilevelStructure = unregistered
-    upper.multilevelStructure = unregistered
+    lower.structure = unregistered
+    upper.structure = unregistered
     expect(structureAdapterFor(unregistered)).toBeNull()
 
     const audit = auditVoidFixture(chunks)

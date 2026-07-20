@@ -20,7 +20,7 @@ import {
   MAP_FAMILY_TOWER,
 } from '../src/world/mapTypes.js'
 import { buildChunk } from '../src/world/pipeline.js'
-import { structureAt } from '../src/world/structureContracts.js'
+import { structureAt } from '../src/world/structures/contract.js'
 
 const FAMILY_ORDER = Object.freeze([
   MAP_FAMILY_OFFICE,
@@ -34,9 +34,9 @@ const DESCRIPTOR_FIELDS = Object.freeze([
   'stairUp',
   'stairDown',
   'sewerDescriptor',
-  'multilevelStructure',
-  'multilevelUp',
-  'multilevelDown',
+  'structure',
+  'structureUp',
+  'structureDown',
   'lethalVoidUp',
   'lethalVoidDown',
 ])
@@ -389,7 +389,7 @@ function measureFunctionalStreaming(context) {
       cy: request.cy,
       cz: request.cz,
       data,
-      multilevelStructure: data.multilevelStructure,
+      structure: data.structure,
       apertures: [],
       lamps: [],
       group: { visible: true },
@@ -397,7 +397,7 @@ function measureFunctionalStreaming(context) {
     }
     this.chunks.set(request.key, chunk)
     buildCount++
-    this._enqueueStructureRequests(data.multilevelStructure)
+    this._enqueueStructureRequests(data.structure)
     this._applyVisibility(chunk)
     peakQueueCount = Math.max(peakQueueCount, this.queue.length)
     peakResidentCount = Math.max(peakResidentCount, this.chunks.size)

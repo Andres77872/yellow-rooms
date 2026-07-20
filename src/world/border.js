@@ -12,7 +12,7 @@ import {
   PASSAGE_WALL,
   PASSAGE_WIDE,
 } from './mapTypes.js'
-import { selectZone } from './regions.js'
+import { selectZone } from './zones/regions.js'
 import {
   chunksShareOfficeDistrict,
   officeDistrictHContract,

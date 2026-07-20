@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { pushDoorFrame, pushDoorLeaves, pushWindowTrim } from '../trimwork.js'
+import { pushDoorFrame, pushDoorLeaves, pushWindowTrim } from '../objects/joinery/index.js'
 import {
   CELL,
   WALL_H,

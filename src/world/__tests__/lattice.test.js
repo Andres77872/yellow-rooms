@@ -3,8 +3,8 @@ import { DEFAULT_WORLD_CONFIG, LATTICE_RELEASE_EVIDENCE } from '../config.js'
 import { CHUNK, WORLD_GEN_VERSION } from '../constants.js'
 import { worldConfigForFamily } from '../mapFamily.js'
 import { MAP_FAMILY_LATTICE } from '../mapTypes.js'
-import { polygonCandidates } from '../multilevel.js'
-import { structureAt } from '../structureContracts.js'
+import { polygonCandidates } from '../structures/multilevel.js'
+import { structureAt } from '../structures/contract.js'
 
 const FIXED_SEEDS = Object.freeze([0x1a771ce, 0x5a17, 0xc0ffee])
 const LATTICE_KIND = 'latticeDistrict'
@@ -29,7 +29,7 @@ const RUNTIME_ENVELOPE_FIELDS = Object.freeze([
   'anchorContexts',
   'participantStructures',
 ])
-const LATTICE_PLANNER_PATH = '../lattice.js'
+const LATTICE_PLANNER_PATH = '../structures/lattice.js'
 
 const participantKey = ({ cx, cz }) => `${cx},${cz}`
 const edgeKey = ({ a, b }) => `${Math.min(a, b)}:${Math.max(a, b)}`
@@ -952,8 +952,8 @@ describe('Lattice graph and malformed-descriptor controls', () => {
 })
 
 describe('Lattice atomic release-state gate', () => {
-  it('[R05-S02..S04][R06-S01..S03][R20-S02][R31-S01..S04][R33-S02][D11] binds the active Lattice profile to v18 pins, corpus identity, and Tower-independent generation', () => {
-    expect(WORLD_GEN_VERSION).toBe(18)
+  it('[R05-S02..S04][R06-S01..S03][R20-S02][R31-S01..S04][R33-S02][D11] binds the active Lattice profile to v19 pins, corpus identity, and Tower-independent generation', () => {
+    expect(WORLD_GEN_VERSION).toBe(19)
     expect(DEFAULT_WORLD_CONFIG.mapFamily.selected).toBe('office')
     expect(Object.fromEntries(Object.entries(DEFAULT_WORLD_CONFIG.mapFamily.profiles)
       .map(([family, profile]) => [family, profile.enabled]))).toEqual({
@@ -966,8 +966,8 @@ describe('Lattice atomic release-state gate', () => {
     expect(LATTICE_RELEASE_EVIDENCE).toMatchObject({
       family: MAP_FAMILY_LATTICE,
       byteImpact: 'first-emission',
-      previousVersion: 17,
-      generatorVersion: 18,
+      previousVersion: 18,
+      generatorVersion: 19,
       profileIdentity: 'lattice-forced-audit:levels-3:district-3:anchors-5:cycles-0.08-0.15:exposure-5-20:cues-8',
       seedDerivation: 'hashStr("audit-lattice-N#1"), N=0..2',
       affectsMaximumHeight: true,
