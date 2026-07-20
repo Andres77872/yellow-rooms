@@ -175,6 +175,7 @@ function mockEnemyClass() {
 
 vi.mock('../../entities/Stalker.js', () => ({ Stalker: mockEnemyClass() }))
 vi.mock('../../entities/Pursuer.js', () => ({ Pursuer: mockEnemyClass() }))
+vi.mock('../../entities/Husk.js', () => ({ Husk: mockEnemyClass() }))
 
 vi.mock('../../render/DeferredRenderer.js', () => ({
   DeferredRenderer: class {

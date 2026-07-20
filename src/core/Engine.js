@@ -23,6 +23,7 @@ import { Controller } from '../player/Controller.js'
 import { AudioBus } from '../audio/AudioBus.js'
 import { Stalker } from '../entities/Stalker.js'
 import { Pursuer } from '../entities/Pursuer.js'
+import { Husk } from '../entities/Husk.js'
 import { mergeEnemy } from './enemyMerge.js'
 import { DeferredRenderer } from '../render/DeferredRenderer.js'
 import { LightField } from '../render/LightField.js'
@@ -109,6 +110,7 @@ export class Engine {
     this.audio = new AudioBus(camera)
     this.stalker = new Stalker(scene, this.materials, this.geom, this.cm)
     this.pursuer = new Pursuer(scene, this.materials, this.geom, this.cm)
+    this.husk = new Husk(scene, this.materials, this.geom, this.cm)
 
     this.deferred = new DeferredRenderer(renderer, scene, camera)
     this.lightField = new LightField(this.deferred.lamps)
@@ -303,6 +305,7 @@ export class Engine {
     this.controller.teleport(SPAWN, SPAWN, 0, yaw)
     this.stalker.reset(lvl, this.controller.pos)
     this.pursuer.reset(lvl, this.controller.pos)
+    this.husk.reset(lvl, this.controller.pos)
     // Synchronous prewarm behind the title/transition overlay: the whole load
     // ring exists before the player can look, instead of visibly assembling
     // in the first ~0.7s of play.
@@ -441,9 +444,17 @@ export class Engine {
     }
     const res = stalker.update(dt, controller.pos, this.camera, ctx)
     const res2 = this.pursuer.update(dt, controller.pos, this.camera, ctx)
-    // Combine both threats: closest drives proximity-slow, either-seen stresses
+    const res3 = this.husk.update(dt, controller.pos, this.camera, ctx)
+    // Combine all threats: closest drives proximity-slow, any-seen stresses
     // sanity, tension is the max. Beam/stare stay Stalker-only (pass it first).
-    const merged = mergeEnemy(res, res2)
+    const merged = mergeEnemy(res, res2, res3)
+    // A husk dying (touched / crowded out) snaps the lights: one flicker dip
+    // synced with its dry thump — the room itself registers the death.
+    if (res3.died) {
+      this._dipActive = 0.18
+      this.audio.flickerDrop()
+      this.audio.entityThump(0.12, false)
+    }
     // Slab-muffled footfalls (v8): a Pursuer closing in from ANOTHER floor is
     // invisible (the slab blocks sight), so it announces itself — heavy,
     // lowpassed thumps through the ceiling/floor, quickening as it nears.

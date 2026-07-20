@@ -1,13 +1,12 @@
 import {
   CELL,
   CHUNK,
-  WALL_H,
   THICK,
-  HEADER_H,
   PROP_PLATE_T,
   EXIT_SIGN_W,
   EXIT_SIGN_H,
   EXIT_SIGN_T,
+  EXIT_SIGN_Y,
   BLADE_SIGN_W,
   BLADE_SIGN_H,
   BLADE_SIGN_T,
@@ -24,7 +23,6 @@ import { PROP_TINT, SIGN_TINT } from './palette.js'
 
 // Tower landmark-socket dressing: signage, wall clocks, and lit accents
 // placed from the canonical tower structure's authored sockets.
-const DOOR_H = WALL_H - HEADER_H
 
 // Emit one wall-hugging unit box from the canonical global socket coordinate.
 // `axis` names the wall normal, while `side` chooses its authored face. The
@@ -150,7 +148,7 @@ function pushTowerClock(data, socket, props) {
 }
 
 function pushTowerLitAccent(data, socket, signs) {
-  const y = DOOR_H + 0.12 + EXIT_SIGN_H / 2
+  const y = EXIT_SIGN_Y
   pushTowerSocketBox(
     signs,
     data,

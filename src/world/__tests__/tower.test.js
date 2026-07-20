@@ -461,8 +461,8 @@ describe('bounded canonical Tower/skybridge generation', () => {
     expect(TOWER_RELEASE_EVIDENCE).toMatchObject({
       family: 'tower',
       byteImpact: 'changed-output',
-      previousVersion: 19,
-      generatorVersion: 20,
+      previousVersion: 20,
+      generatorVersion: 21,
       profileIdentity: 'tower-forced-audit:levels-3:participants-2:skybridge-1',
       seedDerivation: 'fixed-root-seeds(0x5a17,0x7157,0xc0ffee)',
       affectsMaximumHeight: true,

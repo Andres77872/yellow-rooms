@@ -6,6 +6,15 @@ import {
   THICK,
   HEADER_H,
   FRAME_W,
+  FRAME_DEPTH,
+  FRAME_BAND_W,
+  FRAME_BAND_DEPTH,
+  FRAME_CORNER,
+  FRAME_CORNER_DEPTH,
+  DOOR_H as DOOR_H_CONST,
+  DOOR_OPENING_W,
+  DOOR_LEAF_W,
+  DOOR_PLINTH_W,
   DOOR_LEAF_THICK,
   DOOR_LEAF_GAP,
   DOOR_PANEL_PROUD,
@@ -22,6 +31,7 @@ import {
   WINDOW_BLIND_SLATS,
 } from '../constants.js'
 
+// Re-derived independently of constants.js so a drifted export is caught.
 const DOOR_H = WALL_H - HEADER_H
 const OPENING_W = CELL - 2 * FRAME_W // clear span between the jambs
 const LEAF_W = OPENING_W / 2 // each leaf of the pair
@@ -32,6 +42,32 @@ const ySpan = (b) => [b.py - b.sy / 2, b.py + b.sy / 2]
 const zSpan = (b) => [b.pz - b.sz / 2, b.pz + b.sz / 2]
 const overlap = (a, b) => Math.min(a[1], b[1]) - Math.max(a[0], b[0])
 
+describe('door size contract (constants.js)', () => {
+  it('exports the derived opening / leaf sizes consistently', () => {
+    expect(DOOR_H_CONST).toBeCloseTo(DOOR_H, 12)
+    expect(DOOR_OPENING_W).toBeCloseTo(OPENING_W, 12)
+    expect(DOOR_LEAF_W).toBeCloseTo(LEAF_W, 12)
+    expect(2 * DOOR_LEAF_W).toBeCloseTo(DOOR_OPENING_W, 12)
+  })
+
+  it('staggers every casing depth strictly proud of the wall', () => {
+    // THICK < band < jamb < plinth < cap < corner: each layer catches its own
+    // cel step, and no casing face is ever coplanar with a wall face.
+    const plinthDepth = FRAME_DEPTH + 0.02
+    const capDepth = FRAME_DEPTH + 0.03
+    expect(FRAME_BAND_DEPTH).toBeGreaterThan(THICK)
+    expect(FRAME_DEPTH).toBeGreaterThan(FRAME_BAND_DEPTH)
+    expect(plinthDepth).toBeGreaterThan(FRAME_DEPTH)
+    expect(capDepth).toBeGreaterThan(plinthDepth)
+    expect(FRAME_CORNER_DEPTH).toBeGreaterThan(capDepth)
+  })
+
+  it('gives the swung leaf clearance over the plinth toe at its hinge', () => {
+    expect((DOOR_PLINTH_W - FRAME_W) / 2).toBeLessThan(DOOR_LEAF_GAP)
+    expect(DOOR_LEAF_GAP).toBeCloseTo((FRAME_BAND_W - FRAME_W) / 2, 12)
+  })
+})
+
 describe('pushDoorFrame', () => {
   it('dresses a vertical doorway with a symmetric 10-box architrave casing', () => {
     const out = []
@@ -41,7 +77,7 @@ describe('pushDoorFrame', () => {
     const centre = (7 + 0.5) * CELL
     for (const b of out) {
       expect(b.px).toBeCloseTo(plane, 10) // every box centred on the wall plane
-      expect(b.sx).toBeGreaterThanOrEqual(0.16) // stands proud of the THICK wall
+      expect(b.sx).toBeGreaterThan(THICK) // strictly proud of the wall — never coplanar
     }
     // Symmetry about the gap centre: offset boxes come in mirrored pairs.
     const offCentre = out.filter((b) => Math.abs(b.pz - centre) > 1e-9)
@@ -67,8 +103,19 @@ describe('pushDoorFrame', () => {
     pushDoorFrame(out, 'h', 3, 5)
     const depths = out.map((b) => b.sz).sort((a, b) => a - b)
     // Distinct stepped depths, from the shallow back-band to the proud corner.
-    expect(Math.min(...depths)).toBeCloseTo(0.16, 10) // back-bands
-    expect(Math.max(...depths)).toBeCloseTo(0.26, 10) // corner blocks
+    expect(Math.min(...depths)).toBeCloseTo(FRAME_BAND_DEPTH, 10) // back-bands
+    expect(Math.max(...depths)).toBeCloseTo(FRAME_CORNER_DEPTH, 10) // corner blocks
+  })
+
+  it('lifts the corner blocks into the header zone, above the opening', () => {
+    const out = []
+    pushDoorFrame(out, 'v', 4, 7)
+    const corners = out.filter((b) => b.sy === FRAME_CORNER && b.sx === FRAME_CORNER_DEPTH)
+    expect(corners).toHaveLength(2)
+    for (const c of corners) {
+      expect(ySpan(c)[0]).toBeGreaterThanOrEqual(DOOR_H - 1e-9) // clear of the opening
+      expect(ySpan(c)[1]).toBeLessThanOrEqual(WALL_H + 1e-9) // inside the header band
+    }
   })
 
   it('keeps the walkable opening clear (bar real-trim ankle intrusion)', () => {
@@ -84,9 +131,9 @@ describe('pushDoorFrame', () => {
         const y = ySpan(b)
         if (y[0] >= DOOR_H) continue // header zone is allowed to fill
         // Trim may stand proud ACROSS the plane (it frames the mouth) but may
-        // not narrow the clear span along it beyond a plinth's 3cm toe.
+        // not narrow the clear span along it beyond the back-band's 4cm toe.
         const into = overlap(along, clear)
-        expect(into).toBeLessThanOrEqual(0.05 + 1e-9)
+        expect(into).toBeLessThanOrEqual((FRAME_BAND_W - FRAME_W) / 2 + 1e-9)
         expect(overlap(across, [plane - THICK / 2, plane + THICK / 2])).toBeGreaterThan(0)
       }
     }
@@ -191,6 +238,34 @@ describe('pushDoorLeaves', () => {
     expect(low.px).toBeGreaterThan(plane + THICK / 2) // on the +face side
     expect(high.pz).toBeGreaterThan(8 * CELL) // inside the high neighbour cell
     expect(high.px).toBeLessThan(plane - THICK / 2) // on the -face side
+  })
+
+  it('never interpenetrates the casing: frame and leaf boxes may only touch', () => {
+    // The two assemblies dress the same doorway from either side of the cell
+    // boundary; a box of one poking into a box of the other reads as clipped
+    // geometry. Touching faces (zero-depth contact) are fine — the leaf's
+    // hinge edge deliberately kisses the back-band toe.
+    for (const style of [0, 0.6, 0.95]) {
+      for (const hinge of [-1, 1]) {
+        for (const face of [-1, 1]) {
+          const frame = []
+          pushDoorFrame(frame, 'v', 4, 7)
+          const leaves = []
+          pushDoorLeaves(leaves, { ...base, style, leaves: [{ hinge, face }] })
+          for (const f of frame) {
+            for (const l of leaves) {
+              const depth = Math.min(
+                overlap(xSpan(f), xSpan(l)),
+                overlap(ySpan(f), ySpan(l)),
+                overlap(zSpan(f), zSpan(l))
+              )
+              expect(depth, `frame box at (${f.py.toFixed(2)},${f.pz.toFixed(2)}) vs leaf part`)
+                .toBeLessThanOrEqual(1e-9)
+            }
+          }
+        }
+      }
+    }
   })
 })
 

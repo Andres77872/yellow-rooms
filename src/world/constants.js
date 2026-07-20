@@ -247,6 +247,24 @@ export const PURSUER_STUCK_REPATH = 0.4 // seconds of ~zero progress before forc
 export const PURSUER_STUCK_RELOCATE = 2.0 // seconds of ~zero progress before a relocate (cooldown-gated)
 export const PURSUER_PATH_LEASH = 34 // pathfinder search leash in CELLS (~102 u, covers the full leash)
 
+// --- Husk AI ----------------------------------------------------------
+// A static, WEAK third entity: it appears off-screen nearby, never moves (it
+// only turns to face you), and is the one enemy the player can destroy. It
+// fades away if the player leaves it behind; it dies outright if touched, or
+// if the player stands close to it long enough — but closing in means eating
+// the proximity slow and the sanity pressure of its stare the whole time.
+export const HUSK_SPAWN_CD = 12 // base dormant seconds between appearances (shrinks with level)
+export const HUSK_BAND_MIN = 9 // spawn annulus inner radius (never in your face)
+export const HUSK_BAND_MAX = 22 // spawn annulus outer radius (always nearby)
+export const HUSK_VANISH = 30 // player sustained farther than this => it fades away
+export const HUSK_AWAY_TIME = 1.5 // seconds beyond HUSK_VANISH before the fade
+export const HUSK_TOUCH = 1.2 // contact distance: the husk dies instantly
+export const HUSK_CLOSE = 3.5 // lingering inside this radius also kills it...
+export const HUSK_CLOSE_KILL = 2.5 // ...after this many sustained seconds
+export const HUSK_SIGHT = 60 // seen/tension gate (matches the other entities)
+export const HUSK_RESPAWN_DEAD = 16 // dormant seconds after being killed
+export const HUSK_RESPAWN_FADE = 8 // dormant seconds after fading (player left)
+
 // --- Stairs / 3D navigation (v8) -------------------------------------
 // A stair is a straight run: 1 cell wide x 3 walkable cells on the lower layer
 // (flat landing + 2 ascending run cells, rise LAYER_H over 2*CELL ≈ 31°), with
@@ -341,7 +359,7 @@ export const OUTLINE_FADE_FAR = 0.95
 // library; v18 was the first release-eligible bounded Lattice stream; v17
 // introduced the bounded Tower/skybridge stream, v16 the bounded Sewer
 // stream; v15 added the collision-real furniture layer.
-export const WORLD_GEN_VERSION = 20
+export const WORLD_GEN_VERSION = 21
 
 // Interior archetypes. The room-dominant macro planner bounds the two open
 // styles; the registry in zones/index.js maps ids to their chunk compilers.
@@ -363,24 +381,84 @@ export const HEADER_H = 0.8 // doorway lintel header height
 
 // Decorative door frames + open leaves (mesh-only — selected by explicit
 // PASSAGE_DOOR metadata in mesh.js). A single-cell doorway gets a casing: two
-// jamb posts + a lintel filling
-// the wall above the DOOR_H (= WALL_H - HEADER_H) opening, standing FRAME_DEPTH
-// proud of the THICK wall. A deterministic DOOR_LEAF_FRACTION of doorways also
-// show the door itself: a PAIR of leaves, each half the framed opening (so the
-// closed pair would fill it exactly — realistic ~1.36u doors, not a 2.7u
-// gate), swung flat against the flanking wall with one leaf on EACH face, so
-// the doorway reads as a door from both rooms. DOOR_SALT keys the per-door
-// hash so each doorway looks identical across chunk reloads.
+// jamb posts + a lintel filling the wall above the opening, dressed as a
+// stepped architrave (back-band behind each jamb, corner blocks in the header
+// where jamb meets lintel, plinth blocks at the feet, a head-cap ledge over
+// the opening) — bold flat shapes, which is what reads as "anime background
+// art" under the cel ramp and ink outline. A deterministic DOOR_LEAF_FRACTION
+// of doorways also show the door itself: a PAIR of leaves, each half the
+// framed opening (so the closed pair would fill it exactly — realistic ~1.36u
+// doors, not a 2.7u gate), swung flat against the flanking wall with one leaf
+// on EACH face, so the doorway reads as a door from both rooms. DOOR_SALT
+// keys the per-door hash so each doorway looks identical across chunk reloads.
+//
+// SIZE CONTRACT — everything below derives from the shared opening size. The
+// clear opening is DOOR_H tall (WALL_H minus the HEADER_H lintel band) and
+// DOOR_OPENING_W wide (CELL minus a FRAME_W jamb each side); each leaf is
+// exactly half that span. Casing depths stagger STRICTLY proud of the THICK
+// wall — THICK < band < jamb < plinth < cap < corner — so every layer catches
+// its own cel step and no casing face is ever coplanar with a wall face
+// (coplanar faces z-fight). Locked by trimwork.test.js.
 export const FRAME_W = 0.14 // jamb casing width along the wall (world units)
 export const FRAME_DEPTH = 0.22 // how proud the casing stands from the wall face (> THICK)
-// Door casing dressing (objects/joinery/): plinth blocks at the jamb feet
-// and a head cap ledge above the opening give the frame a designed silhouette
-// instead of
-// three bare boards — bold flat shapes, which is what reads as "anime
-// background art" under the cel ramp and ink outline.
+export const FRAME_BAND_W = 0.22 // back-band width along the wall (> FRAME_W)
+export const FRAME_BAND_DEPTH = 0.19 // between THICK and FRAME_DEPTH: proud of the wall, behind the jamb
+export const FRAME_CORNER = 0.24 // corner-block size (square), in the header zone
+export const FRAME_CORNER_DEPTH = 0.26 // proudest element of the assembly
+export const DOOR_H = WALL_H - HEADER_H // 2.4 — clear opening height under the lintel
+export const DOOR_OPENING_W = CELL - 2 * FRAME_W // 2.72 — clear span between the jambs
+export const DOOR_LEAF_W = DOOR_OPENING_W / 2 // 1.36 — each leaf of the pair
+// Plinth blocks at the jamb feet and a head-cap ledge above the opening give
+// the frame a designed silhouette instead of three bare boards. The plinth
+// toe — (DOOR_PLINTH_W - FRAME_W) / 2 past the jamb — must stay under
+// DOOR_LEAF_GAP so the swung-open leaf clears it.
 export const DOOR_PLINTH_H = 0.16 // plinth block height at each jamb foot
 export const DOOR_PLINTH_W = 0.2 // plinth width along the wall (> FRAME_W)
 export const DOOR_CAP_H = 0.09 // head-cap ledge height, at the top of the opening
+// The open leaf pair, flat against the flanking walls.
+export const DOOR_LEAF_THICK = 0.06 // open door panel thickness
+// Hinge-gap from the jamb edge to the swung-flat leaf: exactly the back-band
+// toe, so the leaf's hinge edge kisses the casing band and clears the 0.03
+// plinth toe below it.
+export const DOOR_LEAF_GAP = (FRAME_BAND_W - FRAME_W) / 2 // 0.04
+export const DOOR_LEAF_FRACTION = 0.5 // fraction of doorways that show the open door pair
+export const DOOR_SALT = 0x0d00 | 0 // fixed hash salt for the per-door leaf/face choice
+// Raised panel moldings dress each leaf's room-side face (the wall-side face
+// is hidden against the wall) + a small knob plate at the leading edge. All
+// proud of the leaf face; the whole assembly stays flat against the neighbour
+// wall cell, so it never intrudes into the passage (collision reads the edge
+// bytes). The layout derives from DOOR_H: balanced DOOR_RAIL_H rails top /
+// lock / bottom, with the two panel fields filling the bands between.
+export const DOOR_PANEL_PROUD = 0.015 // how far a raised panel stands off the leaf face
+export const DOOR_PANEL_MARGIN = 0.16 // side margin from leaf edge to panel
+export const DOOR_RAIL_H = 0.24 // rail band height (top / lock / bottom)
+export const DOOR_PANEL_BOT_H = 0.8 // lower panel field height
+export const DOOR_PANEL_BOT_Y = DOOR_RAIL_H + DOOR_PANEL_BOT_H / 2 // 0.64
+export const DOOR_PANEL_TOP_H = DOOR_H - 3 * DOOR_RAIL_H - DOOR_PANEL_BOT_H // 0.88
+export const DOOR_PANEL_TOP_Y = DOOR_H - DOOR_RAIL_H - DOOR_PANEL_TOP_H / 2 // 1.72
+export const DOOR_KNOB_Y = 1.02 // knob height off the floor
+export const DOOR_KNOB_W = 0.07 // knob plate size along the leaf
+export const DOOR_KNOB_H = 0.16 // knob plate height
+// Leaf style variants, selected per door from a dedicated hash slice
+// (doors.js `style`): two-panel (default), three-panel (adds a mid rail
+// molding centred in the lock rail), or louvered (slats spanning the upper
+// panel zone — the utility-closet read).
+export const DOOR_PANEL_MID_H = 0.16
+export const DOOR_PANEL_MID_Y =
+  (DOOR_PANEL_BOT_Y + DOOR_PANEL_BOT_H / 2 + DOOR_PANEL_TOP_Y - DOOR_PANEL_TOP_H / 2) / 2 // 1.16
+export const DOOR_LOUVER_COUNT = 5 // slats across the upper leaf half
+export const DOOR_LOUVER_H = 0.06 // slat height (thickness reads as a step)
+export const DOOR_LOUVER_LO = DOOR_PANEL_TOP_Y - DOOR_PANEL_TOP_H / 2 + DOOR_LOUVER_H // 1.34 lowest slat centre
+export const DOOR_LOUVER_HI = DOOR_H - DOOR_RAIL_H // 2.16 highest slat centre, on the top-rail line
+export const DOOR_KICK_Y = 0.07 // kick-plate centre height
+export const DOOR_KICK_H = 0.12 // metal kick plate at the leaf foot
+// Per-door leaf tint (deterministic from the same doorway hash): most doors
+// sit within a narrow painted-cream brightness band; a rare one comes out
+// dark-stained — the liminal "something is off with this one" beat.
+export const DOOR_TINT_VAR = 0.12 // ± brightness variation on ordinary leaves
+export const DOOR_DARK_CHANCE = 0.05 // fraction of leaves that are stained dark
+export const DOOR_DARK_TINT = 0.32 // brightness multiplier for a dark-stained leaf
+
 // Observation windows exist only on multi-level room galleries. They are
 // open-pane apertures in the opaque deferred renderer: a collision-solid sill,
 // lintel and trim communicate the barrier while the eye-height opening reveals
@@ -397,53 +475,6 @@ export const BRIDGE_GUARD_H = 1.05
 export const BRIDGE_GUARD_CAP_H = 0.1
 export const BRIDGE_BEAM_H = 0.45
 export const BRIDGE_BEAM_W = 0.24
-export const DOOR_LEAF_THICK = 0.06 // open door panel thickness
-export const DOOR_LEAF_GAP = 0.04 // hinge-gap from the jamb edge to the swung-flat leaf (clears the plinth toe)
-export const DOOR_LEAF_FRACTION = 0.5 // fraction of doorways that show the open door pair
-export const DOOR_SALT = 0x0d00 | 0 // fixed hash salt for the per-door leaf/face choice
-// Raised panel moldings dress each leaf's room-side face (the wall-side face
-// is hidden against the wall) + a small knob plate at the leading edge. All
-// proud of the leaf face; the whole assembly stays flat against the neighbour
-// wall cell, so it never intrudes into the passage (collision reads the edge
-// bytes). Sizes are fit to DOOR_H 2.4 x half-opening 1.36 leaves with balanced
-// 0.24 rails top / middle / bottom.
-export const DOOR_PANEL_PROUD = 0.015 // how far a raised panel stands off the leaf face
-export const DOOR_PANEL_MARGIN = 0.16 // side margin from leaf edge to panel
-export const DOOR_PANEL_TOP_Y = 1.72 // upper panel centre height
-export const DOOR_PANEL_TOP_H = 0.88
-export const DOOR_PANEL_BOT_Y = 0.64 // lower panel centre height
-export const DOOR_PANEL_BOT_H = 0.8
-export const DOOR_KNOB_Y = 1.02 // knob height off the floor
-export const DOOR_KNOB_W = 0.07 // knob plate size along the leaf
-export const DOOR_KNOB_H = 0.16 // knob plate height
-// Per-door leaf tint (deterministic from the same doorway hash): most doors
-// sit within a narrow painted-cream brightness band; a rare one comes out
-// dark-stained — the liminal "something is off with this one" beat.
-export const DOOR_TINT_VAR = 0.12 // ± brightness variation on ordinary leaves
-export const DOOR_DARK_CHANCE = 0.05 // fraction of leaves that are stained dark
-export const DOOR_DARK_TINT = 0.32 // brightness multiplier for a dark-stained leaf
-
-// Door casing v2 (objects/joinery/): the bare jamb+lintel casing is dressed
-// with a
-// stepped back-band behind each jamb and a proud corner block at each head
-// corner — the classic architrave silhouette that reads as drawn moulding
-// under the ink outline. Depths stay staggered (band < jamb < plinth < cap <
-// corner) so every layer catches its own cel step.
-export const FRAME_BAND_W = 0.22 // back-band width along the wall
-export const FRAME_BAND_DEPTH = 0.16 // shallower than the jamb casing
-export const FRAME_CORNER = 0.24 // corner-block size (square)
-export const FRAME_CORNER_DEPTH = 0.26 // proudest element of the assembly
-// Leaf style variants, selected per door from a dedicated hash slice
-// (doors.js `style`): two-panel (default), three-panel (adds a mid rail
-// molding), or louvered (slatted upper half — the utility-closet read).
-export const DOOR_PANEL_MID_Y = 1.16 // mid rail molding centre height
-export const DOOR_PANEL_MID_H = 0.16
-export const DOOR_LOUVER_COUNT = 5 // slats across the upper leaf half
-export const DOOR_LOUVER_H = 0.06 // slat height (thickness reads as a step)
-export const DOOR_LOUVER_LO = 1.34 // lowest slat centre
-export const DOOR_LOUVER_HI = 2.16 // highest slat centre
-export const DOOR_KICK_Y = 0.07 // kick-plate centre height
-export const DOOR_KICK_H = 0.12 // metal kick plate at the leaf foot
 
 // Window dressing v2 (objects/joinery/): an apron board under the stool, and
 // three
@@ -482,6 +513,10 @@ export const EXIT_SIGN_CHANCE = 0.35
 export const EXIT_SIGN_W = 0.72
 export const EXIT_SIGN_H = 0.24
 export const EXIT_SIGN_T = 0.07
+// Housing centre height: clears the door head-cap ledge by 0.03 so the sign
+// mounts on the header casing, never overlapping the cap. Shared by the
+// office edge dressing and the tower lit-accent sockets.
+export const EXIT_SIGN_Y = DOOR_H + DOOR_CAP_H + 0.03 + EXIT_SIGN_H / 2 // 2.64
 // Hanging blade signs in corridors/lobbies: a perpendicular double-faced
 // panel on a ceiling hanger, bottom edge above door-head height.
 export const BLADE_SIGN_CHANCE = 0.12

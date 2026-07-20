@@ -1024,6 +1024,24 @@ export class WorldMapTool {
         this._floorTag(ux, uz, u.cy - this.floor, 'rgba(192,64,56,.85)')
       }
     }
+
+    // Husk: pale-ash circle (it never moves); hollow + tag when off-floor.
+    const h = this.engine.husk
+    if (h && (h.active || h.alwaysVisible)) {
+      const hx = this._sx(h.pos.x)
+      const hz = this._sy(h.pos.z)
+      ctx.beginPath()
+      ctx.arc(hx, hz, 3.5, 0, Math.PI * 2)
+      if (h.cy === this.floor) {
+        ctx.fillStyle = '#b0aa8e'
+        ctx.fill()
+      } else {
+        ctx.strokeStyle = 'rgba(176,170,142,.7)'
+        ctx.lineWidth = 1.2
+        ctx.stroke()
+        this._floorTag(hx, hz, h.cy - this.floor, 'rgba(176,170,142,.85)')
+      }
+    }
   }
 
   // Small `↑n`/`↓n` tag beside an off-floor entity marker.

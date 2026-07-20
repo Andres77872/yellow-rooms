@@ -213,6 +213,9 @@ export class DebugMode {
     e.pursuer.frozen = false
     e.pursuer.alwaysVisible = false
     e.pursuer.mesh.visible = e.pursuer.active
+    e.husk.frozen = false
+    e.husk.alwaysVisible = false
+    e.husk.mesh.visible = e.husk.active
     if (this.ai?.gizmos) this.ai.gizmos.visible = false
     if (this.root) this.root.style.display = 'none'
     if (e.state.phase === Phase.PLAYING) e.controller.lock()

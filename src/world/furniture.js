@@ -41,7 +41,7 @@ import {
 } from './mapTypes.js'
 import { countChunkComponents } from './topology.js'
 
-// Furniture placement (v15) — collision-real office furniture, deterministic
+// Furniture placement (v21) — collision-real office furniture, deterministic
 // per chunk from global coordinates. Every occupied cell enters the cols
 // raster as COLUMN_FURNITURE, so enemies, minimaps, audits and placement
 // queries treat it as blocked; the player sweeps the precise piece AABB in
@@ -53,10 +53,19 @@ import { countChunkComponents } from './topology.js'
 //     overlapping pieces of the same cross-seam room;
 //   - never on doorway/mouth approach cells, lamps, columns, or slab holes;
 //   - rooms are furnished SPARSELY (empty rooms are a feature of the genre);
-//   - after stamping, the chunk's column-aware component count must equal the
-//     pre-furniture baseline — pieces that would sever a room roll back in
-//     reverse deterministic order. Office chunks skip topology repair, so this
-//     local guarantee replaces it.
+//   - the chunk's column-aware component count must equal the pre-furniture
+//     baseline at every step — each piece is verified at placement time and a
+//     severing piece is refused (the grammar walks to the next cell). Office
+//     chunks skip topology repair, so this local guarantee replaces it.
+//
+// Coherence contract (v21): every room furnishes from ONE grammar. Role rooms
+// (the district plan's SPACE_ROLE_*) always receive their anchor pieces — a
+// copy room HAS a copier, a meeting room HAS its table — and draw every other
+// piece from the role's own whitelist. Ordinary rooms elect a theme (workroom,
+// huddle, lounge, stash, or bare) from their district-stable space id, so a
+// room split across a chunk seam makes the same call in every slice and the
+// role-marker kinds (copier, rack, bookshelf, cooler) never leak into rooms
+// that don't own the matching role.
 
 export const FURN_DESK = 1
 export const FURN_CHAIR = 2
@@ -79,6 +88,12 @@ const DIR = [
 ]
 
 const roll = (salt, gx, gz) => hash2i(salt | 0, gx, gz) / 4294967296
+
+// Room-level rolls key on the space's district-stable id, not on slice
+// coordinates: both chunk slices of a seam-crossing room draw the same theme,
+// the same bare/furnished verdict, the same accent kind.
+const spaceRoll = (salt, space, k = 0) =>
+  hash2i((salt | 0) ^ 0x2f0a, space.id | 0, k | 0) / 4294967296
 
 // The four grid edges of a cell, as {passage, wall} byte readers.
 function cellEdges(data, x, z) {
@@ -111,18 +126,29 @@ function wallHugCentre(x, z, dirFromWall, depth) {
   return [(x + 0.5) * CELL - dx * off, (z + 0.5) * CELL - dz * off]
 }
 
-function addPiece(data, out, kind, x, z, facing, w, d, px, pz) {
+// Commit one piece only if the chunk's column-aware walk graph survives it.
+// The per-piece check (a single CHUNK² flood fill) replaces the old
+// place-then-rollback pass: a piece that would sever its room is simply
+// refused and the grammar walks on to the next candidate cell, so an anchor
+// lands wherever ANY non-severing cell exists.
+function addPiece(ctx, kind, x, z, facing, w, d, px, pz) {
+  const { data, added, baseline } = ctx
   data.setCol(x, z, COLUMN_FURNITURE)
+  if (countChunkComponents(data, true) > baseline) {
+    data.setCol(x, z, 0)
+    return false
+  }
   const rec = { kind, lx: x, lz: z, x: px, z: pz, w, d, facing }
   data.furniture.push(rec)
-  out.push(rec)
+  added.push(rec)
+  return true
 }
 
 // Conference island: a table near the room's centre of mass, chairs facing it
-// from the four adjacent cells. Each chair is rolled separately — an
-// incomplete set (or a bare table) is exactly the abandoned-office read.
-// Big rooms may elect a second table.
-function furnishConference(data, space, candidates, added) {
+// from the four adjacent cells. The FIRST table is the room's anchor and is
+// never chance-gated; each chair is rolled separately — an incomplete set is
+// exactly the abandoned-office read. Big rooms may elect a second table.
+function furnishConference(ctx, space, candidates) {
   const key = [...candidates].sort((a, b) => a.gz - b.gz || a.gx - b.gx)
   const cx = (space.x0 + space.x1) / 2
   const cz = (space.z0 + space.z1) / 2
@@ -130,13 +156,13 @@ function furnishConference(data, space, candidates, added) {
     (a, b) =>
       Math.abs(a.gx - cx) + Math.abs(a.gz - cz) - (Math.abs(b.gx - cx) + Math.abs(b.gz - cz))
   )
-  const maxTables = space.area >= 26 && roll(FURN_SALT ^ 0x7a17, space.x0, space.z0) < 0.5 ? 2 : 1
+  const maxTables = space.area >= 26 && spaceRoll(FURN_SALT ^ 0x7a17, space) < 0.5 ? 2 : 1
   const used = new Set()
   let tables = 0
   for (const a of anchors) {
     if (tables >= maxTables) break
     if (used.has(`${a.gx},${a.gz}`)) continue
-    if (roll(FURN_SALT ^ 0x7ab1, a.gx, a.gz) >= 0.8) continue
+    if (tables >= 1 && roll(FURN_SALT ^ 0x7ab1, a.gx, a.gz) >= 0.8) continue
     const chairCells = []
     for (let dir = 0; dir < 4; dir++) {
       const [dx, dz] = DIR[dir]
@@ -148,10 +174,10 @@ function furnishConference(data, space, candidates, added) {
       // The chair fronts the table: the opposite of the direction it sits in.
       chairCells.push({ ...n, facing: dir ^ 1 })
     }
-    addPiece(
-      data, added, FURN_TABLE, a.lx, a.lz, 0,
+    if (!addPiece(
+      ctx, FURN_TABLE, a.lx, a.lz, 0,
       TABLE_W, TABLE_D, (a.lx + 0.5) * CELL, (a.lz + 0.5) * CELL
-    )
+    )) continue // severing anchor cell — the next-nearest anchor hosts it
     used.add(`${a.gx},${a.gz}`)
     tables++
     for (const ch of chairCells.slice(0, 4)) {
@@ -159,15 +185,19 @@ function furnishConference(data, space, candidates, added) {
       // Hug the boundary toward the table, facing it.
       const px = (ch.lx + 0.5) * CELL + dx * (CELL / 2 - CHAIR_W / 2 - 0.12)
       const pz = (ch.lz + 0.5) * CELL + dz * (CELL / 2 - CHAIR_W / 2 - 0.12)
-      addPiece(data, added, FURN_CHAIR, ch.lx, ch.lz, ch.facing, CHAIR_W, CHAIR_W, px, pz)
-      used.add(`${ch.gx},${ch.gz}`)
+      if (addPiece(ctx, FURN_CHAIR, ch.lx, ch.lz, ch.facing, CHAIR_W, CHAIR_W, px, pz)) {
+        used.add(`${ch.gx},${ch.gz}`)
+      }
     }
   }
   return tables
 }
 
-// Workstations: desk hugging a wall, chair in front, up to two per room.
-function furnishWorkstations(data, space, candidates, added) {
+// Workstations: desk hugging a wall, chair in front, up to two per room. The
+// first pairing is placed unconditionally — a workroom theme means desks, not
+// a coin flip — later ones stay chance-gated.
+function furnishWorkstations(ctx, space, candidates) {
+  const { data } = ctx
   const wallCells = []
   for (const c of candidates) {
     const edges = cellEdges(data, c.lx, c.lz)
@@ -191,20 +221,21 @@ function furnishWorkstations(data, space, candidates, added) {
   for (const w of wallCells) {
     if (placed >= maxDesks) break
     if (used.has(`${w.desk.gx},${w.desk.gz}`) || used.has(`${w.chair.gx},${w.chair.gz}`)) continue
-    if (roll(FURN_SALT ^ 0xde5c, w.desk.gx, w.desk.gz) >= 0.68) continue
+    if (placed >= 1 && roll(FURN_SALT ^ 0xde5c, w.desk.gx, w.desk.gz) >= 0.68) continue
     // Keep workstations apart: no shared cells, no adjacent desk cells.
     if (usedDesks.some((o) => Math.abs(o.gx - w.desk.gx) + Math.abs(o.gz - w.desk.gz) < 3)) continue
     const [dx, dz] = DIR[w.front]
     const [dpx, dpz] = wallHugCentre(w.desk.lx, w.desk.lz, w.front, DESK_D)
     const alongX = dx !== 0
-    addPiece(
-      data, added, FURN_DESK, w.desk.lx, w.desk.lz, w.front,
+    if (!addPiece(
+      ctx, FURN_DESK, w.desk.lx, w.desk.lz, w.front,
       alongX ? DESK_D : DESK_W, alongX ? DESK_W : DESK_D, dpx, dpz
-    )
-    // Chair hugs the boundary toward the desk, facing it (toward the wall).
+    )) continue // severing desk cell — the next wall pairing hosts the station
+    // Chair hugs the boundary toward the desk, facing it (toward the wall). A
+    // desk whose chair is refused stays — an abandoned desk is a normal read.
     const cpx = (w.chair.lx + 0.5) * CELL - dx * (CELL / 2 - CHAIR_W / 2 - 0.12)
     const cpz = (w.chair.lz + 0.5) * CELL - dz * (CELL / 2 - CHAIR_W / 2 - 0.12)
-    addPiece(data, added, FURN_CHAIR, w.chair.lx, w.chair.lz, w.wallDir, CHAIR_W, CHAIR_W, cpx, cpz)
+    addPiece(ctx, FURN_CHAIR, w.chair.lx, w.chair.lz, w.wallDir, CHAIR_W, CHAIR_W, cpx, cpz)
     used.add(`${w.desk.gx},${w.desk.gz}`)
     used.add(`${w.chair.gx},${w.chair.gz}`)
     usedDesks.push(w.desk)
@@ -213,8 +244,6 @@ function furnishWorkstations(data, space, candidates, added) {
   return placed
 }
 
-// Storage/utility pieces: cabinet, copier, water cooler, plant — sparse,
-// wall-hugging, hash-selected so room grammar varies without a room-type tax.
 const PIECE_DIMS = {
   [FURN_CABINET]: [CABINET_W, CABINET_D],
   [FURN_COPIER]: [COPIER_W, COPIER_D],
@@ -226,108 +255,118 @@ const PIECE_DIMS = {
   [FURN_WHITEBOARD]: [WHITEBOARD_W, WHITEBOARD_D],
 }
 
-// Wall-hugging placement of one piece kind across candidate wall cells.
-function furnishRow(data, candidates, added, kind, maxPieces, chance, salt) {
+// Wall-hugging run of one piece kind. The first `min` placements are the
+// room's anchor furniture and are unconditional — a copy room WILL hold its
+// copier; pieces beyond `min` are chance-gated per cell. The scan starts at a
+// space-stable offset so where the anchor lands varies between rooms without
+// diverging between two slices of the same room.
+function furnishRow(ctx, space, candidates, kind, opts) {
+  const { data } = ctx
+  const { min = 0, max = 1, chance = 0.5, salt } = opts
   const wallCells = candidates
     .filter((c) => cellEdges(data, c.lx, c.lz).some((e) => e.wall === 1))
     .sort((a, b) => a.gz - b.gz || a.gx - b.gx)
-  const usedCells = new Set(added.map((f) => `${f.lx},${f.lz}`))
+  if (!wallCells.length) return 0
+  const usedCells = new Set(ctx.added.map((f) => `${f.lx},${f.lz}`))
+  const start = hash2i((salt ^ 0x51a7) | 0, space.id | 0, wallCells.length) % wallCells.length
   let placed = 0
-  for (const c of wallCells) {
-    if (placed >= maxPieces) break
+  for (let n = 0; n < wallCells.length && placed < max; n++) {
+    const c = wallCells[(start + n) % wallCells.length]
     if (usedCells.has(`${c.lx},${c.lz}`)) continue
-    if (roll(salt, c.gx, c.gz) >= chance) continue
+    if (placed >= min && roll(salt, c.gx, c.gz) >= chance) continue
     const edge = cellEdges(data, c.lx, c.lz).find((e) => e.wall === 1)
     const front = edge.dir ^ 1 // pieces back onto the wall, front into the room
     const [dx] = DIR[front]
     const alongX = dx !== 0
     const [w, d] = PIECE_DIMS[kind]
     const [px, pz] = wallHugCentre(c.lx, c.lz, front, d)
-    addPiece(
-      data, added, kind, c.lx, c.lz, front,
+    if (!addPiece(
+      ctx, kind, c.lx, c.lz, front,
       alongX ? d : w, alongX ? w : d, px, pz
-    )
+    )) continue // severing cell — the run continues along the wall
     usedCells.add(`${c.lx},${c.lz}`)
     placed++
   }
   return placed
 }
 
-function furnishStorage(data, space, candidates, added) {
-  const wallCells = candidates
-    .filter((c) => cellEdges(data, c.lx, c.lz).some((e) => e.wall === 1))
-    .sort((a, b) => a.gz - b.gz || a.gx - b.gx)
-  const maxPieces = space.area >= 10 ? 2 : 1
-  let placed = 0
-  const usedCells = new Set(added.map((f) => `${f.lx},${f.lz}`))
-  for (const c of wallCells) {
-    if (placed >= maxPieces) break
-    if (usedCells.has(`${c.lx},${c.lz}`)) continue
-    const h = roll(FURN_SALT ^ 0x5709, c.gx, c.gz)
-    if (h >= 0.3) continue
-    const kind =
-      h < 0.07 ? FURN_CABINET : h < 0.13 ? FURN_COPIER : h < 0.19 ? FURN_COOLER : FURN_PLANT
-    const edge = cellEdges(data, c.lx, c.lz).find((e) => e.wall === 1)
-    const front = edge.dir ^ 1 // pieces back onto the wall, front into the room
-    const [dx] = DIR[front]
-    const alongX = dx !== 0
-    const [w, d] = PIECE_DIMS[kind]
-    const [px, pz] = wallHugCentre(c.lx, c.lz, front, d)
-    addPiece(
-      data, added, kind, c.lx, c.lz, front,
-      alongX ? d : w, alongX ? w : d, px, pz
-    )
-    usedCells.add(`${c.lx},${c.lz}`)
-    placed++
-  }
-  return placed
+// Break room: the water cooler and a sofa are the anchors, then a table set
+// for bigger rooms and ONE accent piece (cabinet or plant, elected per room) —
+// the one place the office admits people were here.
+function furnishBreak(ctx, space, candidates) {
+  furnishRow(ctx, space, candidates, FURN_COOLER, { min: 1, max: 1, chance: 1, salt: FURN_SALT ^ 0xb3e9 })
+  furnishRow(ctx, space, candidates, FURN_SOFA, { min: 1, max: 1, chance: 1, salt: FURN_SALT ^ 0x50fa })
+  if (space.area >= 8) furnishConference(ctx, space, candidates)
+  const accent = spaceRoll(FURN_SALT ^ 0xacce, space) < 0.5 ? FURN_CABINET : FURN_PLANT
+  furnishRow(ctx, space, candidates, accent, { max: 1, chance: 0.55, salt: FURN_SALT ^ 0x5709 })
 }
 
-// Break room: the water cooler is mandatory, then a sofa against a wall, a
-// small table set and a cabinet or plant — the one place the office admits
-// people were here.
-function furnishBreak(data, space, candidates, added) {
-  furnishRow(data, candidates, added, FURN_COOLER, 1, 1, FURN_SALT ^ 0xb3e9)
-  furnishRow(data, candidates, added, FURN_SOFA, 1, 0.7, FURN_SALT ^ 0x50fa)
-  if (space.area >= 8) furnishConference(data, space, candidates, added)
-  furnishStorage(data, space, candidates, added)
-}
-
-// Role-driven composition (v15): the district plan's SPACE_ROLE_* elects the
-// room's furnishing grammar directly; ordinary rooms keep the generic
-// conference/workstation/storage mix above.
-function furnishSpecial(data, space, candidates, added, role) {
+// Role-driven composition: the district plan's SPACE_ROLE_* elects the room's
+// furnishing grammar directly. Each grammar is anchor-first (the role's
+// signature piece always lands) and whitelist-strict (no piece outside the
+// role's set), so the wainscot band, the lighting register, and the furniture
+// always tell the same story.
+function furnishSpecial(ctx, space, candidates, role) {
   switch (role) {
-    case SPACE_ROLE_MEETING: {
-      const n0 = added.length
-      furnishConference(data, space, candidates, added)
-      if (added.length === n0) furnishWorkstations(data, space, candidates, added)
-      // The whiteboard is the meeting room's wall landmark.
-      furnishRow(data, candidates, added, FURN_WHITEBOARD, 1, 0.8, FURN_SALT ^ 0x9b1d)
+    case SPACE_ROLE_MEETING:
+      // The table is the anchor; the whiteboard is the wall landmark.
+      furnishConference(ctx, space, candidates)
+      furnishRow(ctx, space, candidates, FURN_WHITEBOARD, { min: 1, max: 1, chance: 1, salt: FURN_SALT ^ 0x9b1d })
       return
-    }
     case SPACE_ROLE_BREAK:
-      furnishBreak(data, space, candidates, added)
+      furnishBreak(ctx, space, candidates)
       return
     case SPACE_ROLE_COPY:
-      furnishRow(data, candidates, added, FURN_COPIER, 3, 0.55, FURN_SALT ^ 0xc09c)
-      furnishRow(data, candidates, added, FURN_CABINET, 1, 0.4, FURN_SALT ^ 0xc0b1)
+      furnishRow(ctx, space, candidates, FURN_COPIER, { min: 1, max: 3, chance: 0.5, salt: FURN_SALT ^ 0xc09c })
+      furnishRow(ctx, space, candidates, FURN_CABINET, { max: 1, chance: 0.4, salt: FURN_SALT ^ 0xc0b1 })
       return
     case SPACE_ROLE_ARCHIVE:
       // Book rows with an occasional cabinet — the shelf wall is the read.
-      furnishRow(data, candidates, added, FURN_BOOKSHELF, 4, 0.6, FURN_SALT ^ 0xb00c)
-      furnishRow(data, candidates, added, FURN_CABINET, 1, 0.5, FURN_SALT ^ 0xa2c4)
+      furnishRow(ctx, space, candidates, FURN_BOOKSHELF, { min: 2, max: 4, chance: 0.6, salt: FURN_SALT ^ 0xb00c })
+      furnishRow(ctx, space, candidates, FURN_CABINET, { max: 1, chance: 0.5, salt: FURN_SALT ^ 0xa2c4 })
       return
     case SPACE_ROLE_SERVER:
-      furnishRow(data, candidates, added, FURN_RACK, 5, 0.6, FURN_SALT ^ 0x5e22)
+      furnishRow(ctx, space, candidates, FURN_RACK, { min: 2, max: 5, chance: 0.6, salt: FURN_SALT ^ 0x5e22 })
       return
     case SPACE_ROLE_STORAGE:
-      furnishRow(data, candidates, added, FURN_CABINET, 2, 0.55, FURN_SALT ^ 0x570a)
-      furnishStorage(data, space, candidates, added)
+      furnishRow(ctx, space, candidates, FURN_CABINET, { min: 1, max: 3, chance: 0.5, salt: FURN_SALT ^ 0x570a })
       return
     default:
       return
   }
+}
+
+// Ordinary rooms elect ONE coherent theme from their space id — a quarter stay
+// bare (emptiness is pacing), the rest read as a workroom, a huddle space, a
+// lounge corner, or an unlabelled stash. Each theme owns a strict piece set;
+// the role-marker kinds (copier, rack, bookshelf, cooler) never appear here.
+function furnishOrdinary(ctx, space, candidates) {
+  if (spaceRoll(FURN_SALT ^ 0xe3e7, space) < 0.25) return // bare
+  // Theme election reads ONLY the space id — never slice-local size — so both
+  // chunk slices of a seam-crossing room land in the same theme; the slice's
+  // geometry then only scales how much of the theme fits.
+  const t = spaceRoll(FURN_SALT ^ 0x7e3a, space)
+  if (t < 0.2) {
+    // Huddle space: a conference island, sometimes a whiteboard.
+    furnishConference(ctx, space, candidates)
+    furnishRow(ctx, space, candidates, FURN_WHITEBOARD, { max: 1, chance: 0.3, salt: FURN_SALT ^ 0x9b1e })
+    return
+  }
+  if (t < 0.6) {
+    // Workroom: desk workstations, a filing cabinet, maybe a plant.
+    furnishWorkstations(ctx, space, candidates)
+    furnishRow(ctx, space, candidates, FURN_CABINET, { max: 1, chance: 0.35, salt: FURN_SALT ^ 0xf17e })
+    furnishRow(ctx, space, candidates, FURN_PLANT, { max: 1, chance: 0.25, salt: FURN_SALT ^ 0x9147 })
+    return
+  }
+  if (t < 0.8) {
+    // Lounge corner: a sofa and something green.
+    furnishRow(ctx, space, candidates, FURN_SOFA, { min: 1, max: 1, chance: 1, salt: FURN_SALT ^ 0x50fb })
+    furnishRow(ctx, space, candidates, FURN_PLANT, { max: 1, chance: 0.6, salt: FURN_SALT ^ 0x9148 })
+    return
+  }
+  // Stash: unlabelled storage — cabinets only.
+  furnishRow(ctx, space, candidates, FURN_CABINET, { min: 1, max: 2, chance: 0.4, salt: FURN_SALT ^ 0x570b })
 }
 
 export function placeFurniture(data, ctx) {
@@ -354,40 +393,17 @@ export function placeFurniture(data, ctx) {
     }
   }
 
-  const added = []
+  const ctx2 = { data, added: [], baseline }
   for (const space of [...spaces.values()].sort((a, b) => a.id - b.id)) {
     const candidates = space.cells.filter((c) => isFreeCandidate(data, lampCells, c.lx, c.lz))
     if (candidates.length < 3) continue
-    const gx0 = data.cx * CHUNK + space.x0
-    const gz0 = data.cz * CHUNK + space.z0
     const role = data.spaceRole[cIdx(space.cells[0].lx, space.cells[0].lz)]
-    const before = added.length
     if (role) {
       // Special-role rooms are always furnished: the role IS the furnishing.
-      furnishSpecial(data, space, candidates, added, role)
+      furnishSpecial(ctx2, space, candidates, role)
     } else {
-      // Ordinary rooms: sparse furnishing — a quarter stay bare, emptiness is
-      // pacing.
-      if (roll(FURN_SALT ^ 0xe3e7, gx0, gz0) >= 0.25) {
-        const w = space.x1 - space.x0 + 1
-        const h = space.z1 - space.z0 + 1
-        if (space.area >= 20 && w >= 4 && h >= 4) {
-          if (furnishConference(data, space, candidates, added) === 0) {
-            furnishWorkstations(data, space, candidates, added)
-          }
-        } else if (space.area >= 6) {
-          furnishWorkstations(data, space, candidates, added)
-        }
-        furnishStorage(data, space, candidates, added)
-      }
-    }
-
-    // Connectivity safeguard: if this space's pieces severed the chunk's
-    // column-aware walk graph, roll them back newest-first until restored.
-    while (added.length > before && countChunkComponents(data, true) > baseline) {
-      const rec = added.pop()
-      data.setCol(rec.lx, rec.lz, 0) // also drops the record from data.furniture
+      furnishOrdinary(ctx2, space, candidates)
     }
   }
-  return added.length
+  return ctx2.added.length
 }

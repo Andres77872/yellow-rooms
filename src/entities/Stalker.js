@@ -7,14 +7,13 @@ import {
   STALKER_LIGHT_SPEED,
   STALKER_DARK_SPEED,
   ENTITY_VANISH_DIST,
-  CELL,
   worldToCell,
   layerY,
 } from '../world/constants.js'
 import { moveAndCollide } from '../player/collision.js'
 import { groundHeightAt } from '../player/ground.js'
 import { sightGate, findHiddenSpot } from './sense.js'
-import { findPath, followPath } from '../world/pathfind.js'
+import { PathFollower, extrapolateSearch, cellCenterOf } from './follow.js'
 
 const _camPos = new THREE.Vector3()
 const _camDir = new THREE.Vector3()
@@ -61,20 +60,31 @@ export class Stalker {
     this.repathEvery = 0.5 // seconds between path recomputes while pursuing
     this.pathLeash = 22 // pathfinder search leash in cells (~66 u ≪ loaded edge)
     this.pathBudget = 1200 // pathfinder maxNodes
+    this.searchSteps = 6 // cells of search extrapolation past the last-seen cell
+    this.searchTime = 1.6 // pursue window granted by a successful extension (level scales)
     this._timer = this.interval
     this._spawnTimer = 4.5 // countdown to (re)spawn while dormant
     this._lostTimer = this.despawnDelay // countdown to despawn while unseen
 
-    // Pursue path state (reused buffer — no per-frame allocation).
-    this._pathBuf = []
-    this._pathLen = 0 // path.length while valid, else 0
-    this._cursor = 0 // current waypoint index
+    // Pursue route state (shared follower — reused buffers, drift repath).
+    this.follower = new PathFollower(cm, {
+      leash: this.pathLeash,
+      maxNodes: this.pathBudget,
+      repathEvery: this.repathEvery,
+    })
     this._lastGX = 0
     this._lastGZ = 0
     this._lastCY = 0
     this._hasLast = false // have we ever seen the player (a last-seen cell)?
-    this._repathT = 0
     this._pursueT = 0 // remaining pursue budget (s)
+    // Escape-bearing memory: smoothed player velocity while in sight, consumed
+    // by the search extension when the pursue reaches the last-seen cell dry.
+    this._escapeX = 0
+    this._escapeZ = 0
+    this._prevPX = 0
+    this._prevPZ = 0
+    this._hasPrev = false
+    this._searched = false // one extension per lost-sight episode
 
     // --- Debug introspection / control (no effect unless toggled) ---
     this.frozen = false // hold position: no teleport, no chase
@@ -103,14 +113,24 @@ export class Stalker {
     this.repathEvery = 0.5
     this.pathLeash = 22
     this.pathBudget = 1200
+    this.searchSteps = 6
+    // Higher levels search farther past the corner before giving up.
+    this.searchTime = Math.min(2.6, 1.2 + level * 0.15)
+    this.follower.configure({
+      leash: this.pathLeash,
+      maxNodes: this.pathBudget,
+      repathEvery: this.repathEvery,
+    })
     this._timer = this.interval
     this._spawnTimer = 4.5 // breathing room at level start
     this._lostTimer = this.despawnDelay
     this._pursueT = 0
-    this._repathT = 0
-    this._pathLen = 0
-    this._cursor = 0
+    this.follower.reset()
     this._hasLast = false
+    this._escapeX = 0
+    this._escapeZ = 0
+    this._hasPrev = false
+    this._searched = false
     this.cy = 0
     this.active = false
     this.inBeam = false
@@ -148,9 +168,7 @@ export class Stalker {
     // A teleport invalidates any pursue route computed from the OLD position —
     // following it would walk toward stale waypoints (worst case adopting a
     // stale cross-floor waypoint through solid slab).
-    this._pathLen = 0
-    this._cursor = 0
-    this._repathT = 0
+    this.follower.reset()
     this._faceMesh(player)
     this.mesh.visible = true
     return true
@@ -190,32 +208,55 @@ export class Stalker {
     this.mesh.rotation.y = Math.atan2(player.x - this.pos.x, player.z - this.pos.z)
   }
 
-  // One pursue tick: (re)route toward the last-seen cell/floor with the
-  // stair-aware A*, then advance along the path (followPath walks ramps and
-  // flips this.cy at stair waypoints). Shared by the corner-pursuit after lost
-  // sight AND the aperture-seen "it's coming up the stairs" chase.
+  // One pursue tick: (re)route toward the last-seen cell/floor with the shared
+  // follower (it walks ramps and flips this.cy at stair waypoints, and drift-
+  // repaths when the target cell moves). Shared by the corner-pursuit after
+  // lost sight AND the aperture-seen "it's coming up the stairs" chase.
   _pursueStep(dt, player) {
-    this._repathT -= dt
-    const consumed = this._pathLen === 0 || this._cursor * 3 >= this._pathLen
-    if (consumed || this._repathT <= 0) {
-      const tx = (this._lastGX + 0.5) * CELL
-      const tz = (this._lastGZ + 0.5) * CELL
-      const p = findPath(this.cm, this.pos.x, this.pos.z, this.cy, tx, tz, this._lastCY, {
-        out: this._pathBuf,
-        leash: this.pathLeash,
-        maxNodes: this.pathBudget,
-      })
-      this._pathLen = p ? p.length : 0
-      this._cursor = 0
-      this._repathT = this.repathEvery
-      if (!p) this._pursueT = 0 // unreachable -> drop to HUNT next frame
+    const r = this.follower.step(
+      this,
+      dt,
+      cellCenterOf(this._lastGX),
+      cellCenterOf(this._lastGZ),
+      this._lastCY,
+      this.chaseSpeed * this._lightMul() * dt
+    )
+    if (r.repathed && !r.hasPath) {
+      this._pursueT = 0 // unreachable -> drop to HUNT next frame
+      return
     }
-    if (this._pathLen > 0) {
-      const r = followPath(this.cm, this, this._pathBuf, this._cursor, this.chaseSpeed * this._lightMul() * dt)
-      this._cursor = r.i
-      this._faceMesh(player)
-      if (r.done) this._pursueT = 0 // reached the last-seen cell, still unseen -> HUNT
+    this._faceMesh(player)
+    if (r.done) this._onLastSeenReached()
+  }
+
+  // Arrived at the last-seen cell with still no sight. Once per lost-sight
+  // episode, keep hunting ALONG THE PLAYER'S ESCAPE BEARING: walk the grid a
+  // few open cells the way they were moving when sight broke and pursue that
+  // cell — it follows around the corner instead of giving up on the doorstep.
+  _onLastSeenReached() {
+    const speed = Math.hypot(this._escapeX, this._escapeZ)
+    if (this._searched || speed < 0.5) {
+      this._pursueT = 0 // already searched (or no usable bearing) -> HUNT
+      return
     }
+    this._searched = true
+    const s = extrapolateSearch(
+      this.cm,
+      this._lastGX,
+      this._lastGZ,
+      this._lastCY,
+      this._escapeX,
+      this._escapeZ,
+      this.searchSteps
+    )
+    if (s.gx === this._lastGX && s.gz === this._lastGZ) {
+      this._pursueT = 0 // boxed in: nothing past the corner to check
+      return
+    }
+    this._lastGX = s.gx
+    this._lastGZ = s.gz
+    this.follower.reset() // retarget immediately (drift tolerance must not gate this)
+    this._pursueT = Math.max(this._pursueT, this.searchTime)
   }
 
   // Returns { caught, tension, seen, dist, inBeam, frozen }.
@@ -258,6 +299,18 @@ export class Stalker {
     const observed =
       seen || sightGate(this.cm, camera, this.pos, this.cy, player, playerCy, ENTITY_VANISH_DIST)
 
+    // Escape-bearing memory: while the player is in sight, keep a smoothed
+    // read of which way they're moving. When sight breaks and the pursue runs
+    // dry at the last-seen cell, this bearing drives the search extension.
+    if (seen && this._hasPrev && dt > 1e-4) {
+      const a = Math.min(1, dt * 3)
+      this._escapeX += ((player.x - this._prevPX) / dt - this._escapeX) * a
+      this._escapeZ += ((player.z - this._prevPZ) / dt - this._escapeZ) * a
+    }
+    this._prevPX = player.x
+    this._prevPZ = player.z
+    this._hasPrev = true
+
     // Flashlight beam (a strong, dynamic light) freezes the entity outright —
     // unless the player has stared so long the freeze has failed (canFreeze).
     const inBeam = this._inFlashBeam(camera, ctx, seen)
@@ -279,8 +332,8 @@ export class Stalker {
       this.stateLabel = 'chasing'
       this._lostTimer = this.despawnDelay
       this._pursueT = this.pursueTime
-      this._pathLen = 0
-      this._cursor = 0
+      this.follower.reset()
+      this._searched = false
       this._lastGX = worldToCell(player.x)
       this._lastGZ = worldToCell(player.z)
       this._lastCY = playerCy
@@ -301,6 +354,7 @@ export class Stalker {
       this.stateLabel = 'pursuing(stairs)'
       this._lostTimer = this.despawnDelay
       this._pursueT = this.pursueTime
+      this._searched = false
       this._lastGX = worldToCell(player.x)
       this._lastGZ = worldToCell(player.z)
       this._lastCY = playerCy

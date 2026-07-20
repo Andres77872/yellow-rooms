@@ -20,7 +20,7 @@ import {
 import { moveAndCollide, hasLineOfSight } from '../player/collision.js'
 import { groundHeightAt } from '../player/ground.js'
 import { sightGate, findHiddenSpot } from './sense.js'
-import { findPath, followPath } from '../world/pathfind.js'
+import { PathFollower } from './follow.js'
 import { pursuerSpeed, shouldRelocate, clampBandDist, chooseFallback } from './pursuerLogic.js'
 
 const DORMANT = { caught: false, tension: 0, seen: false, dist: Infinity, inBeam: false, frozen: false }
@@ -54,16 +54,16 @@ export class Pursuer {
     this.bandMax = PURSUER_BAND_MAX
     this.catchDist = PURSUER_CATCH
     this.sightDist = PURSUER_SIGHT
-    this.repathInterval = PURSUER_REPATH
     this.relocateCooldown = PURSUER_RELOCATE_CD
 
     this._spawnTimer = PURSUER_SPAWN_GRACE
-    this._repathT = 0
     this._relocT = 0
     this._stuckT = 0
-    this._pathBuf = []
-    this._pathLen = 0
-    this._cursor = 0
+    this.follower = new PathFollower(cm, {
+      leash: PURSUER_PATH_LEASH,
+      maxNodes: 1500,
+      repathEvery: PURSUER_REPATH,
+    })
 
     // --- Debug introspection / control parity with the Stalker ---
     this.frozen = false
@@ -79,11 +79,9 @@ export class Pursuer {
     this.level = level
     this.chaseSpeed = pursuerSpeed(level)
     this._spawnTimer = PURSUER_SPAWN_GRACE
-    this._repathT = 0
     this._relocT = 0
     this._stuckT = 0
-    this._pathLen = 0
-    this._cursor = 0
+    this.follower.reset()
     this.cy = 0
     this.active = false
     this.inBeam = false
@@ -182,7 +180,6 @@ export class Pursuer {
       return DORMANT
     }
 
-    this._repathT -= dt
     this._relocT -= dt
 
     let dx = player.x - this.pos.x
@@ -200,7 +197,7 @@ export class Pursuer {
     // --- Leash: relocate if it has fallen too far behind. ---
     if (!observed && shouldRelocate(dist, this.leash, this._relocT) && this._relocate(camera, player, playerCy)) {
       this._relocT = this.relocateCooldown
-      this._pathLen = 0
+      this.follower.reset()
       this._stuckT = 0
       dx = player.x - this.pos.x
       dy = (player.y || 0) - this.pos.y
@@ -218,25 +215,15 @@ export class Pursuer {
     let stairMul = 1
     if (losSameFloor) {
       this.stateLabel = 'chasing'
-      this._pathLen = 0
+      // Drop the route + throttle so the instant sight breaks (the player
+      // rounds a corner) the follower recomputes on that very frame.
+      this.follower.reset()
       this._moveToward(dx, dz, step)
     } else {
-      const consumed = this._pathLen === 0 || this._cursor * 3 >= this._pathLen
-      if (consumed || this._repathT <= 0) {
-        const p = findPath(this.cm, this.pos.x, this.pos.z, this.cy, player.x, player.z, playerCy, {
-          out: this._pathBuf,
-          leash: PURSUER_PATH_LEASH,
-          maxNodes: 1500,
-        })
-        this._pathLen = p ? p.length : 0
-        this._cursor = 0
-        this._repathT = this.repathInterval
-      }
-      const mode = chooseFallback(losSameFloor, playerCy - this.cy, this._pathLen > 0)
+      const r = this.follower.step(this, dt, player.x, player.z, playerCy, step)
+      const mode = chooseFallback(losSameFloor, playerCy - this.cy, r.hasPath)
       if (mode === 'path') {
         this.stateLabel = 'pathing'
-        const r = followPath(this.cm, this, this._pathBuf, this._cursor, step)
-        this._cursor = r.i
         if (r.stair) stairMul = ENEMY_STAIR_SPEED
       } else if (mode === 'direct') {
         // Same floor, no route (over budget / unreachable): keep closing.
@@ -259,11 +246,10 @@ export class Pursuer {
       if (this._relocate(camera, player, playerCy)) {
         this._relocT = this.relocateCooldown
         this._stuckT = 0
-        this._pathLen = 0
+        this.follower.reset()
       }
     } else if (this._stuckT > PURSUER_STUCK_REPATH) {
-      this._repathT = 0 // force a fresh route next frame
-      this._pathLen = 0
+      this.follower.reset() // force a fresh route next frame
     }
 
     this._faceMesh(player)

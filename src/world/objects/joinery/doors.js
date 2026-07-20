@@ -1,8 +1,9 @@
 import {
   CELL,
-  WALL_H,
   THICK,
   HEADER_H,
+  DOOR_H,
+  DOOR_LEAF_W,
   FRAME_W,
   FRAME_DEPTH,
   FRAME_BAND_W,
@@ -47,10 +48,10 @@ import { box } from './frame.js'
 // assembly stays flat against the NEIGHBOUR wall cell and every frame box
 // overlaps solid wall or the header zone.
 
-const DOOR_H = WALL_H - HEADER_H // clear opening height (lintel fills above)
+// All sizes come from the constants.js door SIZE CONTRACT: DOOR_H clear
+// opening, DOOR_LEAF_W leaves (half the DOOR_OPENING_W span between jambs).
 const JAMB_OFF = CELL / 2 - FRAME_W / 2 // jamb centre offset from the gap centre
-const OPENING_W = CELL - 2 * FRAME_W // clear span between the jambs
-const LEAF_W = OPENING_W / 2 // each leaf of the pair: half the framed opening
+const LEAF_W = DOOR_LEAF_W // each leaf of the pair: half the framed opening
 
 // Door casing around a single-cell doorway: the structural jamb + header
 // casing dressed as a real architrave — a wider, shallower back-band behind
@@ -70,10 +71,12 @@ export function pushDoorFrame(out, axis, line, cell) {
   // reads as a stepped architrave instead of three bare boards.
   box(out, vertical, centre - JAMB_OFF, DOOR_H / 2, plane, FRAME_BAND_W, DOOR_H, FRAME_BAND_DEPTH)
   box(out, vertical, centre + JAMB_OFF, DOOR_H / 2, plane, FRAME_BAND_W, DOOR_H, FRAME_BAND_DEPTH)
-  // Corner blocks: square bosses at the head corners, the proudest element —
-  // they carry the "designed" read where the jamb meets the lintel.
-  box(out, vertical, centre - JAMB_OFF, DOOR_H - FRAME_CORNER / 2, plane, FRAME_CORNER, FRAME_CORNER, FRAME_CORNER_DEPTH)
-  box(out, vertical, centre + JAMB_OFF, DOOR_H - FRAME_CORNER / 2, plane, FRAME_CORNER, FRAME_CORNER, FRAME_CORNER_DEPTH)
+  // Corner blocks: square bosses in the HEADER zone where jamb meets lintel —
+  // the proudest element, carrying the "designed" read. Rosettes sit above
+  // the opening line, so they never narrow the clear span nor clip the open
+  // leaf slab (which reaches exactly DOOR_H at the flanking wall).
+  box(out, vertical, centre - JAMB_OFF, DOOR_H + FRAME_CORNER / 2, plane, FRAME_CORNER, FRAME_CORNER, FRAME_CORNER_DEPTH)
+  box(out, vertical, centre + JAMB_OFF, DOOR_H + FRAME_CORNER / 2, plane, FRAME_CORNER, FRAME_CORNER, FRAME_CORNER_DEPTH)
   // Plinth blocks: slightly wider and prouder than the jambs they carry.
   box(out, vertical, centre - JAMB_OFF, DOOR_PLINTH_H / 2, plane, DOOR_PLINTH_W, DOOR_PLINTH_H, FRAME_DEPTH + 0.02)
   box(out, vertical, centre + JAMB_OFF, DOOR_PLINTH_H / 2, plane, DOOR_PLINTH_W, DOOR_PLINTH_H, FRAME_DEPTH + 0.02)

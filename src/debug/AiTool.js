@@ -131,6 +131,26 @@ export class AiTool {
         onInput: (v) => (p.chaseSpeed = v),
       }).el
     )
+
+    // --- Husk (the static one) ------------------------------------------
+    const hu = section('husk')
+    root.appendChild(hu.el)
+    const h = this.engine.husk
+    this._hr = {
+      state: readout('state'),
+      dist: readout('dist'),
+      timers: readout('close/away'),
+      kills: readout('kills'),
+    }
+    for (const k of Object.keys(this._hr)) hu.body.appendChild(this._hr[k].el)
+    hu.body.appendChild(toggle({ label: 'freeze husk', value: false, onChange: (v) => (h.frozen = v) }).el)
+    hu.body.appendChild(
+      toggle({
+        label: 'always visible',
+        value: false,
+        onChange: (v) => ((h.alwaysVisible = v), (h.mesh.visible = v || h.active)),
+      }).el
+    )
   }
 
   _setParam(key, v) {
@@ -225,6 +245,14 @@ export class AiTool {
     this._pr.state.set(p.stateLabel)
     this._pr.dist.set(p.active ? `${pd.toFixed(1)} m` : '—')
     this._pr.floor.set(`cy ${p.cy}${pdcy ? ` · Δ ${pdcy > 0 ? '+' : ''}${pdcy}` : ''}`)
+
+    // Husk readouts.
+    const h = this.engine.husk
+    const hd = Math.hypot(pl.x - h.pos.x, (pl.y || 0) - h.pos.y, pl.z - h.pos.z)
+    this._hr.state.set(h.stateLabel)
+    this._hr.dist.set(h.active ? `${hd.toFixed(1)} m` : `spawn ${Math.max(0, h._spawnTimer).toFixed(1)}s`)
+    this._hr.timers.set(`${h._closeT.toFixed(1)}s / ${h._awayT.toFixed(1)}s`)
+    this._hr.kills.set(`${h.kills}`)
   }
 
   onShow() {}

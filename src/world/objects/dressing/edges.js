@@ -3,7 +3,6 @@ import {
   CHUNK,
   WALL_H,
   THICK,
-  HEADER_H,
   BASEBOARD_H,
   BASEBOARD_PROUD,
   CROWN_H,
@@ -14,6 +13,7 @@ import {
   EXIT_SIGN_W,
   EXIT_SIGN_H,
   EXIT_SIGN_T,
+  EXIT_SIGN_Y,
   CLOCK_CHANCE,
   CLOCK_SIZE,
   CLOCK_Y,
@@ -56,7 +56,6 @@ import { PROP_TINT, ROLE_BAND, SIGN_TINT } from './palette.js'
 // Wall-edge dressing: thresholds and exit signs at openings, baseboards and
 // crown molding on solid walls, radiators under windows, and the wall-mounted
 // prop set (clocks, notice boards, extinguisher cabinets, caution plates).
-const DOOR_H = WALL_H - HEADER_H
 const roll = (salt, gx, gz) => hash2i(salt | 0, gx, gz) / 4294967296
 
 export function dressEdge(data, axis, line, cell, trim, props, signs) {
@@ -83,7 +82,7 @@ export function dressEdge(data, axis, line, cell, trim, props, signs) {
     // Exit sign on a deterministic subset of real doorways — a dark housing
     // plate with the glowing face proud of it, one assembly per wall face.
     if (passage === PASSAGE_DOOR && roll(SIGN_SALT, gx, gz) < EXIT_SIGN_CHANCE) {
-      const y = DOOR_H + 0.12 + EXIT_SIGN_H / 2
+      const y = EXIT_SIGN_Y
       for (const s of [-1, 1]) {
         box(signs, centre, y, plane + s * (THICK / 2 + 0.02), EXIT_SIGN_W + 0.07, EXIT_SIGN_H + 0.06, 0.04, SIGN_TINT.frame)
         box(signs, centre, y, plane + s * (THICK / 2 + 0.04 + EXIT_SIGN_T / 2), EXIT_SIGN_W, EXIT_SIGN_H, EXIT_SIGN_T, SIGN_TINT.exit)

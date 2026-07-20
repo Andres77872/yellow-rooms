@@ -40,7 +40,11 @@ export function createGeometries() {
   // from the tall thin Stalker even at a glance.
   const pursuer = new THREE.CapsuleGeometry(0.6, 1.2, 4, 10)
 
-  return { floor, ceiling, wallUnit, panel, exit, entity, pursuer }
+  // Husk silhouette: smaller and frailer than either hunter — a person-shaped
+  // remnant that just stands there.
+  const husk = new THREE.CapsuleGeometry(0.38, 1.2, 4, 10)
+
+  return { floor, ceiling, wallUnit, panel, exit, entity, pursuer, husk }
 }
 
 export function disposeGeometries(geom) {

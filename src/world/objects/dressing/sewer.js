@@ -139,9 +139,12 @@ function placeChamberHardware(data, chamber, wide, props) {
         const off = THICK / 2 + 0.05
         const ox = f.vertical ? f.side * off : 0
         const oz = f.vertical ? 0 : f.side * off
-        // Seep stain behind the hardware.
+        // Seep stain behind the hardware, flush against the wall face (its
+        // centre must sit past THICK/2 — closer and the 0.02 plate is buried
+        // inside the wall slab and never renders).
+        const stainOff = f.side * (THICK / 2 + 0.01)
         props.push({
-          px: f.px + ox * 0.4, py: 1.5, pz: f.pz + oz * 0.4,
+          px: f.px + (f.vertical ? stainOff : 0), py: 1.5, pz: f.pz + (f.vertical ? 0 : stainOff),
           sx: f.vertical ? 0.02 : 1.1, sy: 1.9, sz: f.vertical ? 1.1 : 0.02,
           tint: SEWER_TINT.stain,
         })

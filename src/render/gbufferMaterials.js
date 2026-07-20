@@ -188,6 +188,7 @@ export function createGBufferMaterials(renderer, family = MAP_FAMILY_OFFICE) {
   const panelDead = flatMaterial(lin(pal.panelDead), 0, true) // instanced dead tubes
   const entity = flatMaterial(lin(0x16161c), 2, false) // Stalker capsule silhouette (near-black)
   const pursuer = flatMaterial(lin(0x3a0d0d), 2, false) // Pursuer silhouette (dark blood-red, distinct)
+  const husk = flatMaterial(lin(0x5c5847), 2, false) // Husk silhouette (pale ash — the weak one)
   const exit = emissiveMaterial(lin(0xeafff2), false) // glowing anomaly
 
   const doorFrame = flatMaterial(lin(pal.trim), 0, true) // instanced door/window casings (family trim)
@@ -206,7 +207,7 @@ export function createGBufferMaterials(renderer, family = MAP_FAMILY_OFFICE) {
   // objects/furniture palette (laminate, metal, fabric, screens, leaves).
   const furniture = flatMaterial(lin(0xffffff), 0, true, true)
 
-  return { carpet, ceiling, wallpaper, panel, panelDead, entity, pursuer, exit, doorFrame, doorLeaf, prop, signGlow, furniture }
+  return { carpet, ceiling, wallpaper, panel, panelDead, entity, pursuer, husk, exit, doorFrame, doorLeaf, prop, signGlow, furniture }
 }
 
 export function disposeGBufferMaterials(mats) {

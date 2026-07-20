@@ -109,6 +109,19 @@ describe('enemyMerge', () => {
     expect(m.inBeam).toBe(true) // from a (stalker)
     expect(m.frozen).toBe(true)
   })
+
+  it('merges any number of results (three enemies)', () => {
+    const a = { caught: false, dist: 10, seen: false, tension: 0.4, inBeam: true, frozen: true }
+    const b = { caught: false, dist: 8, seen: false, tension: 0.2, inBeam: false, frozen: false }
+    const c = { caught: false, dist: 2, seen: true, tension: 0.95, inBeam: false, frozen: false }
+    const m = mergeEnemy(a, b, c)
+    expect(m.caught).toBe(false)
+    expect(m.dist).toBe(2) // the husk at arm's length drives the slow
+    expect(m.seen).toBe(true)
+    expect(m.tension).toBeCloseTo(0.95)
+    expect(m.inBeam).toBe(true) // still the stalker's
+    expect(m.frozen).toBe(true)
+  })
 })
 
 describe('Pursuer class', () => {
@@ -161,8 +174,7 @@ describe('Pursuer class', () => {
     expect(p.pos.x).not.toBe(x0)
 
     findPath.mockReturnValue(null) // no route -> direct fallback, still moves
-    p._pathLen = 0 // force a recompute (clear the cached route from above)
-    p._repathT = 0
+    p.follower.reset() // force a recompute (clear the cached route from above)
     p.pos.set(30, 0, 0)
     p.update(0.1, player, camera)
     expect(p.pos.x).not.toBe(30)
