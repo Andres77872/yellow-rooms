@@ -1,4 +1,5 @@
 import { CHUNK } from '../constants.js'
+import { borderPairMode } from '../border.js'
 import { CELL_LOBBY, PASSAGE_OPEN } from '../mapTypes.js'
 
 // Shared, THREE-free helpers used by the zone generators. All operate on a
@@ -121,26 +122,27 @@ export function carveBorderThresholds(
 export function carveTransitionThresholds(data, borders, borderZones, zone, config) {
   if (!borders || !borderZones) return
   const transition = (neighbourZone) =>
-    neighbourZone !== undefined && isOpenZone(zone, config) !== isOpenZone(neighbourZone, config)
+    neighbourZone !== undefined && borderPairMode(zone, neighbourZone, config) === 'mouth'
   carveThresholdSlabs(data, borders, clampThresholdDepth(config), (side) => transition(borderZones[side]))
 }
-
-const isOpenZone = (zone, config) => (config.border.openness[zone] ?? 0) >= 1
 
 function clearCol(data, x, z) {
   if (x >= 0 && x < CHUNK && z >= 0 && z < CHUNK) data.setCol(x, z, 0)
 }
 
-// Open zones can have columns at cell centres. When an open zone borders an
-// office, clear the immediate approach cells behind the transition mouth so the
-// seam reads as a usable continuation instead of a threshold cluttered by a
-// pillar or rare warehouse column.
+// Open zones can have columns at cell centres. For a named or fallback mouth,
+// clear the immediate approach cells so the seam reads as a usable continuation
+// instead of a threshold cluttered by a pillar or rare warehouse column.
 export function clearTransitionColumns(data, borders, borderZones, zone, config) {
-  if (!borders || !borderZones || !isOpenZone(zone, config)) return
+  if (!borders || !borderZones) return
   const last = CHUNK - 1
   const depth = Math.max(2, Math.min(CHUNK, clampThresholdDepth(config) + 1))
   const clearLine = (arr, neighbourZone, clear) => {
-    if (!arr || neighbourZone === undefined || isOpenZone(neighbourZone, config)) return
+    if (
+      !arr ||
+      neighbourZone === undefined ||
+      borderPairMode(zone, neighbourZone, config) !== 'mouth'
+    ) return
     for (let i = 0; i < CHUNK; i++) if (arr[i] === 0) clear(i)
   }
   clearLine(borders.wW, borderZones.w, (z) => {

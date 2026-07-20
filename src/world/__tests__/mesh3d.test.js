@@ -32,7 +32,7 @@ import {
   multilevelBandBase,
   multilevelConfig,
   multilevelContract,
-} from '../multilevel.js'
+} from '../structures/multilevel.js'
 
 const cfg = structuredClone(DEFAULT_WORLD_CONFIG)
 cfg.stairs.chance = 1
@@ -229,8 +229,8 @@ describe('3D chunk mesh / slab ownership', () => {
       for (const { cx, cz } of structure.participants) {
         const lowerData = buildChunk(seed, cx, lowerCy, cz, config)
         const upperData = buildChunk(seed, cx, levelCy, cz, config)
-        expect(upperData.multilevelDown).toEqual(lowerData.multilevelUp)
-        for (const { lx, lz } of lowerData.multilevelUp.voidCells) {
+        expect(upperData.structureDown).toEqual(lowerData.structureUp)
+        for (const { lx, lz } of lowerData.structureUp.voidCells) {
           holes.add(`${cx * CHUNK + lx},${cz * CHUNK + lz}`)
         }
         const lower = buildChunkMeshes(
@@ -303,7 +303,7 @@ describe('3D chunk mesh / slab ownership', () => {
     })
     expect(host).toBeTruthy()
     const data = buildChunk(seed, host.cx, levelCy, host.cz, config)
-    expect(data.multilevelDown).not.toBeNull()
+    expect(data.structureDown).not.toBeNull()
     const mesh = buildChunkMeshes(
       data,
       geom,

@@ -6,6 +6,11 @@ export const CELL = 3 // world units per cell (square)
 export const CHUNK = 14 // cells per chunk side
 export const CHUNK_WORLD = CELL * CHUNK // world units per chunk side (42)
 
+// Spawn hub: the centre cell of chunk (0,0,0) and its world coordinate.
+// Engine, streaming, and debug tools previously each re-derived these.
+export const HUB_CELL = (CHUNK / 2) | 0
+export const SPAWN_WORLD = (HUB_CELL + 0.5) * CELL
+
 export const WALL_H = 3.2 // low drop-ceiling height (claustrophobic)
 
 // --- Layers (v8: floors stacked along Y) ---
@@ -328,18 +333,22 @@ export const OUTLINE_FADE_FAR = 0.95
 
 // --- Thin-wall model (refactor) ---------------------------------------
 // World-gen version: bump whenever the algorithm changes the bytes a seed
-// produces. Guards the golden determinism test. v15 adds the collision-real
-// furniture layer (COLUMN_FURNITURE blockers + precise piece records) to
-// office rooms; v14 made office rooms the continuous world fabric, bounded
-// open landmark pockets, and added genuinely monumental column geometry to
-// the finite pillar halls.
-export const WORLD_GEN_VERSION = 15
+// produces. Guards the golden determinism test. v20 is the family-identity
+// rework: the Sewer becomes a trunk-and-branch gallery network carved from
+// solid mass (chambers, riser-aligned manholes, seam-routed mouths, sewer
+// lighting cadence), the Lattice widens its arterial spine to two cells, and
+// the Tower gains a bottom-hall colonnade. v19 expanded the office furniture
+// library; v18 was the first release-eligible bounded Lattice stream; v17
+// introduced the bounded Tower/skybridge stream, v16 the bounded Sewer
+// stream; v15 added the collision-real furniture layer.
+export const WORLD_GEN_VERSION = 20
 
 // Interior archetypes. The room-dominant macro planner bounds the two open
 // styles; the registry in zones/index.js maps ids to their chunk compilers.
 export const ZONE_OFFICE = 0 // district-planned circulation, rooms, and explicit doors
 export const ZONE_PILLARS = 1 // bounded hypostyle hall, seamless bay lattice
 export const ZONE_WAREHOUSE = 2 // bounded inner court, sparse wall fragments
+export const ZONE_SEWER = 3 // release-enabled bounded dry sewer family
 
 // Thin-wall geometry / collision tuning.
 export const THICK = 0.16 // visual wall slab thickness (world units)
@@ -364,8 +373,9 @@ export const HEADER_H = 0.8 // doorway lintel header height
 // hash so each doorway looks identical across chunk reloads.
 export const FRAME_W = 0.14 // jamb casing width along the wall (world units)
 export const FRAME_DEPTH = 0.22 // how proud the casing stands from the wall face (> THICK)
-// Door casing dressing (trimwork.js): plinth blocks at the jamb feet and a head
-// cap ledge above the opening give the frame a designed silhouette instead of
+// Door casing dressing (objects/joinery/): plinth blocks at the jamb feet
+// and a head cap ledge above the opening give the frame a designed silhouette
+// instead of
 // three bare boards — bold flat shapes, which is what reads as "anime
 // background art" under the cel ramp and ink outline.
 export const DOOR_PLINTH_H = 0.16 // plinth block height at each jamb foot
@@ -413,7 +423,8 @@ export const DOOR_TINT_VAR = 0.12 // ± brightness variation on ordinary leaves
 export const DOOR_DARK_CHANCE = 0.05 // fraction of leaves that are stained dark
 export const DOOR_DARK_TINT = 0.32 // brightness multiplier for a dark-stained leaf
 
-// Door casing v2 (trimwork.js): the bare jamb+lintel casing is dressed with a
+// Door casing v2 (objects/joinery/): the bare jamb+lintel casing is dressed
+// with a
 // stepped back-band behind each jamb and a proud corner block at each head
 // corner — the classic architrave silhouette that reads as drawn moulding
 // under the ink outline. Depths stay staggered (band < jamb < plinth < cap <
@@ -434,7 +445,8 @@ export const DOOR_LOUVER_HI = 2.16 // highest slat centre
 export const DOOR_KICK_Y = 0.07 // kick-plate centre height
 export const DOOR_KICK_H = 0.12 // metal kick plate at the leaf foot
 
-// Window dressing v2 (trimwork.js): an apron board under the stool, and three
+// Window dressing v2 (objects/joinery/): an apron board under the stool, and
+// three
 // deterministic glazing treatments selected by a per-window tone: the classic
 // four-pane cross, a single vertical bar, or venetian blinds (the liminal
 // office cliché — slatted light against the atrium void).
@@ -444,8 +456,8 @@ export const WINDOW_BLIND_SLAT_H = 0.12 // slat height (slight overlap read)
 export const WINDOW_BLIND_DEPTH = 0.03 // slat depth, inside the aperture
 export const WINDOW_BLIND_RAIL_H = 0.08 // head / bottom rail height
 
-// Interior dressing + props (props.js). Purely visual, deterministic from
-// global coordinates, and collision-safe by construction: everything either
+// Interior dressing + props (objects/dressing/). Purely visual, deterministic
+// from global coordinates, and collision-safe by construction: everything either
 // hugs existing walls/columns, lies flat on the floor, or hangs above head
 // height, so the collision raster never has to learn about it.
 // Baseboards + crown molding on every full-height wall edge turn the bare
@@ -510,7 +522,7 @@ export const SIGN_SALT = 0x5ea1 | 0
 export const VENT_SALT = 0x7e07 | 0
 export const WINDOW_SALT = 0x71d0 | 0
 
-// --- Furniture (furniture.js / furnitureModels.js) ----------------------
+// --- Furniture (furniture.js / objects/furniture/) --------------------
 // Real, collision-solid office furniture placed into office rooms. Furniture
 // cells enter the cols raster as COLUMN_FURNITURE, so navigation, minimaps,
 // audits and enemy pathing treat them as blocked like any column; the player
@@ -550,6 +562,19 @@ export const PLANT_H = 1.15
 export const RACK_W = 0.9
 export const RACK_D = 0.7
 export const RACK_H = 1.9
+// Lobby sofa: the break room's "people waited here" landmark.
+export const SOFA_W = 1.6
+export const SOFA_D = 0.75
+export const SOFA_H = 0.9
+// Bookshelf: tall archive shelving with book rows.
+export const BOOKSHELF_W = 1.15
+export const BOOKSHELF_D = 0.35
+export const BOOKSHELF_H = 1.85
+// Whiteboard: shallow wall-hugging meeting panel (WHITEBOARD_H is the panel
+// height; the board floats between 0.7 and 1.8, clear of the baseboard).
+export const WHITEBOARD_W = 1.8
+export const WHITEBOARD_D = 0.1
+export const WHITEBOARD_H = 1.1
 
 // Helpers ---------------------------------------------------------------
 export const idx = (lx, lz) => lz * CHUNK + lx

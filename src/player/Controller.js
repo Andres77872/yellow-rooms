@@ -9,7 +9,9 @@ import {
   GRAVITY,
   MAX_FALL_SPEED,
   layerY,
+  worldToCell,
 } from '../world/constants.js'
+import { MAP_FAMILY_LATTICE, MAP_FAMILY_TOWER } from '../world/mapTypes.js'
 import { moveAndCollide } from './collision.js'
 import { groundHeightAt } from './ground.js'
 import { HeadBob } from './headbob.js'
@@ -21,6 +23,8 @@ const TOUCH_LOOK_MULT = 2.2
 const STAMINA_DRAIN = 1 / 6 // empty after ~6s of sprint
 const STAMINA_REGEN = 1 / 9
 const BATTERY_DRAIN = 1 / 90 // ~90s of light
+const UINT32_MAX = 0xffffffff
+const HARD_VOID_PLANE_KEYS = Object.freeze(['deathYmm', 'family', 'id'])
 
 const _euler = new THREE.Euler(0, 0, 0, 'YXZ')
 const _fwd = new THREE.Vector3()
@@ -32,6 +36,20 @@ const approach = (v, target, maxDelta) => {
   const d = target - v
   if (Math.abs(d) <= maxDelta) return target
   return v + Math.sign(d) * maxDelta
+}
+
+function exactHardVoidPlane(plane) {
+  if (plane === null || typeof plane !== 'object' || Array.isArray(plane)) {
+    return false
+  }
+  const keys = Object.keys(plane).sort()
+  return keys.length === HARD_VOID_PLANE_KEYS.length &&
+    keys.every((key, index) => key === HARD_VOID_PLANE_KEYS[index]) &&
+    Number.isInteger(plane.id) &&
+    plane.id >= 0 &&
+    plane.id <= UINT32_MAX &&
+    (plane.family === MAP_FAMILY_TOWER || plane.family === MAP_FAMILY_LATTICE) &&
+    Number.isInteger(plane.deathYmm)
 }
 
 // First-person controller: manual pointer-lock + mouse look (robust across
@@ -53,6 +71,9 @@ export class Controller {
     this.vy = 0
     this.grounded = true
     this.onFloorChange = null // (floor:int) => void, wired by the Engine
+    this.onVoidDeath = null // ({id,family}) => void, wired by the Engine
+    this._hardVoidPlane = null
+    this._hardVoidDeathFired = false
     this.yaw = 0
     this.pitch = 0
     this.speed = 0
@@ -157,6 +178,8 @@ export class Controller {
     this.pitch = 0
     this.speed = 0
     this.speedMul = 1
+    this._hardVoidPlane = null
+    this._hardVoidDeathFired = false
   }
 
   setBobEnabled(on) {
@@ -216,19 +239,42 @@ export class Controller {
     // The gravity branch is a safety net for teleports/debug drops only: in
     // normal play every hole edge is either guard-walled or opens onto the
     // ramp top at the same height.
-    const g = groundHeightAt(cm, this.pos.x, this.pos.z, this.floor)
-    if (this.pos.y <= g + GROUND_SNAP && this.vy <= 0) {
-      this.pos.y = g
-      this.vy = 0
-      this.grounded = true
-    } else {
+    if (!this._hardVoidPlane && typeof cm?.hardVoidAt === 'function') {
+      const plane = cm.hardVoidAt(
+        worldToCell(this.pos.x),
+        worldToCell(this.pos.z),
+        this.floor
+      )
+      if (exactHardVoidPlane(plane)) {
+        // Copy the validated value. The loaded chunk may unload immediately
+        // after entry; no mutable adapter result can replace the authored plane.
+        this._hardVoidPlane = {
+          id: plane.id,
+          family: plane.family,
+          deathYmm: plane.deathYmm,
+        }
+      }
+    }
+
+    if (this._hardVoidPlane) {
       this.vy = Math.max(this.vy - GRAVITY * dt, -MAX_FALL_SPEED)
       this.pos.y += this.vy * dt
       this.grounded = false
-      if (this.pos.y <= g) {
+    } else {
+      const g = groundHeightAt(cm, this.pos.x, this.pos.z, this.floor)
+      if (this.pos.y <= g + GROUND_SNAP && this.vy <= 0) {
         this.pos.y = g
         this.vy = 0
         this.grounded = true
+      } else {
+        this.vy = Math.max(this.vy - GRAVITY * dt, -MAX_FALL_SPEED)
+        this.pos.y += this.vy * dt
+        this.grounded = false
+        if (this.pos.y <= g) {
+          this.pos.y = g
+          this.vy = 0
+          this.grounded = true
+        }
       }
     }
 
@@ -239,6 +285,18 @@ export class Controller {
     const yRel = this.pos.y - layerY(this.floor)
     if (yRel >= FLOOR_SWITCH_Y) this._setFloor(this.floor + 1)
     else if (yRel <= -FLOOR_SWITCH_Y) this._setFloor(this.floor - 1)
+
+    if (
+      this._hardVoidPlane &&
+      !this._hardVoidDeathFired &&
+      this.pos.y <= this._hardVoidPlane.deathYmm / 1000
+    ) {
+      this._hardVoidDeathFired = true
+      this.onVoidDeath?.({
+        id: this._hardVoidPlane.id,
+        family: this._hardVoidPlane.family,
+      })
+    }
 
     this.speed = Math.hypot(this.vel.x, this.vel.z)
   }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { buildChunk } from '../pipeline.js'
-import { slabContract, STAIR_E, STAIR_W, STAIR_DX, STAIR_DZ } from '../slab.js'
+import { slabContract, STAIR_E, STAIR_W, STAIR_DX, STAIR_DZ } from '../structures/slab.js'
 import { DEFAULT_WORLD_CONFIG } from '../config.js'
 import { CHUNK, ZONE_OFFICE, ZONE_PILLARS, ZONE_WAREHOUSE, vIdx, hIdx, cIdx } from '../constants.js'
 import { CELL_STAIR, PASSAGE_WALL, PASSAGE_WIDE } from '../mapTypes.js'

@@ -5,7 +5,7 @@ import {
   COLUMN_NONE,
   COLUMN_STANDARD,
 } from '../mapTypes.js'
-import { regionLandmarkAt, regionLandmarkContains } from '../regions.js'
+import { regionLandmarkAt, regionLandmarkContains } from './regions.js'
 import { clearTransitionColumns } from './ZoneGenerator.js'
 
 export const id = ZONE_PILLARS

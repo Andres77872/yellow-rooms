@@ -3,13 +3,13 @@ import * as THREE from 'three'
 import { ChunkManager } from '../ChunkManager.js'
 import { ChunkData } from '../ChunkData.js'
 import { buildChunk } from '../pipeline.js'
-import { buildStairCells } from '../stairCells.js'
-import { slabContract } from '../slab.js'
+import { buildStairCells } from '../structures/stairCells.js'
+import { slabContract } from '../structures/slab.js'
 import {
   multilevelBandBase,
   multilevelConfig,
   multilevelContract,
-} from '../multilevel.js'
+} from '../structures/multilevel.js'
 import { DEFAULT_WORLD_CONFIG } from '../config.js'
 import {
   LIGHT_RANGE,
@@ -48,8 +48,8 @@ function makeCM(lampsByFloor, apertures = []) {
       cz,
       lamps: entry.lamps,
       apertures: [],
-      multilevelStructure: structure,
-      data: { multilevelStructure: structure },
+      structure: structure,
+      data: { structure: structure },
     })
   }
   for (const a of apertures) {
@@ -324,7 +324,7 @@ describe('isBlocked understands multilevel surfaces', () => {
     const { cx, cz } = structure.participants[0]
     const cy = structure.bridgeLevels[0]
     const data = buildChunk(seed, cx, cy, cz, config)
-    const room = data.multilevelDown
+    const room = data.structureDown
     expect(room).not.toBeNull()
     const cm = new ChunkManager(new THREE.Scene(), seed, null, null)
     cm.chunks.set(`${cx},${cy},${cz}`, {

@@ -137,6 +137,54 @@ operating distribution and retains worst seed IDs; hard shipped-profile
 invariants remain 2x2 ordinary footprints, 4x4 hero footprints, and no
 cardinally adjacent elected districts.
 
+## Core map-family MVP boundary (world-gen v18)
+
+For the sewer, tower/skybridge, and bridge-lattice MVPs, **infinite** means only
+perceptual and progression continuity across bounded streamed geometry. A route
+may continue while earlier bounded regions leave and later bounded regions enter
+the active streaming window; it does not imply physically unbounded geometry or
+an unbounded resident structure.
+
+Every family structure has finite, inspectable horizontal and vertical extents.
+Sewer fixtures are bounded and dry, a tower/skybridge is one canonical
+three-floor structure with exactly two participants, and a lattice is one
+canonical 3x3-chunk, three-floor district. Navigation goals remain inside the
+existing horizontal pathfinding leash and `PATH_VLEASH`; lattice keeps
+`LOAD_RADIUS_Y = 1` so its middle-floor window covers the bounded three-floor
+band. Structure retention may keep the participants of one bounded structure
+available, but it does not extend either pathfinding leash.
+
+Functional loading or retention evidence proves only that those bounded
+participants remain available during the tested traversal. It is not evidence
+of resident-memory, frame-time, rendering, or unrestricted pathfinding
+performance, and it does not create cross-canonical-id visibility or long-range
+pursuit. Build throttling is not performance proof. Any quantified performance
+claim requires a separate benchmark with an explicit measurable budget.
+
+Hard void handling is part of the core safety boundary, not an optional sensory
+feature. Tower and lattice activation require exposed lethal-void falls to cause
+hard death and require reset to reproduce the same version, seed, selected
+profile, and initial generated state. Missing or regressed hard-death/reset
+evidence blocks both exposed families. Sewer remains independently eligible
+because its dry MVP does not expose lethal-void traversal.
+
+The following remain optional and are not MVP prerequisites: flood or wading
+simulation, water depth, inventory or carried flame, absolute darkness,
+per-family lighting or fog, positional audio propagation, per-source audio
+occlusion, rich sewer props, procedural tower facades, weather variants, and
+comparable sensory or content enhancements. Each requires a separate
+specification and family-independent activation criteria; any performance claim
+also requires a measured runtime budget. Their absence cannot implicitly block
+an otherwise passing family.
+
+Core non-goals remain excluded: hospital, hotel, or any other researched map
+family; raised multilevel top or floor caps; physically unbounded geometry or
+residency; long-span AI pursuit; cross-district tower or lattice networks;
+cross-canonical-id visibility; inter-family bridge networks; save-game or
+progression persistence; and production schedule estimates. The MVP also does
+not require a new third-party library, and an estimate is never a substitute for
+passing behavioral evidence.
+
 ## Structure roadmap
 
 Future structures should become reserved semantic nodes, not late decorative

@@ -2,6 +2,44 @@
 // tests. Walls remain the collision truth; passage kinds explain *why* an edge
 // is open so consumers no longer have to guess doors from raster patterns.
 
+// Map-family identity is separate from zone identity. Office remains the
+// implicit/default family; the other identities are inert until their profile
+// is explicitly enabled and selected.
+export const MAP_FAMILY_OFFICE = 'office'
+export const MAP_FAMILY_SEWER = 'sewer'
+export const MAP_FAMILY_TOWER = 'tower'
+export const MAP_FAMILY_LATTICE = 'lattice'
+
+// Bounded dry sewer MVP vocabulary. Chambers and manholes are module-level
+// landmarks; deferred wet/U/cross/vent modules deliberately have no token here.
+export const SEWER_MODULE_T = 't'
+export const SEWER_MODULE_L_BEND = 'lBend'
+export const SEWER_MODULE_DRY_STRETCH = 'dryStretch'
+export const SEWER_MODULE_CHAMBER_SMALL = 'chamberSmall'
+export const SEWER_MODULE_CHAMBER_LARGE = 'chamberLarge'
+export const SEWER_MODULE_MANHOLE_UP = 'manholeUp'
+export const SEWER_MODULE_MANHOLE_DOWN = 'manholeDown'
+export const SEWER_MODULE_KINDS = Object.freeze([
+  SEWER_MODULE_T,
+  SEWER_MODULE_L_BEND,
+  SEWER_MODULE_DRY_STRETCH,
+  SEWER_MODULE_CHAMBER_SMALL,
+  SEWER_MODULE_CHAMBER_LARGE,
+  SEWER_MODULE_MANHOLE_UP,
+  SEWER_MODULE_MANHOLE_DOWN,
+])
+
+export const SEWER_DIR_NORTH = 'north'
+export const SEWER_DIR_EAST = 'east'
+export const SEWER_DIR_SOUTH = 'south'
+export const SEWER_DIR_WEST = 'west'
+export const SEWER_DIRECTIONS = Object.freeze([
+  SEWER_DIR_NORTH,
+  SEWER_DIR_EAST,
+  SEWER_DIR_SOUTH,
+  SEWER_DIR_WEST,
+])
+
 export const PASSAGE_WALL = 0
 export const PASSAGE_OPEN = 1
 export const PASSAGE_DOOR = 2

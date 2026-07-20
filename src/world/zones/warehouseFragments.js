@@ -1,5 +1,5 @@
-import { fmod } from './constants.js'
-import { hash2i } from './core/hash.js'
+import { fmod } from '../constants.js'
+import { hash2i } from '../core/hash.js'
 
 const U32 = 4294967296
 

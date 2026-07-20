@@ -12,6 +12,7 @@ export class GameState {
     this.phase = Phase.TITLE
     this.level = 1
     this.seedText = ''
+    this.mapFamily = 'office'
     this.seed = 0
     this.stamina = 1
     this.battery = 1
@@ -31,5 +32,6 @@ export class GameState {
     this.stareCharge = 0
     this.flashlightOn = false
     this.deadAmount = 0
+    this.deathReason = ''
   }
 }

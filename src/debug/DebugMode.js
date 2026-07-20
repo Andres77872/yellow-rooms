@@ -55,6 +55,7 @@ const CSS = `
 .dbg-read-k{ opacity:.65; } .dbg-read-v{ color:#f8f1a8; text-align:right; }
 .dbg-canvas{ display:block; margin:4px auto; border:1px solid #4a4017; background:#0d0d09;
   cursor:grab; touch-action:none; }
+.dbg-block{ white-space:pre; font-size:10px; opacity:.85; overflow-x:auto; color:#f8f1a8; }
 `
 
 const TABS = ['world', 'light', 'ai', 'perf']

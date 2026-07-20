@@ -1,6 +1,7 @@
 import { Phase } from '../core/GameState.js'
 import { IS_TOUCH } from '../core/device.js'
 import { SENS_DEFAULT, SENS_MAX, SENS_MIN } from '../core/Settings.js'
+import { MAP_FAMILY_ORDER } from '../world/mapFamily.js'
 import { MINIMAP_SIZE } from './Minimap.js'
 
 // ANIME + LIMINAL design language: the eerie warmth of empty backrooms drawn
@@ -81,6 +82,15 @@ const CSS = `
 #ui input[type=text]::placeholder { color:var(--paper-dim); opacity:.6; }
 #ui input[type=text]:focus { border-bottom-color:var(--gold);
   box-shadow:0 8px 16px -10px var(--amber-glow); }
+
+/* ── map-family selector: matches the seed underline field ─────── */
+#ui select { pointer-events:auto; background:transparent; border:none;
+  border-bottom:1px solid var(--gold-dim); color:var(--paper);
+  font-family:inherit; font-size:13px; letter-spacing:.14em;
+  padding:8px 6px; width:min(320px,72vw); text-align:center; outline:none;
+  border-radius:0; cursor:pointer; transition:border-color .2s; }
+#ui select:focus { border-bottom-color:var(--gold); }
+#ui select option { background:#17120a; color:var(--paper); }
 
 /* ── buttons ───────────────────────────────────────────────────── */
 #ui button { pointer-events:auto; cursor:pointer; font-family:inherit;
@@ -341,6 +351,7 @@ export class UI {
         <div class="topbar">
           <span class="chip" id="hud-level">LEVEL 0</span>
           <span class="chip hidden" id="hud-seed"></span>
+          <span class="chip hidden" id="hud-fam"></span>
         </div>
         <div class="compass" id="hud-compass">
           <div class="ring"><div class="arrow">▲</div></div>
@@ -363,6 +374,9 @@ export class UI {
           <h1>THE&nbsp;YELLOW&nbsp;ROOMS</h1>
           <div class="keys">you have no-clipped out of reality.<br/>find the exit. don't let it reach you.</div>
           <input type="text" id="seed-input" placeholder="world seed (optional)" aria-label="world seed" />
+          <select id="family-select" aria-label="map family">${MAP_FAMILY_ORDER.map(
+            (f) => `<option value="${f}">MAP · ${f.toUpperCase()}</option>`
+          ).join('')}</select>
           <div class="row">
             <button id="btn-start" class="primary">ENTER ▸</button>
             <button id="btn-settings" class="ghost">SETTINGS</button>
@@ -377,6 +391,7 @@ export class UI {
         <div class="card">
           <div class="jp-accent" aria-hidden="true">「小休止」</div>
           <h1 class="h-sm">PAUSED</h1>
+          <div class="chip dead-run hidden" id="pause-run"></div>
           <div class="settings">${SETTINGS_HTML}</div>
           <div class="chips">${CONTROL_CHIPS}</div>
           <div class="row">
@@ -426,6 +441,7 @@ export class UI {
       hud: $('#hud'),
       level: $('#hud-level'),
       seed: $('#hud-seed'),
+      fam: $('#hud-fam'),
       stam: $('#hud-stam'),
       batt: $('#hud-batt'),
       san: $('#hud-san'),
@@ -446,6 +462,8 @@ export class UI {
       transLevel: $('#trans-level'),
       rotate: $('#p-rotate'),
       seedInput: $('#seed-input'),
+      familySelect: $('#family-select'),
+      pauseRun: $('#pause-run'),
       titleSettings: $('#title-settings'),
       btnStart: $('#btn-start'),
       btnResume: $('#btn-resume'),
@@ -471,7 +489,8 @@ export class UI {
   }
 
   _wire() {
-    const start = () => this.onStart?.(this.el.seedInput.value.trim())
+    const start = () =>
+      this.onStart?.(this.el.seedInput.value.trim(), this.el.familySelect.value)
     this.el.btnStart.addEventListener('click', start)
     this.el.seedInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') start()
@@ -543,6 +562,22 @@ export class UI {
     this.el.seedInput.value = v
   }
 
+  setFamilyInput(v) {
+    this.el.familySelect.value = v
+    // Unknown value: a <select> silently blanks — land on the office default.
+    if (this.el.familySelect.value !== v) this.el.familySelect.value = 'office'
+  }
+
+  // `LEVEL n · SEED s[ · FAMILY]` — the shareable run identity, used by the
+  // death card and the pause card. Office is implicit and adds no suffix.
+  _runSummary(state) {
+    if (!state) return ''
+    const fam = state.mapFamily && state.mapFamily !== 'office'
+      ? ` · ${state.mapFamily.toUpperCase()}`
+      : ''
+    return `LEVEL ${state.level}${state.seedText ? ` · SEED ${state.seedText}` : ''}${fam}`
+  }
+
   _showOnly(phase) {
     this.el.title.classList.toggle('hidden', phase !== Phase.TITLE)
     this.el.pause.classList.toggle('hidden', phase !== Phase.PAUSED)
@@ -575,20 +610,24 @@ export class UI {
   showHud() {
     this._showOnly(Phase.PLAYING)
   }
-  showPause() {
+  showPause(state) {
+    const summary = this._runSummary(state)
+    this.el.pauseRun.textContent = summary
+    this.el.pauseRun.classList.toggle('hidden', !summary)
     this._showOnly(Phase.PAUSED)
   }
   showDeath(reason, state) {
     const lost = reason === 'lost'
-    this.el.deadTitle.textContent = lost ? 'CONSUMED' : 'TAKEN'
-    this.el.deadJp.textContent = lost ? '「崩壊」' : '「捕獲」'
-    this.el.deadSub.textContent = lost
-      ? 'your mind dissolved into the hum.'
-      : 'it found you in the yellow.'
-    // Run summary: how deep + which seed (shareable / reproducible).
-    this.el.deadRun.textContent = state
-      ? `LEVEL ${state.level}${state.seedText ? ` · SEED ${state.seedText}` : ''}`
-      : ''
+    const voided = reason === 'void'
+    this.el.deadTitle.textContent = voided ? 'FALLEN' : lost ? 'CONSUMED' : 'TAKEN'
+    this.el.deadJp.textContent = voided ? '「虚無」' : lost ? '「崩壊」' : '「捕獲」'
+    this.el.deadSub.textContent = voided
+      ? 'the void swallowed you whole.'
+      : lost
+        ? 'your mind dissolved into the hum.'
+        : 'it found you in the yellow.'
+    // Run summary: how deep + which seed/family (shareable / reproducible).
+    this.el.deadRun.textContent = this._runSummary(state)
     this._showOnly(Phase.DEAD)
   }
   showTransition(level) {
@@ -619,6 +658,15 @@ export class UI {
       c.seed = seedText
       this.el.seed.textContent = seedText
       this.el.seed.classList.toggle('hidden', !seedText)
+    }
+    // Family chip only for non-office runs — the default world stays clean.
+    const famText = state.mapFamily && state.mapFamily !== 'office'
+      ? `FAMILY ${state.mapFamily.toUpperCase()}`
+      : ''
+    if (c.fam !== famText) {
+      c.fam = famText
+      this.el.fam.textContent = famText
+      this.el.fam.classList.toggle('hidden', !famText)
     }
 
     setBar('stam', this.el.stam, state.stamina)

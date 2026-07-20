@@ -10,7 +10,7 @@ import {
 } from './constants.js'
 import { hasLineOfSight } from '../player/collision.js'
 import { generateChunk } from './generate.js'
-import { buildStairCells } from './stairCells.js'
+import { buildStairCells } from './structures/stairCells.js'
 import { COLUMN_FURNITURE, COLUMN_MONUMENTAL, wallFeatureSeesThrough } from './mapTypes.js'
 
 // Player-explored fog-of-war state for the HUD minimap. Pure data/logic (no

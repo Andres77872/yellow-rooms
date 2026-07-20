@@ -7,6 +7,14 @@ import {
   LAMP_BAD_RATE,
   LAMP_TINT_VAR,
 } from './constants.js'
+import {
+  SPACE_ROLE_ARCHIVE,
+  SPACE_ROLE_BREAK,
+  SPACE_ROLE_COPY,
+  SPACE_ROLE_MEETING,
+  SPACE_ROLE_SERVER,
+  SPACE_ROLE_STORAGE,
+} from './mapTypes.js'
 
 // Per-fixture fluorescent identity, a pure function of the lamp's world
 // position (cell-quantised, so float noise never reseats a fixture). Shared by
@@ -53,24 +61,43 @@ export function lampFlicker(wx, wz, cy, t) {
   return 1 - LAMP_FLICKER_AMP * (0.5 + 0.5 * Math.sin(t * speed + phase))
 }
 
+// Semantic room roles finally reach the lighting rhythm (the "natural next
+// slice" the design review left open): a server room hums cool and green, a
+// break room reads warmer than the corridor outside it, storage sits dimmer.
+// Multipliers stay subtle — the mood register shifts, the family palette wins.
+const ROLE_LIGHT = Object.freeze({
+  [SPACE_ROLE_MEETING]: [1.05, 1.03, 0.98],
+  [SPACE_ROLE_BREAK]: [1.08, 0.98, 0.86],
+  [SPACE_ROLE_COPY]: [1.02, 1.0, 0.96],
+  [SPACE_ROLE_ARCHIVE]: [0.94, 0.9, 0.82],
+  [SPACE_ROLE_SERVER]: [0.85, 1.03, 1.14],
+  [SPACE_ROLE_STORAGE]: [0.8, 0.78, 0.72],
+})
+
 // Colour-temperature drift as a per-channel multiplier around 1 (applied on
 // top of the shared warm PANEL_COLOR). Green/blue vary more than red, which is
 // how real ageing fluorescents drift (greener, or pinker when the phosphor
 // thins). Kept deliberately small so the mono-amber mood survives.
-export function lampTint(wx, wz, cy, out) {
+export function lampTint(wx, wz, cy, out, role = 0) {
   const x = kx(wx)
   const z = kz(wz)
   const layer = cy | 0
   out[0] = 1 + (hash3f(SALT_TINT ^ 0x11, x, z, layer) * 2 - 1) * LAMP_TINT_VAR * 0.6
   out[1] = 1 + (hash3f(SALT_TINT ^ 0x22, x, z, layer) * 2 - 1) * LAMP_TINT_VAR
   out[2] = 1 + (hash3f(SALT_TINT ^ 0x33, x, z, layer) * 2 - 1) * LAMP_TINT_VAR * 1.4
+  const m = ROLE_LIGHT[role]
+  if (m) {
+    out[0] *= m[0]
+    out[1] *= m[1]
+    out[2] *= m[2]
+  }
   return out
 }
 
 // Emissive-panel tint: the tube's colour drift, plus a hard dim+brown for bad
 // tubes so the fixture LOOKS dying even while the mesh flicker stays global.
-export function lampPanelTint(wx, wz, cy, out) {
-  lampTint(wx, wz, cy, out)
+export function lampPanelTint(wx, wz, cy, out, role = 0) {
+  lampTint(wx, wz, cy, out, role)
   if (isBadTube(wx, wz, cy)) {
     out[0] *= 0.42
     out[1] *= 0.36

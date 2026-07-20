@@ -20,8 +20,8 @@ import { PASSAGE_DOOR, PASSAGE_WIDE } from './mapTypes.js'
 //     h: line = lz (horizontal grid line), cell = x (column along the line)
 //     tone: leaf-colour seed (fresh hash bits) — mesh.js maps it onto the
 //           painted-cream band or, rarely, the dark-stained "wrong door".
-//     style: leaf-style seed (its own hash bits) — trimwork.js maps it onto
-//           the two-panel / three-panel / louvered variants.
+//     style: leaf-style seed (its own hash bits) — objects/joinery maps it
+//           onto the two-panel / three-panel / louvered variants.
 
 const SALT_V = DOOR_SALT
 const SALT_H = (DOOR_SALT ^ 0x68f1) | 0

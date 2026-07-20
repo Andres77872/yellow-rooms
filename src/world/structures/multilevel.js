@@ -1,8 +1,16 @@
-import { CHUNK, LOAD_RADIUS, fmod } from './constants.js'
-import { DEFAULT_WORLD_CONFIG } from './config.js'
-import { hash3f, hash3i } from './core/hash.js'
+import { CHUNK, LOAD_RADIUS, fmod } from '../constants.js'
+import { DEFAULT_WORLD_CONFIG } from '../config.js'
+import { hash3f, hash3i } from '../core/hash.js'
+import {
+  MAX_STRUCTURE_TOP_CY,
+  bandBaseAtLevel as sharedBandBaseAtLevel,
+  districtCoordinate,
+  polygonCandidates,
+  verticalBandPhase,
+} from './districtBand.js'
 
-export const MAX_MULTILEVEL_TOP_CY = 64
+export { polygonCandidates } from './districtBand.js'
+export const MAX_MULTILEVEL_TOP_CY = MAX_STRUCTURE_TOP_CY
 
 // Canonical multi-floor structures are planned in horizontal districts and
 // vertical bands. A structure always occupies exactly two adjacent chunks and
@@ -176,24 +184,25 @@ export function multilevelConfig(config) {
 
 export const normalizeMultilevelConfig = multilevelConfig
 
-function districtCoordinate(chunkCoordinate, districtChunks) {
-  return Math.floor(chunkCoordinate / districtChunks)
-}
-
 function verticalPhase(seed, districtX, districtZ, normalized) {
-  return hash3i(
-    (seed ^ normalized.baseSalt) | 0,
+  return verticalBandPhase(
+    seed,
+    normalized.baseSalt,
     districtX,
-    0,
-    districtZ
-  ) % normalized.verticalPeriod
+    districtZ,
+    normalized.verticalPeriod
+  )
 }
 
 function bandBaseAtLevel(seed, districtX, districtZ, levelCy, normalized) {
-  const phase = verticalPhase(seed, districtX, districtZ, normalized)
-  return phase + Math.floor(
-    (levelCy - phase) / normalized.verticalPeriod
-  ) * normalized.verticalPeriod
+  return sharedBandBaseAtLevel(
+    seed,
+    normalized.baseSalt,
+    districtX,
+    districtZ,
+    levelCy,
+    normalized.verticalPeriod
+  )
 }
 
 function bandIndexAtBase(seed, districtX, districtZ, baseCy, normalized) {
@@ -230,39 +239,24 @@ export function multilevelBandBase(
   )
 }
 
-function participantKey(cx, cz) {
-  return `${cx},${cz}`
-}
-
 function hasParticipant(structure, cx, cz) {
   return structure.participants.some(
     (participant) => participant.cx === cx && participant.cz === cz
   )
 }
 
+// Keep the legacy { anchor, neighbor } view as a thin projection while office
+// generation consumes the canonical participant list produced above.
 function pairCandidates(districtX, districtZ, normalized, bridgeAxis, avoidSpawn) {
-  const K = normalized.districtChunks
-  const originCx = districtX * K
-  const originCz = districtZ * K
-  const candidates = []
-
-  const xCount = bridgeAxis === 'x' ? K - 1 : K
-  const zCount = bridgeAxis === 'z' ? K - 1 : K
-  for (let localZ = 0; localZ < zCount; localZ++) {
-    for (let localX = 0; localX < xCount; localX++) {
-      const anchor = { cx: originCx + localX, cz: originCz + localZ }
-      const neighbor = bridgeAxis === 'x'
-        ? { cx: anchor.cx + 1, cz: anchor.cz }
-        : { cx: anchor.cx, cz: anchor.cz + 1 }
-      if (
-        avoidSpawn &&
-        (participantKey(anchor.cx, anchor.cz) === '0,0' ||
-          participantKey(neighbor.cx, neighbor.cz) === '0,0')
-      ) continue
-      candidates.push({ anchor, neighbor })
-    }
-  }
-  return candidates
+  return polygonCandidates(districtX, districtZ, normalized, {
+    shape: 'pair',
+    bridgeAxis,
+    avoidSpawn,
+  }).map(({ anchor, participants }) => ({
+    anchor,
+    neighbor: participants[1],
+    participants,
+  }))
 }
 
 function footprintBounds(seed, districtX, districtZ, bandIndex, pair, bridgeAxis, normalized) {
@@ -410,7 +404,7 @@ function buildStructureForDistrict(seed, districtX, districtZ, baseCy, normalize
     bandIndex,
     districtZ
   ) < normalized.bridgeChance ? 'bridged' : 'openVoid'
-  const participants = [pair.anchor, pair.neighbor]
+  const participants = pair.participants
   const id = hash3i(
     (seed ^ normalized.salt) | 0,
     pair.anchor.cx,
@@ -697,42 +691,6 @@ export function multilevelStructureSlice(structure, cx, cz, lowerCy) {
     bridgeCells,
     hasRoom: true,
   })
-}
-
-// Operation-oriented aliases plus seed/chunk helpers for callers that do not
-// already hold the global structure descriptor.
-export const multilevelSlice = multilevelStructureSlice
-export const sliceMultilevelStructure = multilevelStructureSlice
-
-export function multilevelSliceAt(
-  seed,
-  cx,
-  cz,
-  lowerCy,
-  config = DEFAULT_WORLD_CONFIG
-) {
-  const structure = multilevelStructureAt(seed, cx, cz, lowerCy, config)
-  return multilevelStructureSlice(structure, cx, cz, lowerCy)
-}
-
-export function multilevelUpSlice(
-  seed,
-  cx,
-  cz,
-  cy,
-  config = DEFAULT_WORLD_CONFIG
-) {
-  return multilevelSliceAt(seed, cx, cz, cy, config)
-}
-
-export function multilevelDownSlice(
-  seed,
-  cx,
-  cz,
-  cy,
-  config = DEFAULT_WORLD_CONFIG
-) {
-  return multilevelSliceAt(seed, cx, cz, cy - 1, config)
 }
 
 // A floor sees the same global `structure` from either participant. `up` is

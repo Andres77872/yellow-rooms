@@ -9,8 +9,11 @@ import {
   FURN_COPIER,
   FURN_COOLER,
   FURN_PLANT,
+  FURN_SOFA,
+  FURN_BOOKSHELF,
+  FURN_WHITEBOARD,
 } from '../furniture.js'
-import { pushFurnitureModel, FURN_TINT } from '../furnitureModels.js'
+import { pushFurnitureModel, FURN_TINT } from '../objects/furniture/index.js'
 import { buildChunk } from '../pipeline.js'
 import { DEFAULT_WORLD_CONFIG } from '../config.js'
 import { moveAndCollide, hasLineOfSight } from '../../player/collision.js'
@@ -26,7 +29,7 @@ import {
 } from '../constants.js'
 import { CELL_ROOM, COLUMN_FURNITURE, COLUMN_MONUMENTAL, PASSAGE_DOOR } from '../mapTypes.js'
 
-const ALL_KINDS = [FURN_DESK, FURN_CHAIR, FURN_TABLE, FURN_CABINET, FURN_COPIER, FURN_COOLER, FURN_PLANT]
+const ALL_KINDS = [FURN_DESK, FURN_CHAIR, FURN_TABLE, FURN_CABINET, FURN_COPIER, FURN_COOLER, FURN_PLANT, FURN_SOFA, FURN_BOOKSHELF, FURN_WHITEBOARD]
 
 // A walled 8x8 room with a west door, cells typed CELL_ROOM under space id 7.
 function roomChunk(x0 = 3, z0 = 3, x1 = 10, z1 = 10) {
@@ -134,6 +137,9 @@ describe('pushFurnitureModel', () => {
       case FURN_CABINET: return alongX ? [0.45, 0.95] : [0.95, 0.45]
       case FURN_COPIER: return alongX ? [0.7, 0.85] : [0.85, 0.7]
       case FURN_COOLER: return [0.42, 0.42]
+      case FURN_SOFA: return alongX ? [0.75, 1.6] : [1.6, 0.75]
+      case FURN_BOOKSHELF: return alongX ? [0.35, 1.15] : [1.15, 0.35]
+      case FURN_WHITEBOARD: return alongX ? [0.1, 1.8] : [1.8, 0.1]
       default: return [0.5, 0.5]
     }
   }
@@ -165,6 +171,20 @@ describe('pushFurnitureModel', () => {
     const cooler = []
     pushFurnitureModel(cooler, { kind: FURN_COOLER, lx: 7, lz: 7, x: 22.5, z: 22.5, w: 0.42, d: 0.42, facing: 2 })
     expect(cooler.some((p) => p.tint === FURN_TINT.bottleBlue)).toBe(true)
+  })
+
+  it('reads as the intended piece: sofa cushions, bookshelf books, board writing', () => {
+    const sofa = []
+    pushFurnitureModel(sofa, { kind: FURN_SOFA, lx: 7, lz: 7, x: 22.5, z: 22.5, w: 1.6, d: 0.75, facing: 0 })
+    expect(sofa.some((p) => p.tint === FURN_TINT.sofaCushion)).toBe(true)
+    const shelf = []
+    pushFurnitureModel(shelf, { kind: FURN_BOOKSHELF, lx: 7, lz: 7, x: 22.5, z: 22.5, w: 1.15, d: 0.35, facing: 0 })
+    expect(shelf.some((p) => p.tint === FURN_TINT.shelfWood)).toBe(true)
+    expect(shelf.some((p) => p.tint === FURN_TINT.bookRed)).toBe(true)
+    const board = []
+    pushFurnitureModel(board, { kind: FURN_WHITEBOARD, lx: 7, lz: 7, x: 22.5, z: 22.5, w: 1.8, d: 0.1, facing: 0 })
+    expect(board.some((p) => p.tint === FURN_TINT.boardWhite)).toBe(true)
+    expect(board.some((p) => p.tint === FURN_TINT.bookRed)).toBe(true) // red diagram
   })
 
   it('rotates asymmetric parts with facing', () => {

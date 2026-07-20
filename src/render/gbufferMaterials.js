@@ -1,6 +1,7 @@
 import * as THREE from 'three'
-import { carpetTexture, wallpaperTexture, ceilingTexture } from './textures.js'
-import { PANEL_COLOR } from '../world/constants.js'
+import { floorTexture, wallTexture, ceilingTexture } from './textures.js'
+import { familyPalette } from '../world/familyPalette.js'
+import { MAP_FAMILY_OFFICE } from '../world/mapTypes.js'
 
 // G-buffer materials for the deferred pipeline. Each writes two MRT targets:
 //   layout(location=0) gColor  = vec4(albedoLinear.rgb, matID)
@@ -139,41 +140,86 @@ function emissiveMaterial(colorLinear, instanced, tinted = false) {
   })
 }
 
-export function createGBufferMaterials(renderer) {
+// One canvas-texture set per family, built lazily and kept for the renderer's
+// lifetime (a handful of 256² canvases — cheaper than regenerating on every
+// family switch at the title screen).
+const TEXTURE_CACHE = new Map()
+
+function familyTextures(renderer, family) {
   const aniso = renderer.capabilities.getMaxAnisotropy()
+  let set = TEXTURE_CACHE.get(family)
+  if (!set) {
+    const pal = familyPalette(family)
+    set = {
+      floor: floorTexture(aniso, pal.floor),
+      wall: wallTexture(aniso, pal.wall),
+      ceiling: ceilingTexture(aniso, pal.ceiling),
+    }
+    TEXTURE_CACHE.set(family, set)
+  }
+  return set
+}
 
-  const carpet = surfaceMaterial(carpetTexture(aniso), false) // floor mesh
-  const ceiling = surfaceMaterial(ceilingTexture(aniso), false) // ceiling mesh
-  const wallpaper = surfaceMaterial(wallpaperTexture(aniso), true) // instanced pillars
+// Swap the family-driven surfaces/colors on an EXISTING material set in place.
+// Everything holding a reference (ChunkManager, chunk meshes about to rebuild,
+// entities) keeps working; chunks re-mesh on the next level setup anyway.
+export function applyFamilyMaterials(materials, renderer, family) {
+  const pal = familyPalette(family)
+  const tex = familyTextures(renderer, family)
+  materials.carpet.uniforms.map.value = tex.floor
+  materials.ceiling.uniforms.map.value = tex.ceiling
+  materials.wallpaper.uniforms.map.value = tex.wall
+  materials.panel.uniforms.uColor.value = lin(pal.panel)
+  materials.panelDead.uniforms.uColor.value = lin(pal.panelDead)
+  materials.doorFrame.uniforms.uColor.value = lin(pal.trim)
+  materials.doorLeaf.uniforms.uColor.value = lin(pal.leaf)
+  return pal
+}
 
-  const panel = emissiveMaterial(lin(PANEL_COLOR), true, true) // instanced lit lamps, per-tube identity tint
-  const panelDead = flatMaterial(lin(0x5c563a), 0, true) // instanced dead tubes
+export function createGBufferMaterials(renderer, family = MAP_FAMILY_OFFICE) {
+  const pal = familyPalette(family)
+  const tex = familyTextures(renderer, family)
+
+  const carpet = surfaceMaterial(tex.floor, false) // floor mesh
+  const ceiling = surfaceMaterial(tex.ceiling, false) // ceiling mesh
+  const wallpaper = surfaceMaterial(tex.wall, true) // instanced pillars
+
+  const panel = emissiveMaterial(lin(pal.panel), true, true) // instanced lit lamps, per-tube identity tint
+  const panelDead = flatMaterial(lin(pal.panelDead), 0, true) // instanced dead tubes
   const entity = flatMaterial(lin(0x16161c), 2, false) // Stalker capsule silhouette (near-black)
   const pursuer = flatMaterial(lin(0x3a0d0d), 2, false) // Pursuer silhouette (dark blood-red, distinct)
   const exit = emissiveMaterial(lin(0xeafff2), false) // glowing anomaly
 
-  const doorFrame = flatMaterial(lin(0xd8d4c4), 0, true) // instanced door/window casings (off-white trim)
-  // Painted-cream leaf base; per-door instanceColor tones it (brightness band,
+  const doorFrame = flatMaterial(lin(pal.trim), 0, true) // instanced door/window casings (family trim)
+  // Painted leaf base; per-door instanceColor tones it (brightness band,
   // rare dark stain) and darkens the knob to metal — see mesh.js leafTint.
-  const doorLeaf = flatMaterial(lin(0xbfb49a), 0, true, true)
+  const doorLeaf = flatMaterial(lin(pal.leaf), 0, true, true)
   // Interior props (thresholds, radiators, clocks, boards, extinguisher
-  // cabinets, vents): white base tinted per instance by props.js palettes.
+  // cabinets, vents): white base tinted per instance by the objects/dressing
+  // palettes.
   const prop = flatMaterial(lin(0xffffff), 0, true, true)
   // Emissive wayfinding signs (exit + hanging blades): they glow and bloom
   // but are NOT in the light field — beacons, not lamps. Steady (no flicker
   // wiring), tinted per instance (exit green / blade amber).
   const signGlow = emissiveMaterial(lin(0xffffff), true, true)
   // Collision-real office furniture: white base tinted per part by the
-  // furnitureModels.js palette (laminate, metal, fabric, screens, leaves).
+  // objects/furniture palette (laminate, metal, fabric, screens, leaves).
   const furniture = flatMaterial(lin(0xffffff), 0, true, true)
 
   return { carpet, ceiling, wallpaper, panel, panelDead, entity, pursuer, exit, doorFrame, doorLeaf, prop, signGlow, furniture }
 }
 
 export function disposeGBufferMaterials(mats) {
+  // Texture sets are shared via TEXTURE_CACHE (a material's current map is
+  // always one of them), so dispose the cache once instead of per material.
+  for (const set of TEXTURE_CACHE.values()) {
+    set.floor.dispose()
+    set.wall.dispose()
+    set.ceiling.dispose()
+  }
+  TEXTURE_CACHE.clear()
   for (const m of Object.values(mats)) {
     if (!m) continue
-    if (m.uniforms?.map?.value) m.uniforms.map.value.dispose()
     m.dispose?.()
   }
 }

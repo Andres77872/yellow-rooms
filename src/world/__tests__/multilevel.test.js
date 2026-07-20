@@ -3,7 +3,9 @@ import { DEFAULT_WORLD_CONFIG } from '../config.js'
 import { CHUNK, LOAD_RADIUS } from '../constants.js'
 import { hash2i } from '../core/hash.js'
 import { layerSeed, SALT_LAYER } from '../layerSeed.js'
-import {
+import * as multilevelApi from '../structures/multilevel.js'
+
+const {
   chunkMultilevelRooms,
   DEFAULT_MULTILEVEL_CONFIG,
   MAX_MULTILEVEL_TOP_CY,
@@ -12,7 +14,7 @@ import {
   multilevelContract,
   multilevelStructureAt,
   normalizeMultilevelConfig,
-} from '../multilevel.js'
+} = multilevelApi
 
 const SEEDS = [7, 12345, 0xdeadbeef >>> 0]
 
@@ -65,6 +67,213 @@ function globalCells(slice, cx, cz, field) {
     gz: cz * CHUNK + lz,
   }))
 }
+
+const STRUCTURE_ADAPTERS_PATH = '../structures/contract.js'
+
+async function validateStructureFixture(structure, ownership) {
+  let api
+  try {
+    api = await import(/* @vite-ignore */ STRUCTURE_ADAPTERS_PATH)
+  } catch (error) {
+    throw new Error(
+      'D06 missing planned structureAdapters.js validation contract',
+      { cause: error }
+    )
+  }
+  const validate = api.validateStructureDescriptor
+  expect(
+    validate,
+    'D06 requires a canonical family-aware structure validator'
+  ).toBeTypeOf('function')
+  return validate(structure, { ownership })
+}
+
+function officeStructureFixture() {
+  return structuredClone(districtStructure(
+    0x51ea7,
+    -1,
+    2,
+    0,
+    testConfig({ minLevels: 4, maxLevels: 4 })
+  ))
+}
+
+function officeOwnership(structure) {
+  return structure.participants.map((participant) => ({
+    ...participant,
+    id: structure.id,
+    family: 'office',
+    baseCy: structure.baseCy,
+    topCy: structure.topCy,
+  }))
+}
+
+const malformedOfficeStructures = [
+  {
+    name: 'R08-S04/R09-S02 rejects the generic one-participant acceptance path',
+    reason: 'office:participant-cardinality',
+    build() {
+      const structure = officeStructureFixture()
+      structure.participants = [structure.participants[0]]
+      structure.participantChunks = structure.participants
+      return { structure, ownership: officeOwnership(structure) }
+    },
+  },
+  {
+    name: 'R09 rejects duplicate participant coordinates',
+    reason: 'office:duplicate-participant',
+    build() {
+      const structure = officeStructureFixture()
+      structure.participants = [
+        structure.participants[0],
+        { ...structure.participants[0] },
+      ]
+      structure.participantChunks = structure.participants
+      return { structure, ownership: officeOwnership(structure) }
+    },
+  },
+  {
+    name: 'R09-S03/D05 rejects a participant missing from ownership',
+    reason: 'office:missing-participant',
+    build() {
+      const structure = officeStructureFixture()
+      return {
+        structure,
+        ownership: officeOwnership(structure).slice(0, 1),
+      }
+    },
+  },
+  {
+    name: 'D05 rejects a legacy participant alias mismatch independently',
+    reason: 'office:participant-alias-mismatch',
+    build() {
+      const structure = officeStructureFixture()
+      structure.participantChunks = [structure.participants[0]]
+      return { structure, ownership: officeOwnership(structure) }
+    },
+  },
+  {
+    name: 'R09-S04 rejects conflicting participant canonical ids',
+    reason: 'office:canonical-id-mismatch',
+    build() {
+      const structure = officeStructureFixture()
+      const ownership = officeOwnership(structure)
+      ownership[1].id = structure.id + 1
+      return { structure, ownership }
+    },
+  },
+  {
+    name: 'R09-S05 rejects a non-adjacent office participant shape',
+    reason: 'office:participant-shape',
+    build() {
+      const structure = officeStructureFixture()
+      const anchor = structure.participants[0]
+      structure.participants = [
+        anchor,
+        { cx: anchor.cx + 1, cz: anchor.cz + 1 },
+      ]
+      structure.participantChunks = structure.participants
+      return { structure, ownership: officeOwnership(structure) }
+    },
+  },
+  {
+    name: 'R09-S06 rejects participant ownership outside the vertical band',
+    reason: 'office:vertical-band',
+    build() {
+      const structure = officeStructureFixture()
+      const ownership = officeOwnership(structure)
+      ownership[1].topCy = structure.topCy + 1
+      return { structure, ownership }
+    },
+  },
+]
+
+describe('canonical polygon participant contracts', () => {
+  it.each([
+    {
+      bridgeAxis: 'x',
+      expected: [
+        {
+          anchor: { cx: -2, cz: 4 },
+          participants: [{ cx: -2, cz: 4 }, { cx: -1, cz: 4 }],
+        },
+        {
+          anchor: { cx: -2, cz: 5 },
+          participants: [{ cx: -2, cz: 5 }, { cx: -1, cz: 5 }],
+        },
+      ],
+    },
+    {
+      bridgeAxis: 'z',
+      expected: [
+        {
+          anchor: { cx: -2, cz: 4 },
+          participants: [{ cx: -2, cz: 4 }, { cx: -2, cz: 5 }],
+        },
+        {
+          anchor: { cx: -1, cz: 4 },
+          participants: [{ cx: -1, cz: 4 }, { cx: -1, cz: 5 }],
+        },
+      ],
+    },
+  ])('R08-S01 preserves exact ordered $bridgeAxis office pairs', ({
+    bridgeAxis,
+    expected,
+  }) => {
+    expect(
+      multilevelApi.polygonCandidates,
+      'D04 requires polygonCandidates to replace private pair enumeration'
+    ).toBeTypeOf('function')
+    const normalized = multilevelConfig(testConfig({ districtChunks: 2 }))
+    expect(multilevelApi.polygonCandidates(-1, 2, normalized, {
+      shape: 'pair',
+      bridgeAxis,
+      avoidSpawn: false,
+    })).toEqual(expected)
+  })
+
+  it('R04-S03 keeps the generated legacy office descriptor as one ordered exact pair', () => {
+    const structure = districtStructure(
+      0x51ea7,
+      -1,
+      2,
+      0,
+      testConfig({ minLevels: 4, maxLevels: 4 })
+    )
+    expect(structure.participants).toHaveLength(2)
+    expect(structure.participants).toEqual(
+      [...structure.participants].sort((a, b) => a.cz - b.cz || a.cx - b.cx)
+    )
+    expect(structure.anchor).toEqual(structure.participants[0])
+    expect(structure.participantChunks).toBe(structure.participants)
+  })
+
+  it('R09-S01 accepts a complete canonical office pair and ownership set', async () => {
+    const structure = officeStructureFixture()
+    const result = await validateStructureFixture(
+      structure,
+      officeOwnership(structure)
+    )
+    expect(result).toMatchObject({
+      ok: true,
+      family: 'office',
+      participants: structure.participants,
+      reasons: [],
+    })
+  })
+
+  it.each(malformedOfficeStructures)('$name with an office-specific reason', async ({
+    build,
+    reason,
+  }) => {
+    const { structure, ownership } = build()
+    const result = await validateStructureFixture(structure, ownership)
+    expect(result.ok).toBe(false)
+    expect(result.family).toBe('office')
+    expect(result.reasons).toContain(reason)
+    expect(result.reasons.every((item) => item.startsWith('office:'))).toBe(true)
+  })
+})
 
 describe('canonical tall multilevel structures', () => {
   it('keeps the established root-to-layer seed mapping', () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { findPath, followPath, cellBlocked } from '../pathfind.js'
 import { ChunkData } from '../ChunkData.js'
 import {
@@ -12,9 +12,18 @@ import {
   ZONE_WAREHOUSE,
   cIdx,
 } from '../constants.js'
-import { buildStairCells } from '../stairCells.js'
+import { buildStairCells } from '../structures/stairCells.js'
 import { buildChunk } from '../pipeline.js'
 import { DEFAULT_WORLD_CONFIG } from '../config.js'
+import { worldConfigForFamily } from '../mapFamily.js'
+import {
+  MAP_FAMILY_LATTICE,
+  MAP_FAMILY_OFFICE,
+  MAP_FAMILY_SEWER,
+  MAP_FAMILY_TOWER,
+} from '../mapTypes.js'
+import { structureAt } from '../structures/contract.js'
+import { discoverTowerFixture } from './tower-fixture.js'
 
 // Cross-floor pathfinding over hand-built layers: a two-layer mock CM with a
 // stair authored via the SAME descriptor builder the real ChunkManager uses.
@@ -169,6 +178,197 @@ function generatedFallbackPatch(seed = 7331) {
     cellCenter: (gx, gz, cy, t) =>
       t.set((gx + 0.5) * CELL, cy * LAYER_H, (gz + 0.5) * CELL),
   }
+}
+
+function plannedTowerPathFixture() {
+  const fixture = discoverTowerFixture()
+  expect(
+    fixture.structure,
+    'task 4.3 RED: no canonical forced-profile Tower structure is available for the bounded path proof'
+  ).toBeDefined()
+
+  const { seed, config, structure } = fixture
+  const chunks = new Map()
+  const residentKeys = new Set()
+  for (let cy = structure.baseCy; cy <= structure.topCy; cy++) {
+    for (const { cx, cz } of structure.participants) {
+      const data = buildChunk(seed, cx, cy, cz, config)
+      const key = `${cx},${cy},${cz}`
+      chunks.set(key, {
+        data,
+        stairs: buildStairCells(data, cx, cy, cz),
+      })
+      residentKeys.add(key)
+    }
+  }
+
+  const entryAt = (gx, gz, cy) => chunks.get(
+    `${Math.floor(gx / CHUNK)},${cy},${Math.floor(gz / CHUNK)}`
+  )
+  const local = (global, chunk) => global - chunk * CHUNK
+  const apertures = new Map()
+  for (const [key, entry] of chunks) {
+    const [cx, cy, cz] = key.split(',').map(Number)
+    const stair = entry.data.stairUp
+    if (!stair) continue
+    apertures.set(`tower-stair:${key}`, {
+      cx,
+      cz,
+      lowerCy: cy,
+      centerX: (cx * CHUNK + (stair.run[0].lx + stair.run[1].lx) / 2 + 0.5) * CELL,
+      centerZ: (cz * CHUNK + (stair.run[0].lz + stair.run[1].lz) / 2 + 0.5) * CELL,
+    })
+  }
+
+  const cm = {
+    wallVAt(gx, gz, cy) {
+      const cx = Math.floor(gx / CHUNK)
+      const cz = Math.floor(gz / CHUNK)
+      const entry = entryAt(gx, gz, cy)
+      return !entry || entry.data.vAt(local(gx, cx), local(gz, cz)) === 1
+    },
+    wallHAt(gx, gz, cy) {
+      const cx = Math.floor(gx / CHUNK)
+      const cz = Math.floor(gz / CHUNK)
+      const entry = entryAt(gx, gz, cy)
+      return !entry || entry.data.hAt(local(gx, cx), local(gz, cz)) === 1
+    },
+    columnAt(gx, gz, cy) {
+      const cx = Math.floor(gx / CHUNK)
+      const cz = Math.floor(gz / CHUNK)
+      const entry = entryAt(gx, gz, cy)
+      return !entry || entry.data.colAt(local(gx, cx), local(gz, cz)) > 0
+    },
+    floorHoleAt(gx, gz, cy) {
+      const cx = Math.floor(gx / CHUNK)
+      const cz = Math.floor(gz / CHUNK)
+      const entry = entryAt(gx, gz, cy)
+      return !entry || entry.data.hasFloorHole(local(gx, cx), local(gz, cz))
+    },
+    stairAt(gx, gz, cy) {
+      const cx = Math.floor(gx / CHUNK)
+      const cz = Math.floor(gz / CHUNK)
+      return entryAt(gx, gz, cy)?.stairs.get(
+        cIdx(local(gx, cx), local(gz, cz))
+      ) ?? null
+    },
+    apertures,
+    cellCenter: (gx, gz, cy, target) =>
+      target.set((gx + 0.5) * CELL, cy * LAYER_H, (gz + 0.5) * CELL),
+  }
+
+  return { ...fixture, chunks, residentKeys, cm }
+}
+
+const LATTICE_SCAN_SEEDS = Object.freeze([0x1a771ce, 0x51a771ce, 0xc0ffee])
+let latticePathDiscovery = null
+
+function plannedLatticePathFixture() {
+  if (!latticePathDiscovery) {
+    const base = structuredClone(DEFAULT_WORLD_CONFIG)
+    base.mapFamily.profiles[MAP_FAMILY_LATTICE].enabled = true
+    const config = worldConfigForFamily(MAP_FAMILY_LATTICE, base)
+
+    for (const seed of LATTICE_SCAN_SEEDS) {
+      for (let cy = -24; cy <= 24; cy++) {
+        for (let cz = -4; cz <= 4; cz++) {
+          for (let cx = -4; cx <= 4; cx++) {
+            const structure = structureAt(seed, cx, cz, cy, config)
+            if (
+              structure?.hasRoom === true &&
+              structure.family === MAP_FAMILY_LATTICE &&
+              structure.kind === 'latticeDistrict'
+            ) {
+              latticePathDiscovery = { config, seed, structure }
+              break
+            }
+          }
+          if (latticePathDiscovery) break
+        }
+        if (latticePathDiscovery) break
+      }
+      if (latticePathDiscovery) break
+    }
+
+    latticePathDiscovery ??= { config, seed: null, structure: null }
+  }
+
+  expect(
+    latticePathDiscovery.structure,
+    'task 5.3 RED: no canonical forced-profile Lattice district is available for bounded path proofs'
+  ).not.toBeNull()
+
+  const { seed, config, structure } = latticePathDiscovery
+  const chunks = new Map()
+  const residentKeys = new Set()
+  for (let cy = structure.baseCy; cy <= structure.topCy; cy++) {
+    for (const { cx, cz } of structure.participants) {
+      const data = buildChunk(seed, cx, cy, cz, config)
+      const key = `${cx},${cy},${cz}`
+      chunks.set(key, {
+        data,
+        stairs: buildStairCells(data, cx, cy, cz),
+      })
+      residentKeys.add(key)
+    }
+  }
+
+  const entryAt = (gx, gz, cy) => chunks.get(
+    `${Math.floor(gx / CHUNK)},${cy},${Math.floor(gz / CHUNK)}`
+  )
+  const local = (global, chunk) => global - chunk * CHUNK
+  const apertures = new Map()
+  for (const [key, entry] of chunks) {
+    const [cx, cy, cz] = key.split(',').map(Number)
+    const stair = entry.data.stairUp
+    if (!stair) continue
+    apertures.set(`lattice-stair:${key}`, {
+      cx,
+      cz,
+      lowerCy: cy,
+      centerX: (cx * CHUNK + (stair.run[0].lx + stair.run[1].lx) / 2 + 0.5) * CELL,
+      centerZ: (cz * CHUNK + (stair.run[0].lz + stair.run[1].lz) / 2 + 0.5) * CELL,
+    })
+  }
+
+  const cm = {
+    wallVAt(gx, gz, cy) {
+      const cx = Math.floor(gx / CHUNK)
+      const cz = Math.floor(gz / CHUNK)
+      const entry = entryAt(gx, gz, cy)
+      return !entry || entry.data.vAt(local(gx, cx), local(gz, cz)) === 1
+    },
+    wallHAt(gx, gz, cy) {
+      const cx = Math.floor(gx / CHUNK)
+      const cz = Math.floor(gz / CHUNK)
+      const entry = entryAt(gx, gz, cy)
+      return !entry || entry.data.hAt(local(gx, cx), local(gz, cz)) === 1
+    },
+    columnAt(gx, gz, cy) {
+      const cx = Math.floor(gx / CHUNK)
+      const cz = Math.floor(gz / CHUNK)
+      const entry = entryAt(gx, gz, cy)
+      return !entry || entry.data.colAt(local(gx, cx), local(gz, cz)) > 0
+    },
+    floorHoleAt(gx, gz, cy) {
+      const cx = Math.floor(gx / CHUNK)
+      const cz = Math.floor(gz / CHUNK)
+      const entry = entryAt(gx, gz, cy)
+      return !entry || entry.data.hasFloorHole(local(gx, cx), local(gz, cz))
+    },
+    stairAt(gx, gz, cy) {
+      const cx = Math.floor(gx / CHUNK)
+      const cz = Math.floor(gz / CHUNK)
+      return entryAt(gx, gz, cy)?.stairs.get(
+        cIdx(local(gx, cx), local(gz, cz))
+      ) ?? null
+    },
+    apertures,
+    cellCenter: (gx, gz, cy, target) =>
+      target.set((gx + 0.5) * CELL, cy * LAYER_H, (gz + 0.5) * CELL),
+  }
+
+  return { ...latticePathDiscovery, chunks, residentKeys, cm }
 }
 
 const wc = (c) => (c + 0.5) * CELL
@@ -392,6 +592,190 @@ describe('pathfind3d: cross-floor window extension', () => {
     expect(
       findPath(cm, wc(4), wc(7), 0, wc(9), wc(7), 1, { maxNodes: 200 })
     ).toBeNull()
+  })
+})
+
+describe('pathfind3d: bounded Tower routes and leash honesty (task 4.3 RED)', () => {
+  it('[R16-S01][R25-S01] traverses the connected three-floor Tower through two matched canonical stairs inside existing leashes', () => {
+    expect(DEFAULT_WORLD_CONFIG.mapFamily.selected).toBe(MAP_FAMILY_OFFICE)
+    expect(DEFAULT_WORLD_CONFIG.mapFamily.profiles[MAP_FAMILY_SEWER].enabled).toBe(true)
+    expect(DEFAULT_WORLD_CONFIG.mapFamily.profiles[MAP_FAMILY_TOWER].enabled).toBe(true)
+
+    const { structure, chunks, residentKeys, cm } = plannedTowerPathFixture()
+    expect(structure.participants).toHaveLength(2)
+    expect(structure.levelCount).toBe(3)
+    expect(structure.topCy - structure.baseCy).toBe(2)
+    expect(structure.verticalLinks).toHaveLength(2)
+
+    const links = [...structure.verticalLinks].sort((a, b) => a.lowerCy - b.lowerCy)
+    expect(links.map(({ lowerCy }) => lowerCy)).toEqual([
+      structure.baseCy,
+      structure.baseCy + 1,
+    ])
+    const matched = links.map((link) => {
+      const lower = chunks.get(`${link.cx},${link.lowerCy},${link.cz}`)?.data
+      const upper = chunks.get(`${link.cx},${link.lowerCy + 1},${link.cz}`)?.data
+      expect(lower?.stairUp).toEqual(upper?.stairDown)
+      expect(lower?.stairUp).toEqual(link.stair)
+      return { link, stair: lower.stairUp }
+    })
+
+    const first = matched[0]
+    const second = matched[1]
+    const startGX = first.link.cx * CHUNK + first.stair.landing.lx
+    const startGZ = first.link.cz * CHUNK + first.stair.landing.lz
+    const targetGX = second.link.cx * CHUNK + second.stair.exit.lx
+    const targetGZ = second.link.cz * CHUNK + second.stair.exit.lz
+    expect(Math.abs(structure.topCy - structure.baseCy)).toBeLessThanOrEqual(PATH_VLEASH)
+
+    const path = findPath(
+      cm,
+      wc(startGX),
+      wc(startGZ),
+      structure.baseCy,
+      wc(targetGX),
+      wc(targetGZ),
+      structure.topCy,
+      { maxNodes: 5000, collapse: false }
+    )
+    expect(path).not.toBeNull()
+    const cells = triples(path)
+    expect(cells[0]).toEqual([startGX, startGZ, structure.baseCy])
+    expect(cells.at(-1)).toEqual([targetGX, targetGZ, structure.topCy])
+    expect(new Set(cells.map(([, , cy]) => cy))).toEqual(
+      new Set([structure.baseCy, structure.baseCy + 1, structure.topCy])
+    )
+    for (const [gx, gz, cy] of cells) {
+      expect(residentKeys.has(
+        `${Math.floor(gx / CHUNK)},${cy},${Math.floor(gz / CHUNK)}`
+      )).toBe(true)
+    }
+  })
+
+  it('[R16-S02][R17-S01..S02] treats retained Tower chunks as functional availability only and rejects an in-structure target beyond the supplied A* leash before search', () => {
+    const { structure, residentKeys, cm } = plannedTowerPathFixture()
+    const { x0, z0, x1, z1 } = structure.globalBounds
+    const distance = Math.max(Math.abs(x1 - x0), Math.abs(z1 - z0))
+    expect(distance).toBeGreaterThan(1)
+    expect(residentKeys.has(
+      `${Math.floor(x1 / CHUNK)},${structure.baseCy},${Math.floor(z1 / CHUNK)}`
+    )).toBe(true)
+
+    const stairAt = vi.fn(cm.stairAt)
+    const retainedCM = { ...cm, stairAt }
+    expect(findPath(
+      retainedCM,
+      wc(x0),
+      wc(z0),
+      structure.baseCy,
+      wc(x1),
+      wc(z1),
+      structure.baseCy,
+      { leash: distance - 1, maxNodes: 1e6 }
+    )).toBeNull()
+    expect(stairAt).not.toHaveBeenCalled()
+  })
+})
+
+describe('pathfind3d: bounded Lattice routes and leash honesty (task 5.3 RED)', () => {
+  it('[R16-S01][R29-S01][R31-S03] traverses lower, middle, and upper Lattice floors through canonical links inside existing XZ/Y leashes', () => {
+    expect(DEFAULT_WORLD_CONFIG.mapFamily.selected).toBe(MAP_FAMILY_OFFICE)
+    expect(DEFAULT_WORLD_CONFIG.mapFamily.profiles[MAP_FAMILY_SEWER].enabled).toBe(true)
+    expect(DEFAULT_WORLD_CONFIG.mapFamily.profiles[MAP_FAMILY_TOWER].enabled).toBe(true)
+    expect(DEFAULT_WORLD_CONFIG.mapFamily.profiles[MAP_FAMILY_LATTICE].enabled).toBe(true)
+    expect(PATH_VLEASH).toBe(2)
+
+    const { structure, chunks, residentKeys, cm } = plannedLatticePathFixture()
+    expect(structure.participants).toHaveLength(9)
+    expect(structure.levelCount).toBe(3)
+    expect(structure.topCy - structure.baseCy).toBe(PATH_VLEASH)
+    expect(structure.verticalLinks).toHaveLength(2)
+
+    const links = [...structure.verticalLinks].sort((a, b) => a.lowerCy - b.lowerCy)
+    expect(links.map(({ lowerCy }) => lowerCy)).toEqual([
+      structure.baseCy,
+      structure.baseCy + 1,
+    ])
+    const matched = links.map((link) => {
+      const lower = chunks.get(`${link.cx},${link.lowerCy},${link.cz}`)?.data
+      const upper = chunks.get(`${link.cx},${link.lowerCy + 1},${link.cz}`)?.data
+      expect(lower?.stairUp).toEqual(upper?.stairDown)
+      expect(lower?.stairUp).toEqual(link.stair)
+      return { link, stair: lower.stairUp }
+    })
+
+    const first = matched[0]
+    const second = matched[1]
+    const startGX = first.link.cx * CHUNK + first.stair.landing.lx
+    const startGZ = first.link.cz * CHUNK + first.stair.landing.lz
+    const targetGX = second.link.cx * CHUNK + second.stair.exit.lx
+    const targetGZ = second.link.cz * CHUNK + second.stair.exit.lz
+    expect(Math.max(
+      Math.abs(targetGX - startGX),
+      Math.abs(targetGZ - startGZ)
+    )).toBeLessThanOrEqual(22)
+
+    const path = findPath(
+      cm,
+      wc(startGX),
+      wc(startGZ),
+      structure.baseCy,
+      wc(targetGX),
+      wc(targetGZ),
+      structure.topCy,
+      { maxNodes: 10_000, collapse: false }
+    )
+    expect(path).not.toBeNull()
+    const cells = triples(path)
+    expect(cells[0]).toEqual([startGX, startGZ, structure.baseCy])
+    expect(cells.at(-1)).toEqual([targetGX, targetGZ, structure.topCy])
+    expect(new Set(cells.map(([, , cy]) => cy))).toEqual(new Set([
+      structure.baseCy,
+      structure.baseCy + 1,
+      structure.topCy,
+    ]))
+    for (const [gx, gz, cy] of cells) {
+      expect(residentKeys.has(
+        `${Math.floor(gx / CHUNK)},${cy},${Math.floor(gz / CHUNK)}`
+      )).toBe(true)
+    }
+  })
+
+  it('[R16-S02..S04][R17-S01..S02] keeps retained Lattice chunks functional-only and refuses XZ/Y goals outside existing leashes before search', () => {
+    const { structure, residentKeys, cm } = plannedLatticePathFixture()
+    const { x0, z0, x1, z1 } = structure.globalBounds
+    const distance = Math.max(Math.abs(x1 - x0), Math.abs(z1 - z0))
+    expect(distance).toBeGreaterThan(22)
+    expect(residentKeys.has(
+      `${Math.floor(x1 / CHUNK)},${structure.baseCy},${Math.floor(z1 / CHUNK)}`
+    )).toBe(true)
+
+    const stairAt = vi.fn(cm.stairAt)
+    const retainedCM = { ...cm, stairAt }
+    expect(findPath(
+      retainedCM,
+      wc(x0),
+      wc(z0),
+      structure.baseCy,
+      wc(x1),
+      wc(z1),
+      structure.baseCy,
+      { maxNodes: 1e6 }
+    )).toBeNull()
+    expect(stairAt).not.toHaveBeenCalled()
+
+    // Supplying a larger option must not expand the canonical vertical cap.
+    expect(findPath(
+      retainedCM,
+      wc(x0),
+      wc(z0),
+      structure.baseCy,
+      wc(x0),
+      wc(z0),
+      structure.topCy + 1,
+      { maxNodes: 1e6, vleash: PATH_VLEASH + 10 }
+    )).toBeNull()
+    expect(stairAt).not.toHaveBeenCalled()
   })
 })
 

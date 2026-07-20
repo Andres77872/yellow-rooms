@@ -1,6 +1,10 @@
-import { CHUNK, LOAD_RADIUS, fmod } from './constants.js'
-import { hash3i, hash3f } from './core/hash.js'
-import { multilevelStructureAt } from './multilevel.js'
+import { CHUNK, LOAD_RADIUS, fmod } from '../constants.js'
+import { hash3i, hash3f } from '../core/hash.js'
+import {
+  structureAt,
+  structureOwnershipAt,
+} from './contract.js'
+import { structureAdapterFor } from './contract.js'
 
 // Slab contracts (v9). The slab between layer cy and cy+1 is ONE shared object,
 // keyed by the LOWER layer — the vertical analogue of the border contracts in
@@ -177,10 +181,43 @@ function excluded(cx, cz, cy, contract) {
 // deliberately conservative: a slab is reserved when either floor it joins is
 // part of a structure, even when the stair strip would miss the exact void
 // footprint. This also keeps stair lobbies off the bottom hall and top gallery.
+function validatedStructureAt(seed, cx, cz, levelCy, config) {
+  const structure = structureAt(seed, cx, cz, levelCy, config)
+  if (structure?.hasRoom !== true) return null
+
+  const adapter = structureAdapterFor(structure)
+  if (!adapter) return null
+
+  let participants
+  try {
+    participants = adapter.expectedParticipants(structure)
+  } catch {
+    return null
+  }
+  const ownership = participants.flatMap((participant) => {
+    if (
+      !Number.isInteger(participant?.cx) ||
+      !Number.isInteger(participant?.cz)
+    ) return []
+    const claim = structureOwnershipAt(
+      seed,
+      participant.cx,
+      participant.cz,
+      levelCy,
+      config
+    )
+    return claim ? [claim] : []
+  })
+
+  return adapter.validateStructure(structure, { ownership }).ok
+    ? structure
+    : null
+}
+
 function structureReservesSlab(seed, cx, cz, cy, config) {
   return (
-    multilevelStructureAt(seed, cx, cz, cy, config).hasRoom ||
-    multilevelStructureAt(seed, cx, cz, cy + 1, config).hasRoom
+    validatedStructureAt(seed, cx, cz, cy, config) !== null ||
+    validatedStructureAt(seed, cx, cz, cy + 1, config) !== null
   )
 }
 

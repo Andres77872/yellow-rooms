@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { slabContract, stairStrip, chunkStairs, stairConfig, STAIR_E, STAIR_W, STAIR_DX, STAIR_DZ } from '../slab.js'
+import { slabContract, stairStrip, chunkStairs, stairConfig, STAIR_E, STAIR_W, STAIR_DX, STAIR_DZ } from '../structures/slab.js'
 import { DEFAULT_WORLD_CONFIG } from '../config.js'
 import { LOAD_RADIUS } from '../constants.js'
 import {
   multilevelBandBase,
   multilevelConfig,
   multilevelContract,
-} from '../multilevel.js'
+} from '../structures/multilevel.js'
 
 const CFG = DEFAULT_WORLD_CONFIG
 const STAIR_ONLY = {

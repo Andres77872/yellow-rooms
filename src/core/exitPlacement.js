@@ -1,7 +1,9 @@
 import { CELL, CHUNK, CHUNK_WORLD, layerY } from '../world/constants.js'
 import { RNG } from '../world/core/rng.js'
-import { chunkMultilevelRooms } from '../world/multilevel.js'
-import { chunkStairs, stairStrip } from '../world/slab.js'
+import { generateChunk } from '../world/generate.js'
+import { MAP_FAMILY_SEWER } from '../world/mapTypes.js'
+import { chunkMultilevelRooms } from '../world/structures/multilevel.js'
+import { chunkStairs, stairStrip } from '../world/structures/slab.js'
 
 export const EXIT_FLOORS = Object.freeze([-5, -4, -3, -2, -1, 1, 2, 3, 4, 5])
 export const EXIT_REACH = 1.8
@@ -36,13 +38,22 @@ export function createExitPlacement(seedText, level, worldSeed, config) {
   const voids = new Set(
     room.hasRoom ? room.voidCells.map((cell) => `${cell.lx},${cell.lz}`) : []
   )
+  // Sewer chunks are mostly solid ground: the exit clearing must open into the
+  // gallery network, not punch an isolated pocket into sealed mass. Generating
+  // the host chunk once here is pure and deterministic, so the raster check
+  // cannot drift from what the streamed chunk will contain.
+  const sewerHost = config.mapFamily?.selected === MAP_FAMILY_SEWER
+    ? generateChunk(worldSeed, cx, cy, cz, config)
+    : null
   const clearOf = (x, z, margin) =>
     !voids.has(`${x},${z}`) &&
+    (!sewerHost || sewerHost.colAt(x, z) === 0) &&
     strips.every((cell) => Math.max(Math.abs(cell.lx - x), Math.abs(cell.lz - z)) > margin)
 
   // Margin 2 is preferred; margin 1 is guaranteed to leave a legal interior
   // cell even when this layer owns both an up- and a down-stair.
   const span = CHUNK - 6
+  let placed = false
   search: for (const margin of [2, 1]) {
     const start = (lz - 3) * span + (lx - 3)
     for (let i = 0; i < span * span; i++) {
@@ -52,7 +63,23 @@ export function createExitPlacement(seedText, level, worldSeed, config) {
       if (clearOf(x, z, margin)) {
         lx = x
         lz = z
+        placed = true
         break search
+      }
+    }
+  }
+  // Sewer last resort: a rare seed can keep the whole gallery network out of
+  // the preferred window. Any network cell off the strips still beats an exit
+  // sealed inside solid mass, and the trunk always crosses this range.
+  if (!placed && sewerHost) {
+    const wide = CHUNK - 2
+    relaxed: for (let i = 0; i < wide * wide; i++) {
+      const x = 1 + (i % wide)
+      const z = 1 + ((i / wide) | 0)
+      if (clearOf(x, z, 0)) {
+        lx = x
+        lz = z
+        break relaxed
       }
     }
   }

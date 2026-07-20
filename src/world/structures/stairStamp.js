@@ -1,6 +1,13 @@
-import { cIdx, CHUNK } from './constants.js'
-import { PASSAGE_WALL, PASSAGE_WIDE, CELL_LOBBY, CELL_STAIR } from './mapTypes.js'
-import { chunkStairs, stairStrip, STAIR_DX, STAIR_DZ, STAIR_E, STAIR_W } from './slab.js'
+import { cIdx, CHUNK } from '../constants.js'
+import { PASSAGE_WALL, PASSAGE_WIDE, CELL_LOBBY, CELL_STAIR } from '../mapTypes.js'
+import {
+  chunkStairs,
+  stairStrip,
+  STAIR_DX,
+  STAIR_DZ,
+  STAIR_E,
+  STAIR_W,
+} from './slab.js'
 
 // Stair stamps (v9) — pipeline stage L4.5, after topology repair, before lamps.
 //
@@ -16,9 +23,9 @@ import { chunkStairs, stairStrip, STAIR_DX, STAIR_DZ, STAIR_E, STAIR_W } from '.
 //
 // Both contracts (slab above = stairUp, slab below = stairDown) are carved
 // FIRST and walled SECOND, so one stamp's carve can never erase the other's
-// walls. Their cell/edge sets are disjoint by the slab parity scheme, and all
-// stamped edges land on interior lines [3..11] — never on owned border lines,
-// neighbour seams, or transition mouths (see slab.js).
+// walls. Office and family-owned slab contracts share the parity scheme and
+// land on interior lines [3..11] (see slab.js), so neither path can claim an
+// owned border line, neighbour seam, or transition mouth.
 //
 // Lower half (up contract), dir = ascent:      Upper half (down contract):
 //   ═════════════   flanks: landing+runs         ═══════   flanks: holes only
@@ -110,10 +117,37 @@ function stampUpper(data, c) {
   data.stairDown = { dir: c.dir, landing: { ...c.landing }, run: [{ ...c.run[0] }, { ...c.run[1] }], exit: { ...c.exit } }
 }
 
+// Shared descriptor-stamping primitive. Carve every participating halo before
+// placing either half so overlapping family-owned clearings cannot erase a
+// guard written by the other half. Existing office slab contracts and bounded
+// family risers therefore use exactly the same raster/protection semantics.
+export function stampStairDescriptors(data, { up = null, down = null }) {
+  if (up) carveHalo(data, up)
+  if (down) carveHalo(data, down)
+  if (up) stampLower(data, up)
+  if (down) stampUpper(data, down)
+}
+
+// Project the canonical structure's floor-ordered vertical links onto this
+// chunk slice without inventing another link representation. Each side reuses
+// the exact existing stair descriptor nested on the canonical structure.
+export function stampStructureVerticalLinks(data, structure) {
+  const linkAt = (lowerCy) => structure?.verticalLinks?.find(
+    (link) =>
+      link.lowerCy === lowerCy &&
+      link.cx === data.cx &&
+      link.cz === data.cz
+  )?.stair ?? null
+  stampStairDescriptors(data, {
+    up: linkAt(data.cy),
+    down: linkAt(data.cy - 1),
+  })
+}
+
 export function stampStairs(data, seed, cx, cy, cz, config) {
-  const { up, down } = chunkStairs(seed, cx, cz, cy, config)
-  if (up.hasStair) carveHalo(data, up)
-  if (down.hasStair) carveHalo(data, down)
-  if (up.hasStair) stampLower(data, up)
-  if (down.hasStair) stampUpper(data, down)
+  const contracts = chunkStairs(seed, cx, cz, cy, config)
+  stampStairDescriptors(data, {
+    up: contracts.up.hasStair ? contracts.up : null,
+    down: contracts.down.hasStair ? contracts.down : null,
+  })
 }

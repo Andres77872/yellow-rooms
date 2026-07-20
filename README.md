@@ -135,6 +135,120 @@ World-gen version 15 adds collision-real furniture and semantic room roles:
   rooms get rack rows and caution plates — while a quarter of ordinary rooms
   stay deliberately bare.
 
+### Map-family profiles (world-gen version 18)
+
+Version 18 keeps **office** as the selected default and release-enables the
+bounded **sewer**, **tower**, and **lattice** profiles behind explicit opt-in.
+Selection and activation are separate: selecting one profile does not enable,
+disable, or otherwise change another profile. Missing selection uses office;
+unknown, disabled, or incomplete explicit selections fail before family
+geometry or descriptors are emitted.
+
+Use the canonical config helper instead of hand-assembling a profile. It
+returns a mutable clone, selects only the requested family, and preserves every
+unrelated enable flag:
+
+```js
+import { worldConfigForFamily } from './src/world/mapFamily.js'
+
+const sewerConfig = worldConfigForFamily('sewer')
+const towerConfig = worldConfigForFamily('tower')
+const latticeConfig = worldConfigForFamily('lattice')
+```
+
+Pass the selected config to the headless generator or assign it as the runtime
+world config before starting a level. The helper does **not** bypass a disabled
+profile or its release gate.
+
+#### Family audit commands
+
+The office row is mandatory in every invocation and alone owns the unchanged
+`0.75` office-share floor. A forced non-office row evaluates its own geometry,
+descriptors, pins, corpus, and verdict without entering the office denominator.
+Currently enabled emitters are always audited; `--family` additionally forces
+the named row even when its release profile is disabled.
+
+```bash
+npm run audit:world -- --family sewer
+npm run audit:world -- --family tower
+npm run audit:world -- --family lattice
+npm run audit:world -- --family all
+```
+
+Use the final command for the complete release view. The JSON output must keep
+independent `office`, `sewer`, `tower`, and `lattice` entries in `familyRows`,
+and both `familyVerdict.ok` and the top-level `verdict.ok` must be `true`.
+
+#### Versioning and atomic activation
+
+An inert configuration or code path that cannot change emitted bytes does not
+require a version bump. A family's first byte-emitting activation, or any
+change to an enabled family's emitted bytes, requires all of the following in
+one release change:
+
+1. a higher `WORLD_GEN_VERSION`;
+2. regenerated global pins and every relevant maximum-height pin;
+3. matching family representative/corpus pins and corpus metadata, including
+   profile identity and seed derivation;
+4. the explicit family/kind audit adapters and independent family row; and
+5. for tower or lattice, passing hard void-death and deterministic-reset
+   evidence. Sewer does not depend on that exposed-void safety gate.
+
+Missing or stale evidence blocks activation. One released world-gen version
+identifies one pinned byte stream: never publish different bytes under an
+already released version number.
+
+#### Independent rollback
+
+Rollback is a release/configuration action, not a runtime family substitution.
+Create the candidate config with the canonical helper; it disables only the
+named non-office family, preserves unrelated passing families, and returns to
+office only when the rolled-back family was selected:
+
+```js
+import { rollbackMapFamily } from './src/world/mapFamily.js'
+
+const candidateConfig = rollbackMapFamily('tower', currentConfig)
+```
+
+If that family emitted released bytes, the config change is only half of the
+rollback. Restore the exact prior byte stream together with its prior version,
+global/family/relevant maximum-height pins, corpus metadata, and audit contract,
+then validate it against a trusted known-passing release record:
+
+```js
+import { validateRollbackEvidence } from './src/world/familyAudit.js'
+
+const rollback = validateRollbackEvidence({
+  scope: 'family',
+  family: 'tower',
+  current,
+  restored,
+  knownPassing,
+})
+if (!rollback.ok) throw new Error(rollback.reasons.join(', '))
+```
+
+`knownPassing` provenance belongs to the release workflow; synthetic fixtures
+are not release pins. Do not remove a family row while its emitter remains
+enabled. A shared-foundation rollback must restore one complete known-passing
+office profile, pair-enumeration behavior, audit schema, byte stream, version,
+and pin set—partial foundation rollback is invalid. Tower and lattice are
+independent emitters but retain their shared hard-void safety prerequisite.
+
+These audits prove deterministic release contracts, not frame-time, resident
+memory, rendering, or unrestricted pathfinding performance. No performance
+guarantee is implied without a separately supplied measurable budget and
+matching evidence.
+
+Canonical contract trace: specification `R05-R07`, `R14`, `R20`, and
+`R33-R34` in [Version and Pin Policy](.dev/sdd/changes/liminal-map-families-core/spec.md#version-and-pin-policy),
+[Audit and Corpus Contracts](.dev/sdd/changes/liminal-map-families-core/spec.md#audit-and-corpus-contracts),
+[Hard Void Death and Deterministic Reset](.dev/sdd/changes/liminal-map-families-core/spec.md#hard-void-death-and-deterministic-reset),
+and [Family-independent Activation, Rollout, and Rollback](.dev/sdd/changes/liminal-map-families-core/spec.md#family-independent-activation-rollout-and-rollback);
+design decisions `D01`, `D10`, and `D11` in the
+[technical design](.dev/sdd/changes/liminal-map-families-core/design.md#architecture-decisions).
+
 The generation rationale and history are documented in
 [docs/map-generation-research.md](docs/map-generation-research.md). The deeper
 liminal-horror research review, structure roadmap, dynamics, and validation
@@ -156,10 +270,12 @@ and the interior-architecture review for the dressing layer is in
 - `src/world/audit.js` — 2D seam and canonical layered-connectivity validation
 - `src/world/mapTypes.js` — semantic cell and passage vocabulary
 - `src/world/pipeline.js` — pure public generation pipeline
-- `src/world/trimwork.js` / `src/world/props.js` — joinery and interior
-  dressing builders consumed by `src/world/mesh.js`
-- `src/world/furniture.js` / `src/world/furnitureModels.js` — collision-real
-  furniture placement and piece models
+- `src/world/objects/` — organized section for all object definitions:
+  `joinery/` (door casings + leaves, window trim), `dressing/` (baseboards,
+  wall props, signs, vents), `furniture/` (collision-real piece models);
+  consumed by `src/world/mesh.js`
+- `src/world/furniture.js` — collision-real furniture placement (models live
+  in `src/world/objects/furniture/`)
 
 Generation is covered by deterministic golden tests, macro-plan and seam
 invariants, multi-chunk wall/navigation flood tests, region-distribution tests,

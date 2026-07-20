@@ -1,6 +1,6 @@
 import { CHUNK, ZONE_WAREHOUSE, fmod } from '../constants.js'
 import { hash2i } from '../core/hash.js'
-import { warehouseWallH, warehouseWallV } from '../warehouseStructure.js'
+import { warehouseWallH, warehouseWallV } from './warehouseFragments.js'
 import { carveTransitionThresholds, clearTransitionColumns } from './ZoneGenerator.js'
 
 export const id = ZONE_WAREHOUSE

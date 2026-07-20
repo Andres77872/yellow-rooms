@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { buildOfficeDistrictPlan } from '../zones/officePlan.js'
 import { buildChunk } from '../pipeline.js'
 import { ChunkData } from '../ChunkData.js'
-import { placeFurniture, FURN_RACK, FURN_CABINET, FURN_COPIER, FURN_COOLER, FURN_TABLE } from '../furniture.js'
+import { placeFurniture, FURN_RACK, FURN_CABINET, FURN_COPIER, FURN_COOLER, FURN_TABLE, FURN_BOOKSHELF } from '../furniture.js'
 import { DEFAULT_WORLD_CONFIG } from '../config.js'
 import { CHUNK, ZONE_OFFICE } from '../constants.js'
 import {
@@ -107,11 +107,13 @@ describe('role-driven furnishing', () => {
     expect(new Set(kinds(data))).toEqual(new Set([FURN_RACK]))
   })
 
-  it('lines an archive with cabinets only', () => {
+  it('lines an archive with book rows and an occasional cabinet', () => {
     const data = roomWithRole(SPACE_ROLE_ARCHIVE)
     placeFurniture(data, ctx)
     expect(data.furniture.length).toBeGreaterThan(0)
-    expect(new Set(kinds(data))).toEqual(new Set([FURN_CABINET]))
+    const set = new Set(kinds(data))
+    expect(set.has(FURN_BOOKSHELF)).toBe(true)
+    for (const k of set) expect([FURN_BOOKSHELF, FURN_CABINET]).toContain(k)
   })
 
   it('fills a copy room with copiers (and at most one cabinet)', () => {
