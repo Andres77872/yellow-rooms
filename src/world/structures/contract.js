@@ -611,10 +611,10 @@ const TOWER_POLICY = Object.freeze({
 const LATTICE_POLICY = Object.freeze({
   family: MAP_FAMILY_LATTICE,
   kind: STRUCTURE_KIND_LATTICE,
-  cardinality: (count) => count === 9,
+  cardinality: (count) => count === 16,
   shape: hasCanonicalLatticeOwnershipShape,
   band: (structure) =>
-    structure?.levelCount === 3 && structure?.topCy === structure?.baseCy + 2,
+    structure?.levelCount === 5 && structure?.topCy === structure?.baseCy + 4,
 })
 
 export const OFFICE_STRUCTURE_ADAPTER = makeAdapter(

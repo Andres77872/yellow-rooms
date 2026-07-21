@@ -675,7 +675,7 @@ describe('bounded Tower streaming evidence (task 4.3 RED)', () => {
 })
 
 describe('bounded Lattice streaming evidence (task 5.3 RED)', () => {
-  it('[R15-S01..S03][R16-S01][R17-S01..S02][R29-S01] covers exactly nine participants and all three floors from the middle floor with LOAD_RADIUS_Y=1', () => {
+  it('[R15-S01..S03][R16-S01][R17-S01..S02][R29-S01] covers exactly sixteen participants and all five floors from the middle floor with LOAD_RADIUS_Y=1', () => {
     expect(LOAD_RADIUS_Y).toBe(1)
     expect(DEFAULT_WORLD_CONFIG.mapFamily.selected).toBe(MAP_FAMILY_OFFICE)
     expect(DEFAULT_WORLD_CONFIG.mapFamily.profiles[MAP_FAMILY_SEWER].enabled).toBe(true)
@@ -688,14 +688,14 @@ describe('bounded Lattice streaming evidence (task 5.3 RED)', () => {
     expect(structure).toMatchObject({
       family: MAP_FAMILY_LATTICE,
       kind: 'latticeDistrict',
-      levelCount: 3,
-      district: { size: 3 },
+      levelCount: 5,
+      district: { size: 4 },
     })
-    expect(structure.participants).toHaveLength(9)
-    expect(structure.topCy - structure.baseCy).toBe(2)
+    expect(structure.participants).toHaveLength(16)
+    expect(structure.topCy - structure.baseCy).toBe(4)
     expect(structure).not.toHaveProperty('latticeSpan')
 
-    const middleCy = structure.baseCy + 1
+    const middleCy = structure.baseCy + 2
     const playerChunk = structure.anchor
     const px = (playerChunk.cx + 0.5) * CHUNK_WORLD
     const pz = (playerChunk.cz + 0.5) * CHUNK_WORLD
@@ -704,7 +704,7 @@ describe('bounded Lattice streaming evidence (task 5.3 RED)', () => {
     cm._streamPcy = middleCy
     cm._streamPcz = playerChunk.cz
 
-    expect(cm._enqueueStructureRequests(structure)).toBe(27)
+    expect(cm._enqueueStructureRequests(structure)).toBe(80)
     while (cm.queue.length) cm._buildNext()
 
     const structureKeys = []
@@ -717,10 +717,12 @@ describe('bounded Lattice streaming evidence (task 5.3 RED)', () => {
         expect(cm.chunks.get(key)?.structure).toEqual(structure)
       }
     }
-    expect(structureKeys).toHaveLength(27)
+    expect(structureKeys).toHaveLength(80)
     expect(coveredFloors).toEqual(new Set([
       structure.baseCy,
+      structure.baseCy + 1,
       middleCy,
+      structure.baseCy + 3,
       structure.topCy,
     ]))
 
@@ -741,7 +743,7 @@ describe('bounded Lattice streaming evidence (task 5.3 RED)', () => {
   it('[R09-S02..S06][R16-S03][R31-S03] refuses missing-polygon, conflicting-owner, missing-floor, and inferred-kind Lattice authority', () => {
     const { seed, config, structure } = plannedLatticeFixture()
     const participant = structure.anchor
-    const middleCy = structure.baseCy + 1
+    const middleCy = structure.baseCy + 2
     const { cm } = makeLatticeManager(seed, config)
     cm._streamPcx = participant.cx
     cm._streamPcy = middleCy
@@ -760,7 +762,7 @@ describe('bounded Lattice streaming evidence (task 5.3 RED)', () => {
       {
         ...structure,
         topCy: structure.topCy - 1,
-        levelCount: 2,
+        levelCount: 4,
       },
       {
         ...structure,

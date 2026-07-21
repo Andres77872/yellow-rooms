@@ -3,6 +3,7 @@ import { deepFreeze } from '../mapFamily.js'
 import {
   CELL_ATRIUM,
   CELL_BRIDGE,
+  CELL_OPEN,
   CELL_VOID,
   PASSAGE_WALL,
   PASSAGE_WIDE,
@@ -235,10 +236,15 @@ function resetLatticeRaster(data, structure, geometry) {
       // is never a named room, and stale role bytes would leak into dressing
       // and debug reads that trust "roles only ride CELL_ROOM".
       data.spaceRole[cIdx(lx, lz)] = SPACE_ROLE_NONE
+      // The band's bottom floor is STREET LEVEL: the slab below it is intact
+      // (no lower slice, no lethal half), so unretained cells there are real
+      // walkable ground under the catwalk canopy, not a fenced fake void.
       data.cellKind[cIdx(lx, lz)] = geometry.chamberCells.has(key) ||
         geometry.stairSafeCells.has(key)
         ? CELL_ATRIUM
-        : geometry.edgeCells.has(key) ? CELL_BRIDGE : CELL_VOID
+        : geometry.edgeCells.has(key)
+          ? CELL_BRIDGE
+          : data.cy === structure.baseCy ? CELL_OPEN : CELL_VOID
     }
   }
   for (let cell = 0; cell < CHUNK; cell++) {
@@ -291,6 +297,38 @@ function stampRetainedBoundaryRails(data, geometry) {
   }
 }
 
+// Stair-safe halo cells on one floor, keyed by global position. Both floors of
+// a link retain the same strip footprint plus a one-cell ring around it.
+function stairHaloCellKeys(structure, levelCy) {
+  const halo = new Set()
+  for (const link of structure.verticalLinks) {
+    if (levelCy !== link.lowerCy && levelCy !== link.lowerCy + 1) continue
+    const cells = [link.stair.landing, ...link.stair.run, link.stair.exit]
+    for (const cell of cells) {
+      const gx = link.cx * CHUNK + cell.lx
+      const gz = link.cz * CHUNK + cell.lz
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          halo.add(latticeHorizontalCellKey(gx + dx, gz + dz))
+        }
+      }
+    }
+  }
+  return halo
+}
+
+// The cell on the far side of a chamber-perimeter edge from the anchor.
+function perimeterOutsideCell(anchor, edge) {
+  if (edge.axis === 'v') {
+    return { gx: edge.gx < anchor.gx ? edge.gx - 1 : edge.gx, gz: edge.gz }
+  }
+  return { gx: edge.gx, gz: edge.gz < anchor.gz ? edge.gz - 1 : edge.gz }
+}
+
+// A chamber opens toward (a) the nearest same-floor cell of each incident
+// catwalk and (b) EVERY perimeter edge whose outside cell belongs to a stair
+// halo. The halo rule is what keeps a stair pocket walkable from its chamber:
+// rails may cue the drop, but they may never seal the pocket into an island.
 export function latticeChamberApproaches(structure, anchor) {
   const approaches = new Set()
   for (const edge of structure.edges) {
@@ -312,18 +350,16 @@ export function latticeChamberApproaches(structure, anchor) {
     else if (outside.gz < anchor.gz) approaches.add(`h:${anchor.gx},${anchor.gz - 1}`)
   }
 
-  const lowerLink = structure.verticalLinks.find((link) =>
-    link.lowerCy === anchor.levelCy &&
-    link.cx === Math.floor(anchor.gx / CHUNK) &&
-    link.cz === Math.floor(anchor.gz / CHUNK) &&
-    link.stair.landing.lx === ((anchor.gx % CHUNK) + CHUNK) % CHUNK &&
-    link.stair.landing.lz === ((anchor.gz % CHUNK) + CHUNK) % CHUNK
-  )
-  if (lowerLink) {
-    if (lowerLink.stair.dir === 0) approaches.add(`h:${anchor.gx},${anchor.gz - 1}`)
-    else if (lowerLink.stair.dir === 1) approaches.add(`v:${anchor.gx + 2},${anchor.gz}`)
-    else if (lowerLink.stair.dir === 2) approaches.add(`h:${anchor.gx},${anchor.gz + 2}`)
-    else approaches.add(`v:${anchor.gx - 1},${anchor.gz}`)
+  const halo = stairHaloCellKeys(structure, anchor.levelCy)
+  if (halo.size > 0) {
+    for (const side of latticeChamberPerimeter(anchor)) {
+      for (const edge of side) {
+        const outside = perimeterOutsideCell(anchor, edge)
+        if (halo.has(latticeHorizontalCellKey(outside.gx, outside.gz))) {
+          approaches.add(`${edge.axis}:${edge.gx},${edge.gz}`)
+        }
+      }
+    }
   }
   return approaches
 }
@@ -425,7 +461,10 @@ export function stampLatticeStructure(data, structure, profile) {
 
   const geometry = latticeFloorGeometry(structure, data.cy)
   resetLatticeRaster(data, structure, geometry)
-  stampRetainedBoundaryRails(data, geometry)
+  // Street level needs no drop guards — every cell has ground. Rails fence
+  // retained decks from lethal void only on the elevated floors.
+  const elevated = data.cy > structure.baseCy
+  if (elevated) stampRetainedBoundaryRails(data, geometry)
 
   data.structure = structure
   data.structureUp = data.cy < structure.topCy
@@ -439,7 +478,7 @@ export function stampLatticeStructure(data, structure, profile) {
   // an owned bridge cell. The stair descriptor still owns holes, ramps, and
   // guards; CELL_STAIR/CELL_LOBBY remains only on halo cells outside the graph.
   restoreCanonicalGraphCellKinds(data, geometry)
-  stampRetainedBoundaryRails(data, geometry)
+  if (elevated) stampRetainedBoundaryRails(data, geometry)
   stampChamberCueRails(data, structure)
   data.lethalVoidUp = lethalVoidHalf(
     structure,

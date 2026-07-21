@@ -686,16 +686,21 @@ describe('pathfind3d: bounded Lattice routes and leash honesty (task 5.3 RED)', 
     expect(PATH_VLEASH).toBe(2)
 
     const { structure, chunks, residentKeys, cm } = plannedLatticePathFixture()
-    expect(structure.participants).toHaveLength(9)
-    expect(structure.levelCount).toBe(3)
-    expect(structure.topCy - structure.baseCy).toBe(PATH_VLEASH)
-    expect(structure.verticalLinks).toHaveLength(2)
+    expect(structure.participants).toHaveLength(16)
+    expect(structure.levelCount).toBe(5)
+    expect(structure.topCy - structure.baseCy).toBe(4)
+    expect(structure.verticalLinks.length).toBeGreaterThanOrEqual(4)
 
-    const links = [...structure.verticalLinks].sort((a, b) => a.lowerCy - b.lowerCy)
-    expect(links.map(({ lowerCy }) => lowerCy)).toEqual([
-      structure.baseCy,
-      structure.baseCy + 1,
-    ])
+    // Canonical link order is (lowerCy, cz, cx), and every adjacent floor pair
+    // of the five-level band is bridged by at least one stair.
+    const links = [...structure.verticalLinks]
+    expect(links).toEqual([...links].sort((a, b) =>
+      a.lowerCy - b.lowerCy || a.cz - b.cz || a.cx - b.cx
+    ))
+    const coveredBoundaries = new Set(links.map(({ lowerCy }) => lowerCy))
+    for (let lowerCy = structure.baseCy; lowerCy < structure.topCy; lowerCy++) {
+      expect(coveredBoundaries.has(lowerCy)).toBe(true)
+    }
     const matched = links.map((link) => {
       const lower = chunks.get(`${link.cx},${link.lowerCy},${link.cz}`)?.data
       const upper = chunks.get(`${link.cx},${link.lowerCy + 1},${link.cz}`)?.data
@@ -704,8 +709,13 @@ describe('pathfind3d: bounded Lattice routes and leash honesty (task 5.3 RED)', 
       return { link, stair: lower.stairUp }
     })
 
-    const first = matched[0]
-    const second = matched[1]
+    // The five-floor band is taller than PATH_VLEASH, so the bounded proof
+    // climbs the two lowest boundaries: three floors, |dcy| = PATH_VLEASH.
+    const first = matched.find(({ link }) => link.lowerCy === structure.baseCy)
+    const second = matched.find(({ link }) =>
+      link.lowerCy === structure.baseCy + 1
+    )
+    const goalCy = structure.baseCy + PATH_VLEASH
     const startGX = first.link.cx * CHUNK + first.stair.landing.lx
     const startGZ = first.link.cz * CHUNK + first.stair.landing.lz
     const targetGX = second.link.cx * CHUNK + second.stair.exit.lx
@@ -722,17 +732,17 @@ describe('pathfind3d: bounded Lattice routes and leash honesty (task 5.3 RED)', 
       structure.baseCy,
       wc(targetGX),
       wc(targetGZ),
-      structure.topCy,
+      goalCy,
       { maxNodes: 10_000, collapse: false }
     )
     expect(path).not.toBeNull()
     const cells = triples(path)
     expect(cells[0]).toEqual([startGX, startGZ, structure.baseCy])
-    expect(cells.at(-1)).toEqual([targetGX, targetGZ, structure.topCy])
+    expect(cells.at(-1)).toEqual([targetGX, targetGZ, goalCy])
     expect(new Set(cells.map(([, , cy]) => cy))).toEqual(new Set([
       structure.baseCy,
       structure.baseCy + 1,
-      structure.topCy,
+      goalCy,
     ]))
     for (const [gx, gz, cy] of cells) {
       expect(residentKeys.has(

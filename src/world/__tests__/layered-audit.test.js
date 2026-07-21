@@ -54,9 +54,11 @@ function generatedPair(seed = 991) {
 }
 
 function structureDescriptor(family, id) {
+  // The v24 Lattice ownership contract is a 4x4-chunk district spanning five
+  // floors; anything smaller fails the family adapter's participant/band shape.
   const participants = family === MAP_FAMILY_LATTICE
-    ? Array.from({ length: 3 }, (_, cz) =>
-        Array.from({ length: 3 }, (_, cx) => ({ cx, cz }))
+    ? Array.from({ length: 4 }, (_, cz) =>
+        Array.from({ length: 4 }, (_, cx) => ({ cx, cz }))
       ).flat()
     : [{ cx: 0, cz: 0 }, { cx: 1, cz: 0 }]
   return {
@@ -65,14 +67,14 @@ function structureDescriptor(family, id) {
     kind: family === MAP_FAMILY_TOWER
       ? STRUCTURE_KIND_TOWER
       : STRUCTURE_KIND_LATTICE,
-    district: { x: 0, z: 0, size: family === MAP_FAMILY_TOWER ? 2 : 3 },
+    district: { x: 0, z: 0, size: family === MAP_FAMILY_TOWER ? 2 : 4 },
     baseCy: 0,
-    topCy: 2,
-    ...(family === MAP_FAMILY_LATTICE ? { levelCount: 3 } : {}),
+    topCy: family === MAP_FAMILY_LATTICE ? 4 : 2,
+    ...(family === MAP_FAMILY_LATTICE ? { levelCount: 5 } : {}),
     participants,
     anchor: participants[0],
     globalBounds: family === MAP_FAMILY_LATTICE
-      ? { x0: 0, z0: 0, x1: CHUNK * 3 - 1, z1: CHUNK * 3 - 1 }
+      ? { x0: 0, z0: 0, x1: CHUNK * 4 - 1, z1: CHUNK * 4 - 1 }
       : { x0: 0, z0: 0, x1: CHUNK * 2 - 1, z1: CHUNK - 1 },
     verticalLinks: [],
   }
@@ -866,14 +868,14 @@ describe('Tower layered registration and landmark coverage (task 4.2 RED)', () =
 })
 
 describe('Lattice layered stamping, cues, and lethal parity (task 5.2 RED)', () => {
-  it('audits all three open floors, both connector slabs, combined cues, and matched lethal halves', () => {
+  it('audits all five open floors, every connector slab, combined cues, and matched lethal halves', () => {
     const { chunks, upper, descriptor, cells } = authoredLatticeVoidFixture()
     const adapter = structureAdapterFor(descriptor)
     const plane = adapter.hardVoidAt(upper, cells[0].lx, cells[0].lz)
     const audit = auditLatticeFixture(chunks)
 
-    expect(descriptor.participants).toHaveLength(9)
-    expect(descriptor.anchors).toHaveLength(25)
+    expect(descriptor.participants).toHaveLength(16)
+    expect(descriptor.anchors).toHaveLength(64)
     expect(descriptor.anchors.some((anchor) => anchor.exposureM === undefined)).toBe(true)
     expect(descriptor.anchors.some((anchor) => anchor.exposureM === 20)).toBe(true)
     expect(plane).toEqual({
@@ -881,15 +883,17 @@ describe('Lattice layered stamping, cues, and lethal parity (task 5.2 RED)', () 
       family: MAP_FAMILY_LATTICE,
       deathYmm: cells[0].deathYmm,
     })
-    expect(audit.lethalVoidPairs).toBe(18)
+    // 16 participant columns x 4 internal slabs: every slab of the five-floor
+    // band carries one matched lethal-void pair.
+    expect(audit.lethalVoidPairs).toBe(64)
     expect(audit.familyAudit).toMatchObject({
-      familyCounts: { lattice: 27 },
-      kindCounts: { latticeDistrict: 27 },
+      familyCounts: { lattice: 80 },
+      kindCounts: { latticeDistrict: 80 },
       latticeMetrics: {
-        anchorCount: 25,
-        floorCoverage: [0, 1, 2],
+        anchorCount: 64,
+        floorCoverage: [0, 1, 2, 3, 4],
         horizontalBridges: expect.any(Number),
-        verticalConnectors: 2,
+        verticalConnectors: expect.any(Number),
         defaultExposureM: 5,
         maximumExposureM: 20,
         minimumCombinedCueCells: expect.any(Number),
@@ -899,6 +903,9 @@ describe('Lattice layered stamping, cues, and lethal parity (task 5.2 RED)', () 
     })
     expect(audit.familyAudit.latticeMetrics.minimumCombinedCueCells)
       .toBeGreaterThanOrEqual(8)
+    // One stair per vertical tree edge, covering all four floor boundaries.
+    expect(audit.familyAudit.latticeMetrics.verticalConnectors)
+      .toBeGreaterThanOrEqual(4)
     expect(audit.familyDescriptorFailures).toBe(0)
     expect({
       invalidMultilevelRooms: audit.invalidMultilevelRooms,
@@ -914,11 +921,10 @@ describe('Lattice layered stamping, cues, and lethal parity (task 5.2 RED)', () 
       invalidMultilevelStructures: 0,
       missingMultilevelSlices: 0,
       closedBridgeSeams: 0,
-      // Generic walk-graph components remain one per floor until task 5.7
-      // integrates runtime apertures. Task 5.6 accepts the strict canonical
-      // graph/stamp/link family evidence without claiming that later runtime.
-      connected: false,
-      components: 3,
+      // v24's walkable street level plus a stair for every floor boundary and
+      // stranded-top catwalk repair keep the generic walk graph one component.
+      connected: true,
+      components: 1,
     })
     expect(audit.ok).toBe(true)
   })

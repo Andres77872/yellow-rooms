@@ -36,7 +36,7 @@ const DEFERRED_SEWER_MODULE_KINDS = Object.freeze([
 ])
 const TOWER_STRUCTURE_KIND = 'towerSkybridge'
 const LATTICE_STRUCTURE_KIND = 'latticeDistrict'
-const LATTICE_FLOORS = Object.freeze([0, 1, 2])
+const LATTICE_FLOORS = Object.freeze([0, 1, 2, 3, 4])
 const LATTICE_AUDIT_DIMENSIONS = Object.freeze([
   'polygon',
   'anchors',
@@ -49,6 +49,7 @@ const LATTICE_AUDIT_DIMENSIONS = Object.freeze([
   'boundaryCues',
   'plainWalls',
   'guards',
+  'reachability',
   'lethalVoid',
 ])
 const TOWER_LANDMARK_KINDS = Object.freeze([
@@ -2007,7 +2008,7 @@ describe('Lattice audit registration and bounded stamp evidence (task 5.2 RED)',
     expectOfficeIndependent(report, office)
   })
 
-  it('accepts one open 3×3×3 stamp with 25 chambers, horizontal bridges, and both vertical connectors', async () => {
+  it('accepts one open 4×4×5 stamp with 64 chambers, horizontal bridges, and full vertical connector coverage', async () => {
     const fixture = latticeFixture()
     const descriptor = latticeDescriptorFromFixture(fixture)
     const report = await runLatticeAudit({
@@ -2017,20 +2018,27 @@ describe('Lattice audit registration and bounded stamp evidence (task 5.2 RED)',
     const anchorById = new Map(descriptor.anchors.map((anchor) => [anchor.id, anchor]))
     const cycles = descriptor.edges.filter(({ role }) => role === 'cycle')
 
-    expect(descriptor.participants).toHaveLength(9)
-    expect(descriptor.anchors).toHaveLength(25)
-    expect(fixture.chunks.size).toBe(27)
+    expect(descriptor.participants).toHaveLength(16)
+    expect(descriptor.anchors).toHaveLength(64)
+    expect(fixture.chunks.size).toBe(80)
     expect([...fixture.chunks.values()].every((data) =>
       data.mapFamily === MAP_FAMILY_LATTICE &&
       data.structure?.id === descriptor.id
     )).toBe(true)
-    expect(descriptor.verticalLinks.map(({ lowerCy }) => lowerCy))
-      .toEqual([descriptor.baseCy, descriptor.baseCy + 1])
+    // One stair per vertical tree edge, sorted by (lowerCy, cz, cx), with every
+    // adjacent floor boundary of the five-level band bridged at least once.
+    expect(descriptor.verticalLinks.map(({ lowerCy }) => lowerCy)).toEqual([
+      descriptor.baseCy,
+      descriptor.baseCy + 1,
+      descriptor.baseCy + 2,
+      descriptor.baseCy + 3,
+    ])
     expect(descriptor.edges.some(({ role }) => role !== 'vertical')).toBe(true)
-    expect(descriptor.edges.filter(({ role }) => role === 'vertical')).toHaveLength(2)
+    expect(descriptor.edges.filter(({ role }) => role === 'vertical'))
+      .toHaveLength(descriptor.verticalLinks.length)
     // Conciliation correction: a cycle is eligible only when both canonical
     // endpoints are on the same floor. Cross-floor links always use `vertical`.
-    expect(cycles).toHaveLength(1)
+    expect(cycles).toHaveLength(3)
     expect(cycles.every(({ a, b }) =>
       anchorById.get(a).levelCy === anchorById.get(b).levelCy
     )).toBe(true)
@@ -2083,7 +2091,7 @@ describe('Lattice malformed fixtures fail only the Lattice row (task 5.2 RED)', 
       },
     },
     {
-      label: 'missing ninth participant',
+      label: 'missing sixteenth participant',
       reason: 'lattice:missing-participant',
       damage(fixture) {
         const descriptor = latticeDescriptorFromFixture(fixture)
@@ -2094,11 +2102,11 @@ describe('Lattice malformed fixtures fail only the Lattice row (task 5.2 RED)', 
       },
     },
     {
-      label: 'oversized four-chunk district',
-      reason: 'lattice:bounded-3x3x3',
+      label: 'oversized five-chunk district',
+      reason: 'lattice:bounded-4x4x5',
       damage(fixture) {
         replaceLatticeDescriptor(fixture, (descriptor) => {
-          descriptor.district.size = 4
+          descriptor.district.size = 5
         })
       },
     },
@@ -2113,17 +2121,16 @@ describe('Lattice malformed fixtures fail only the Lattice row (task 5.2 RED)', 
       },
     },
     {
-      label: 'missing vertical bridge orientation and connector pair',
+      label: 'missing vertical stair connectors',
       reason: 'lattice:missing-vertical-link',
       damage(fixture) {
         replaceLatticeDescriptor(fixture, (descriptor) => {
-          descriptor.edges = descriptor.edges.filter(({ role }) => role !== 'vertical')
           descriptor.verticalLinks = []
         })
       },
     },
     {
-      label: 'cycle reinsertion below eight percent',
+      label: 'cycle reinsertion below twelve percent',
       reason: 'lattice:cycle-rate',
       damage(fixture) {
         replaceLatticeDescriptor(fixture, (descriptor) => {
@@ -2274,23 +2281,30 @@ describe('independent all-floor Lattice row and Foundation safety consumption (t
       generatorVersion: WORLD_GEN_VERSION,
       pins: { family: false, maximumHeight: false },
       corpus: {
-        chunks: 27,
+        chunks: 80,
         officeChunks: 0,
         familyMetrics: {
-          participantCardinality: 9,
-          districtFootprint: { x: 3, z: 3 },
+          participantCardinality: 16,
+          districtFootprint: { x: 4, z: 4 },
           districtCount: 1,
           floorCoverage: LATTICE_FLOORS,
-          anchorCount: 25,
-          backbone: { edgeCount: 24, connected: true, acyclic: true, minimum: true },
-          cycles: { inserted: 1, eligibleNonBackboneLinks: 8, rate: 0.125 },
+          anchorCount: 64,
+          backbone: { edgeCount: 63, connected: true, acyclic: true, minimum: true },
+          cycles: { inserted: 3, eligibleNonBackboneLinks: 21, rate: 3 / 21 },
           orientations: { horizontal: true, vertical: true },
-          verticalConnections: { lowerMiddle: true, middleUpper: true },
+          verticalConnections: { boundaries: 4, covered: 4, stairs: 4 },
           stamping: {
-            floorSlices: 27,
-            chamberContexts: 25,
+            floorSlices: 80,
+            chamberContexts: 64,
             bridgeSegmentsMatchDescriptor: true,
             enclosedRoomSlices: 0,
+          },
+          reachability: {
+            components: 1,
+            walkableCells: expect.any(Number),
+            strandedCells: 0,
+            floorsPopulated: 5,
+            expectedFloors: 5,
           },
           exposure: {
             defaultM: 5,
@@ -2313,6 +2327,9 @@ describe('independent all-floor Lattice row and Foundation safety consumption (t
       },
       verdict: { ok: true, reasons: [] },
     })
+    expect(
+      rowFor(report, 'lattice').corpus.familyMetrics.reachability.walkableCells
+    ).toBeGreaterThan(0)
   })
 
   it('requires Lattice-specific metrics even when generic family metadata is complete', async () => {
@@ -2327,7 +2344,7 @@ describe('independent all-floor Lattice row and Foundation safety consumption (t
     expectOfficeIndependent(report, office)
   })
 
-  it('rejects production evidence that contains only two of the three Lattice floors', async () => {
+  it('rejects production evidence that contains only four of the five Lattice floors', async () => {
     const fixture = latticeFixture()
     const rows = latticeFamilyRows(fixture)
     const office = structuredClone(rows[0])

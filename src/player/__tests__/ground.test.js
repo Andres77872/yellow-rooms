@@ -71,9 +71,9 @@ function loadedHardVoidFixture(family, { loaded = true, owned = true } = {}) {
   const id = family === MAP_FAMILY_TOWER ? 0x7100 : 0x1a771ce
   const participants = family === MAP_FAMILY_TOWER
     ? [{ cx: 0, cz: 0 }, { cx: 1, cz: 0 }]
-    : Array.from({ length: 9 }, (_, index) => ({
-        cx: index % 3,
-        cz: Math.floor(index / 3),
+    : Array.from({ length: 16 }, (_, index) => ({
+        cx: index % 4,
+        cz: Math.floor(index / 4),
       }))
   const structure = {
     id,
@@ -82,9 +82,9 @@ function loadedHardVoidFixture(family, { loaded = true, owned = true } = {}) {
       ? STRUCTURE_KIND_TOWER
       : STRUCTURE_KIND_LATTICE,
     baseCy: 0,
-    topCy: 2,
+    topCy: family === MAP_FAMILY_LATTICE ? 4 : 2,
     ...(family === MAP_FAMILY_LATTICE
-      ? { levelCount: 3, district: { x: 0, z: 0, size: 3 } }
+      ? { levelCount: 5, district: { x: 0, z: 0, size: 4 } }
       : {}),
     participants,
     anchor: participants[0],

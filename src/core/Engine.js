@@ -157,6 +157,33 @@ export class Engine {
       this.ui.refreshSettings()
     })
 
+    if (!this.touch) {
+      // Esc closes the pause menu on desktop — and it MUST resume on keyup,
+      // not keydown: Esc is the browser's pointer-lock exit gesture, so if the
+      // key is still physically held when requestPointerLock engages, the
+      // browser instantly exits the lock again and _onLock reopens the pause
+      // menu (close -> open flicker). On keyup the key is released before the
+      // re-lock, so the lock sticks. Opening works via pointer lock (the
+      // browser swallows the Esc that exits the lock, then _onLock pauses).
+      // The _pauseT guard covers engines that also deliver the unlocking Esc's
+      // keyup — without it that same press would instantly re-resume.
+      addEventListener('keyup', (e) => {
+        if (e.code !== 'Escape' || this.state.phase !== Phase.PAUSED) return
+        if (this.debugMode?.active) return
+        if (performance.now() - (this._pauseT ?? 0) < 400) return
+        this.resume()
+      })
+      // Re-lock fallback: Chrome refuses requestPointerLock for ~1s after an
+      // Esc-initiated unlock, so an early Esc-resume can leave the game PLAYING
+      // with the mouse free (dead look, and lock loss can't re-trigger pause
+      // because there is no lock to lose). Any click re-captures the pointer.
+      addEventListener('click', () => {
+        if (this.state.phase !== Phase.PLAYING || this.controller.isLocked) return
+        if (this.debugMode?.active) return
+        this.controller.lock()
+      })
+    }
+
     this.debugMode = new DebugMode(this) // inert until F2; visualizes gen/lighting/AI
 
     // Footsteps/landings sound like the floor they land on: family floor
@@ -370,6 +397,7 @@ export class Engine {
     // next level in PLAYING with the pointer unlocked and mouse-look dead, with no
     // in-game way to re-lock. Pausing lets the Resume button re-lock via a gesture.
     if (!locked && (this.state.phase === Phase.PLAYING || this.state.phase === Phase.TRANSITION)) {
+      this._pauseT = performance.now()
       this.state.phase = Phase.PAUSED
       this.ui.showPause(this.state)
     }
@@ -377,6 +405,7 @@ export class Engine {
 
   pause() {
     if (this.state.phase !== Phase.PLAYING && this.state.phase !== Phase.TRANSITION) return
+    this._pauseT = performance.now()
     this.state.phase = Phase.PAUSED
     this.ui.showPause(this.state)
     this.touchControls?.reset()

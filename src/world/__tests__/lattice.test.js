@@ -8,6 +8,11 @@ import { structureAt } from '../structures/contract.js'
 
 const FIXED_SEEDS = Object.freeze([0x1a771ce, 0x5a17, 0xc0ffee])
 const LATTICE_KIND = 'latticeDistrict'
+const DISTRICT_CHUNKS = 4
+const LEVELS = 5
+const ANCHORS_PER_AXIS = 8
+const ANCHOR_COUNT = ANCHORS_PER_AXIS * ANCHORS_PER_AXIS
+const PARTICIPANT_COUNT = DISTRICT_CHUNKS * DISTRICT_CHUNKS
 const EDGE_ROLES = Object.freeze(['backbone', 'cycle', 'spine', 'vertical'])
 const TREE_ROLES = new Set(['backbone', 'spine', 'vertical'])
 const NETWORK_FIELDS = Object.freeze([
@@ -96,18 +101,18 @@ function validParticipant(participant) {
 function completeDistrictParticipants(descriptor) {
   const participants = descriptor?.participants ?? []
   if (
-    descriptor?.district?.size !== 3 ||
+    descriptor?.district?.size !== DISTRICT_CHUNKS ||
     !Number.isInteger(descriptor.district.x) ||
     !Number.isInteger(descriptor.district.z) ||
-    participants.length !== 9 ||
+    participants.length !== PARTICIPANT_COUNT ||
     participants.some((participant) => !validParticipant(participant))
   ) return false
 
-  const originCx = descriptor.district.x * 3
-  const originCz = descriptor.district.z * 3
+  const originCx = descriptor.district.x * DISTRICT_CHUNKS
+  const originCz = descriptor.district.z * DISTRICT_CHUNKS
   const expected = []
-  for (let dz = 0; dz < 3; dz++) {
-    for (let dx = 0; dx < 3; dx++) {
+  for (let dz = 0; dz < DISTRICT_CHUNKS; dz++) {
+    for (let dx = 0; dx < DISTRICT_CHUNKS; dx++) {
       expected.push({ cx: originCx + dx, cz: originCz + dz })
     }
   }
@@ -137,9 +142,9 @@ function validGlobalBounds(bounds, participants) {
     bounds.z1 < (maxCz + 1) * CHUNK
 }
 
-function anchorsFormFiveByFive(descriptor) {
+function anchorsFormFullGrid(descriptor) {
   const anchors = descriptor?.anchors ?? []
-  if (anchors.length !== 25) return false
+  if (anchors.length !== ANCHOR_COUNT) return false
   if (anchors.some((anchor) =>
     !Number.isInteger(anchor?.id) ||
     !Number.isInteger(anchor.gx) ||
@@ -153,7 +158,12 @@ function anchorsFormFiveByFive(descriptor) {
   const xs = [...new Set(anchors.map(({ gx }) => gx))].sort((a, b) => a - b)
   const zs = [...new Set(anchors.map(({ gz }) => gz))].sort((a, b) => a - b)
   const positions = new Set(anchors.map(({ gx, gz }) => `${gx},${gz}`))
-  if (ids.size !== 25 || xs.length !== 5 || zs.length !== 5 || positions.size !== 25) {
+  if (
+    ids.size !== ANCHOR_COUNT ||
+    xs.length !== ANCHORS_PER_AXIS ||
+    zs.length !== ANCHORS_PER_AXIS ||
+    positions.size !== ANCHOR_COUNT
+  ) {
     return false
   }
   return xs.every((gx) => zs.every((gz) => positions.has(`${gx},${gz}`))) &&
@@ -270,7 +280,7 @@ function latticeContractReasons(fixture) {
     descriptor.id > 0xffffffff
   ) reasons.add('lattice-identity')
 
-  if (participants.length !== 9) reasons.add('participant-cardinality')
+  if (participants.length !== PARTICIPANT_COUNT) reasons.add('participant-cardinality')
   const participantKeys = participants.map(participantKey)
   if (new Set(participantKeys).size !== participantKeys.length) {
     reasons.add('duplicate-participant')
@@ -284,12 +294,12 @@ function latticeContractReasons(fixture) {
   ) reasons.add('participant-shape')
 
   if (
-    descriptor.district?.size !== 3 ||
-    descriptor.levelCount !== 3 ||
+    descriptor.district?.size !== DISTRICT_CHUNKS ||
+    descriptor.levelCount !== LEVELS ||
     !Number.isInteger(descriptor.baseCy) ||
-    descriptor.topCy !== descriptor.baseCy + 2 ||
+    descriptor.topCy !== descriptor.baseCy + LEVELS - 1 ||
     !validGlobalBounds(descriptor.globalBounds, participants)
-  ) reasons.add('bounded-3x3x3')
+  ) reasons.add('bounded-4x4x5')
 
   const ownership = fixture?.ownership ?? []
   const claims = new Map(ownership.map((claim) => [participantKey(claim), claim]))
@@ -308,7 +318,7 @@ function latticeContractReasons(fixture) {
     }
   }
 
-  if (!anchorsFormFiveByFive(descriptor)) reasons.add('anchor-shape')
+  if (!anchorsFormFullGrid(descriptor)) reasons.add('anchor-shape')
   for (const anchor of anchors) {
     const exposureM = normalizedExposure(anchor, profile)
     if (!Number.isFinite(exposureM) || exposureM < 0 || exposureM > profile.maxExposureM) {
@@ -381,20 +391,31 @@ function latticeContractReasons(fixture) {
     const b = anchorById.get(edge.b)
     return Math.min(a.levelCy, b.levelCy)
   }))
-  if (
-    !verticalPairs.has(descriptor.baseCy) ||
-    !verticalPairs.has(descriptor.baseCy + 1)
-  ) reasons.add('missing-vertical-link')
+  for (
+    let lowerCy = descriptor.baseCy;
+    Number.isInteger(descriptor.baseCy) && lowerCy < descriptor.topCy;
+    lowerCy++
+  ) {
+    if (!verticalPairs.has(lowerCy)) reasons.add('missing-vertical-link')
+  }
   if (!edges.some((edge) => edge.role === 'spine')) reasons.add('missing-spine')
 
+  // Every vertical tree edge realizes as one stair; every adjacent floor pair
+  // of the five-level band must be bridged at least once.
   const verticalLinks = descriptor.verticalLinks ?? []
-  const lowerFloors = [...new Set(verticalLinks.map((link) => link.lowerCy))]
-    .sort((a, b) => a - b)
+  const lowerFloors = new Set(verticalLinks.map((link) => link.lowerCy))
+  let boundariesCovered = Number.isInteger(descriptor.baseCy)
+  for (
+    let lowerCy = descriptor.baseCy;
+    Number.isInteger(descriptor.baseCy) && lowerCy < descriptor.topCy;
+    lowerCy++
+  ) {
+    boundariesCovered &&= lowerFloors.has(lowerCy)
+  }
   if (
-    verticalLinks.length !== 2 ||
-    lowerFloors.length !== 2 ||
-    lowerFloors[0] !== descriptor.baseCy ||
-    lowerFloors[1] !== descriptor.baseCy + 1 ||
+    verticalLinks.length !== verticalEdges.length ||
+    verticalLinks.length < LEVELS - 1 ||
+    !boundariesCovered ||
     verticalLinks.some((link) =>
       !participants.some(({ cx, cz }) => cx === link.cx && cz === link.cz) ||
       !link.stair || typeof link.stair !== 'object'
@@ -427,7 +448,7 @@ function latticeContractReasons(fixture) {
   const bridgeCells = new Set(edges.flatMap((edge) =>
     (edge.cells ?? []).map(({ gx, gz, cy }) => `${gx},${gz},${cy}`)
   ))
-  const districtVolume = participants.length * CHUNK * CHUNK * 3
+  const districtVolume = participants.length * CHUNK * CHUNK * LEVELS
   if (bridgeCells.size === 0 || bridgeCells.size >= districtVolume) {
     reasons.add('non-sparse-bridge-fabric')
   }
@@ -439,64 +460,92 @@ function latticeContractReasons(fixture) {
   return [...reasons]
 }
 
+// Mirrors the production edge-cell geometry: horizontal edges are one straight
+// catwalk; a vertical edge owns the lower anchor's cell plus the FULL upper-
+// floor line from the upper anchor to directly above that cell (so the stair
+// top always opens onto its own edge's deck).
 function edgeCellsBetween(a, b) {
-  const cells = [{ gx: a.gx, gz: a.gz, cy: a.levelCy }]
-  let { gx, gz } = a
-  let cy = a.levelCy
-  while (gx !== b.gx) {
-    gx += Math.sign(b.gx - gx)
-    cells.push({ gx, gz, cy })
+  if (a.levelCy === b.levelCy) {
+    const cells = [{ gx: a.gx, gz: a.gz, cy: a.levelCy }]
+    let { gx, gz } = a
+    while (gx !== b.gx) {
+      gx += Math.sign(b.gx - gx)
+      cells.push({ gx, gz, cy: a.levelCy })
+    }
+    while (gz !== b.gz) {
+      gz += Math.sign(b.gz - gz)
+      cells.push({ gx, gz, cy: a.levelCy })
+    }
+    return cells.sort(compareCells)
   }
-  while (gz !== b.gz) {
-    gz += Math.sign(b.gz - gz)
-    cells.push({ gx, gz, cy })
-  }
-  while (cy !== b.levelCy) {
-    cy += Math.sign(b.levelCy - cy)
-    cells.push({ gx, gz, cy })
+  const [lower, upper] = a.levelCy < b.levelCy ? [a, b] : [b, a]
+  const dx = Math.sign(upper.gx - lower.gx)
+  const dz = Math.sign(upper.gz - lower.gz)
+  const span = Math.abs(upper.gx - lower.gx) + Math.abs(upper.gz - lower.gz)
+  const cells = [{ gx: lower.gx, gz: lower.gz, cy: lower.levelCy }]
+  for (let distance = 0; distance <= span; distance++) {
+    cells.push({
+      gx: lower.gx + dx * distance,
+      gz: lower.gz + dz * distance,
+      cy: upper.levelCy,
+    })
   }
   const unique = new Map(cells.map((cell) => [`${cell.gx},${cell.gz},${cell.cy}`, cell]))
   return [...unique.values()].sort(compareCells)
 }
 
+const STAIR_DELTAS = Object.freeze([
+  Object.freeze({ dir: 0, dx: 0, dz: -1 }),
+  Object.freeze({ dir: 1, dx: 1, dz: 0 }),
+  Object.freeze({ dir: 2, dx: 0, dz: 1 }),
+  Object.freeze({ dir: 3, dx: -1, dz: 0 }),
+])
+
 function referenceLatticeFixture() {
   const baseCy = 4
   const participants = []
-  for (let cz = 0; cz < 3; cz++) {
-    for (let cx = 0; cx < 3; cx++) participants.push({ cx, cz })
+  for (let cz = 0; cz < DISTRICT_CHUNKS; cz++) {
+    for (let cx = 0; cx < DISTRICT_CHUNKS; cx++) participants.push({ cx, cz })
   }
 
-  const coordinates = [3, 11, 20, 29, 38]
+  // Production anchor pitch: every chunk hosts a 2x2 quad at locals {3, 10}.
+  const coordinates = Array.from({ length: ANCHORS_PER_AXIS }, (_, index) =>
+    Math.floor(index / 2) * CHUNK + (index % 2 === 0 ? 3 : 10)
+  )
+  // Row-terraced field over five floors: widths [2,2,2,1,1], adjacent rows
+  // never differ by more than one floor.
+  const rowFloor = [0, 0, 1, 1, 2, 2, 3, 4]
   const anchors = []
-  for (let row = 0; row < 5; row++) {
-    const levelCy = baseCy + (row < 2 ? 0 : row < 4 ? 1 : 2)
-    for (let column = 0; column < 5; column++) {
-      const id = row * 5 + column
+  for (let row = 0; row < ANCHORS_PER_AXIS; row++) {
+    const levelCy = baseCy + rowFloor[row]
+    for (let column = 0; column < ANCHORS_PER_AXIS; column++) {
+      const id = row * ANCHORS_PER_AXIS + column
       anchors.push({
         id,
         gx: coordinates[column],
         gz: coordinates[row],
         levelCy,
-        ...(id === 0 ? {} : { exposureM: id === 24 ? 20 : 5 }),
+        ...(id === 0 ? {} : { exposureM: id === ANCHOR_COUNT - 1 ? 20 : 5 }),
       })
     }
   }
   anchors.sort(compareAnchors)
+  const anchorById = new Map(anchors.map((anchor) => [anchor.id, anchor]))
   const anchorByPosition = new Map(anchors.map((anchor) => [`${anchor.gx},${anchor.gz}`, anchor]))
 
   const candidateLinks = []
-  for (let row = 0; row < 5; row++) {
-    for (let column = 0; column < 5; column++) {
+  for (let row = 0; row < ANCHORS_PER_AXIS; row++) {
+    for (let column = 0; column < ANCHORS_PER_AXIS; column++) {
       const anchor = anchorByPosition.get(`${coordinates[column]},${coordinates[row]}`)
       for (const [nextColumn, nextRow] of [[column + 1, row], [column, row + 1]]) {
-        if (nextColumn >= 5 || nextRow >= 5) continue
+        if (nextColumn >= ANCHORS_PER_AXIS || nextRow >= ANCHORS_PER_AXIS) continue
         const next = anchorByPosition.get(`${coordinates[nextColumn]},${coordinates[nextRow]}`)
         const a = Math.min(anchor.id, next.id)
         const b = Math.max(anchor.id, next.id)
         const distance = Math.abs(anchor.gx - next.gx) +
           Math.abs(anchor.gz - next.gz) +
           Math.abs(anchor.levelCy - next.levelCy) * CHUNK
-        candidateLinks.push({ a, b, weight: distance * 1000 + a * 25 + b })
+        candidateLinks.push({ a, b, weight: distance * 1000 + a * ANCHOR_COUNT + b })
       }
     }
   }
@@ -507,67 +556,80 @@ function referenceLatticeFixture() {
   const nonTreeLinks = candidateLinks.filter((edge) => !treeKeys.has(edgeKey(edge)))
   const spineKeys = new Set(treeLinks
     .filter((edge) => {
-      const a = anchors.find((anchor) => anchor.id === edge.a)
-      const b = anchors.find((anchor) => anchor.id === edge.b)
-      return a.levelCy === baseCy + 1 && b.levelCy === baseCy + 1
+      const a = anchorById.get(edge.a)
+      const b = anchorById.get(edge.b)
+      return a.levelCy === baseCy + (LEVELS >> 1) && b.levelCy === a.levelCy
     })
     .slice(0, 4)
     .map(edgeKey))
 
-  const makeEdge = (link, role) => {
-    const a = anchors.find((anchor) => anchor.id === link.a)
-    const b = anchors.find((anchor) => anchor.id === link.b)
-    return {
-      a: link.a,
-      b: link.b,
-      role,
-      cells: edgeCellsBetween(a, b),
-    }
-  }
+  const makeEdge = (link, role) => ({
+    a: link.a,
+    b: link.b,
+    role,
+    cells: edgeCellsBetween(anchorById.get(link.a), anchorById.get(link.b)),
+  })
   const treeEdges = treeLinks.map((link) => {
-    const a = anchors.find((anchor) => anchor.id === link.a)
-    const b = anchors.find((anchor) => anchor.id === link.b)
+    const a = anchorById.get(link.a)
+    const b = anchorById.get(link.b)
     const role = a.levelCy !== b.levelCy
       ? 'vertical'
       : spineKeys.has(edgeKey(link)) ? 'spine' : 'backbone'
     return makeEdge(link, role)
   })
-  const cycleEdges = nonTreeLinks.slice(0, 2).map((link) => makeEdge(link, 'cycle'))
+  // 6 of 49 eligible non-tree links keeps the rate inside [0.12, 0.25]:
+  // removing one dips below the floor, so the below-minimum damage case bites.
+  const sameLevelNonTree = nonTreeLinks.filter((link) =>
+    anchorById.get(link.a).levelCy === anchorById.get(link.b).levelCy
+  )
+  const cycleEdges = sameLevelNonTree.slice(0, 6).map((link) => makeEdge(link, 'cycle'))
   const edges = [...treeEdges, ...cycleEdges].sort(compareEdges)
 
-  const verticalLinks = [baseCy, baseCy + 1].map((lowerCy) => {
-    const edge = treeEdges.find((candidate) => {
-      if (candidate.role !== 'vertical') return false
-      const a = anchors.find((anchor) => anchor.id === candidate.a)
-      const b = anchors.find((anchor) => anchor.id === candidate.b)
-      return Math.min(a.levelCy, b.levelCy) === lowerCy
+  // One stair per vertical tree edge, running from the lower anchor straight
+  // toward the upper anchor, sorted by (lowerCy, cz, cx).
+  const verticalLinks = treeEdges
+    .filter((edge) => edge.role === 'vertical')
+    .map((edge) => {
+      const a = anchorById.get(edge.a)
+      const b = anchorById.get(edge.b)
+      const [lower, upper] = a.levelCy < b.levelCy ? [a, b] : [b, a]
+      const dx = Math.sign(upper.gx - lower.gx)
+      const dz = Math.sign(upper.gz - lower.gz)
+      const { dir } = STAIR_DELTAS.find((delta) => delta.dx === dx && delta.dz === dz)
+      const lx = lower.gx % CHUNK
+      const lz = lower.gz % CHUNK
+      const cellAt = (distance) => ({ lx: lx + dx * distance, lz: lz + dz * distance })
+      return {
+        lowerCy: lower.levelCy,
+        cx: Math.floor(lower.gx / CHUNK),
+        cz: Math.floor(lower.gz / CHUNK),
+        stair: {
+          dir,
+          landing: cellAt(0),
+          run: [cellAt(1), cellAt(2)],
+          exit: cellAt(3),
+        },
+      }
     })
-    const anchor = anchors.find((candidate) => candidate.id === edge.b)
-    return {
-      lowerCy,
-      cx: Math.floor(anchor.gx / CHUNK),
-      cz: Math.floor(anchor.gz / CHUNK),
-      stair: {
-        dir: 0,
-        landing: { lx: anchor.gx % CHUNK, lz: anchor.gz % CHUNK },
-        run: [{ lx: anchor.gx % CHUNK, lz: (anchor.gz + 1) % CHUNK }],
-        exit: { lx: anchor.gx % CHUNK, lz: (anchor.gz + 2) % CHUNK },
-      },
-    }
-  })
+    .sort((a, b) => a.lowerCy - b.lowerCy || a.cz - b.cz || a.cx - b.cx)
 
   const descriptor = {
     id: 0x1a771ce,
     family: MAP_FAMILY_LATTICE,
     kind: LATTICE_KIND,
     hasRoom: true,
-    district: { x: 0, z: 0, size: 3 },
+    district: { x: 0, z: 0, size: DISTRICT_CHUNKS },
     baseCy,
-    topCy: baseCy + 2,
-    levelCount: 3,
+    topCy: baseCy + LEVELS - 1,
+    levelCount: LEVELS,
     participants,
     anchor: { ...participants[0] },
-    globalBounds: { x0: 0, z0: 0, x1: CHUNK * 3 - 1, z1: CHUNK * 3 - 1 },
+    globalBounds: {
+      x0: 0,
+      z0: 0,
+      x1: CHUNK * DISTRICT_CHUNKS - 1,
+      z1: CHUNK * DISTRICT_CHUNKS - 1,
+    },
     anchors,
     edges,
     verticalLinks,
@@ -613,41 +675,45 @@ function plannerFixture(seed, config = forcedLatticeConfig()) {
 }
 
 describe('bounded Lattice polygon and planner contracts', () => {
-  it('[R08-S03][D04] enumerates one canonical complete 3x3 nine-participant polygon', () => {
+  it('[R08-S03][D04] enumerates one canonical complete 4x4 sixteen-participant polygon', () => {
     const participants = []
-    for (let cz = 6; cz <= 8; cz++) {
-      for (let cx = -3; cx <= -1; cx++) participants.push({ cx, cz })
+    for (let cz = 8; cz <= 11; cz++) {
+      for (let cx = -4; cx <= -1; cx++) participants.push({ cx, cz })
     }
-    expect(polygonCandidates(-1, 2, { districtChunks: 3 }, {
-      shape: 'lattice3x3',
+    expect(polygonCandidates(-1, 2, { districtChunks: 4 }, {
+      shape: 'lattice',
       avoidSpawn: false,
     })).toEqual([{
-      anchor: { cx: -3, cz: 6 },
+      anchor: { cx: -4, cz: 8 },
       participants,
     }])
-    expect(polygonCandidates(0, 0, { districtChunks: 3 }, {
-      shape: 'lattice3x3',
+    expect(polygonCandidates(0, 0, { districtChunks: 4 }, {
+      shape: 'lattice',
       bridgeAxis: 'x',
       avoidSpawn: true,
     })).toEqual([])
-    expect(polygonCandidates(-1, 0, { districtChunks: 3 }, {
-      shape: 'lattice3x3',
+    expect(polygonCandidates(-1, 0, { districtChunks: 4 }, {
+      shape: 'lattice',
       bridgeAxis: 'z',
       avoidSpawn: true,
     })).toHaveLength(1)
+    expect(polygonCandidates(-1, 2, { districtChunks: 1 }, {
+      shape: 'lattice',
+      avoidSpawn: false,
+    })).toEqual([])
     expect(polygonCandidates(-1, 2, { districtChunks: 4 }, {
       shape: 'lattice3x3',
       avoidSpawn: false,
     })).toEqual([])
   })
 
-  it('[R08-S03][R09-S01..S06][R28-S01][D04/D05] emits one bounded canonical nine-owner descriptor', () => {
+  it('[R08-S03][R09-S01..S06][R28-S01][D04/D05] emits one bounded canonical sixteen-owner descriptor', () => {
     for (const seed of FIXED_SEEDS) {
       const fixture = plannerFixture(seed)
       expect(latticeContractReasons(fixture)).toEqual([])
-      expect(fixture.descriptor.participants).toHaveLength(9)
-      expect(fixture.descriptor.anchors).toHaveLength(25)
-      expect(fixture.descriptor.levelCount).toBe(3)
+      expect(fixture.descriptor.participants).toHaveLength(PARTICIPANT_COUNT)
+      expect(fixture.descriptor.anchors).toHaveLength(ANCHOR_COUNT)
+      expect(fixture.descriptor.levelCount).toBe(LEVELS)
       expect(fixture.descriptor.participantChunks).toBeUndefined()
       expect(RUNTIME_ENVELOPE_FIELDS.every(
         (field) => fixture.descriptor[field] === undefined
@@ -655,22 +721,23 @@ describe('bounded Lattice polygon and planner contracts', () => {
     }
   })
 
-  it('[R28-S02..S04][R29-S03..S04][D05] reproduces the production-weighted MST, bounded cycles, spine, and both vertical floor links', async () => {
-    const { latticeCandidateLinks } = await latticePlannerApi()
+  it('[R28-S02..S04][R29-S03..S04][D05] reproduces the production conflict-resolved MST, bounded cycles, spine, and full floor-boundary stair coverage', async () => {
+    const { latticeCandidateLinks, latticeGraphEvidence } = await latticePlannerApi()
     expect(
       latticeCandidateLinks,
       'generated MST evidence must use the production-owned candidate-weight contract'
+    ).toBeTypeOf('function')
+    expect(
+      latticeGraphEvidence,
+      'generated MST evidence must use the production conflict-resolved tree contract'
     ).toBeTypeOf('function')
 
     for (const seed of FIXED_SEEDS) {
       const fixture = plannerFixture(seed)
       const candidates = latticeCandidateLinks(fixture.descriptor.anchors)
+      const evidence = latticeGraphEvidence(fixture.descriptor.anchors)
       const treeEdges = fixture.descriptor.edges.filter((edge) => TREE_ROLES.has(edge.role))
       const treeKeys = new Set(treeEdges.map(edgeKey))
-      const expectedTreeKeys = minimumSpanningEdgeKeys(
-        fixture.descriptor.anchors.map(({ id }) => id),
-        candidates
-      )
       const anchors = new Map(
         fixture.descriptor.anchors.map((anchor) => [anchor.id, anchor])
       )
@@ -681,29 +748,40 @@ describe('bounded Lattice polygon and planner contracts', () => {
         )
         .map(edgeKey))
       const cycleEdges = fixture.descriptor.edges.filter((edge) => edge.role === 'cycle')
+      const verticalTreeEdges = treeEdges.filter((edge) => edge.role === 'vertical')
 
-      fixture.candidateLinks = candidates
       const reasons = latticeContractReasons(fixture)
-      expect(candidates.length).toBeGreaterThan(treeEdges.length)
+      expect(candidates).toHaveLength(
+        2 * ANCHORS_PER_AXIS * (ANCHORS_PER_AXIS - 1)
+      )
       expect(candidates.every((candidate) =>
         Number.isInteger(candidate.a) &&
         Number.isInteger(candidate.b) &&
         candidate.a < candidate.b &&
         Number.isInteger(candidate.weight)
       )).toBe(true)
-      expect(treeKeys).toEqual(expectedTreeKeys)
-      expect(treeEdges).toHaveLength(24)
-      expect(treeEdges.filter((edge) => edge.role === 'vertical')).toHaveLength(2)
+      expect(evidence).not.toBeNull()
+      expect(treeKeys).toEqual(evidence.minimumTreeKeys)
+      expect(treeEdges).toHaveLength(ANCHOR_COUNT - 1)
+      expect(verticalTreeEdges.length).toBeGreaterThanOrEqual(LEVELS - 1)
       expect(treeEdges.filter((edge) => edge.role === 'spine').length)
         .toBeGreaterThanOrEqual(1)
-      expect(fixture.descriptor.verticalLinks).toHaveLength(2)
+      expect(fixture.descriptor.verticalLinks).toHaveLength(verticalTreeEdges.length)
+      const coveredBoundaries = new Set(
+        fixture.descriptor.verticalLinks.map(({ lowerCy }) => lowerCy)
+      )
+      for (
+        let lowerCy = fixture.descriptor.baseCy;
+        lowerCy < fixture.descriptor.topCy;
+        lowerCy++
+      ) expect(coveredBoundaries.has(lowerCy)).toBe(true)
       expect(fixture.descriptor.eligibleNonBackboneLinks).toBe(eligibleCycleKeys.size)
       expect(cycleEdges.every((edge) => eligibleCycleKeys.has(edgeKey(edge)))).toBe(true)
       expect(cycleEdges.every((edge) =>
         anchors.get(edge.a)?.levelCy === anchors.get(edge.b)?.levelCy
       )).toBe(true)
-      expect(cycleEdges.length / eligibleCycleKeys.size).toBeGreaterThanOrEqual(0.08)
-      expect(cycleEdges.length / eligibleCycleKeys.size).toBeLessThanOrEqual(0.15)
+      expect(cycleEdges.length / eligibleCycleKeys.size).toBeGreaterThanOrEqual(0.12)
+      expect(cycleEdges.length / eligibleCycleKeys.size).toBeLessThanOrEqual(0.25)
       expect(reasons).not.toContain('disconnected-backbone')
       expect(reasons).not.toContain('cyclic-backbone')
       expect(reasons).not.toContain('backbone-not-minimum')
@@ -722,9 +800,10 @@ describe('bounded Lattice polygon and planner contracts', () => {
     expect(deepFrozen(descriptor)).toBe(true)
     expect(descriptor.anchor).toEqual(descriptor.participants[0])
 
+    const floors = []
+    for (let cy = descriptor.baseCy; cy <= descriptor.topCy; cy++) floors.push(cy)
     const requests = descriptor.participants.flatMap(({ cx, cz }) =>
-      [descriptor.baseCy, descriptor.baseCy + 1, descriptor.topCy]
-        .map((cy) => ({ cx, cy, cz }))
+      floors.map((cy) => ({ cx, cy, cz }))
     )
     for (const { cx, cy, cz } of requests.reverse()) {
       expect(structureAt(seed, cx, cz, cy, config)).toEqual(descriptor)
@@ -753,11 +832,15 @@ describe('Lattice graph and malformed-descriptor controls', () => {
       fixture.descriptor.anchors.map(({ id }) => id),
       fixture.candidateLinks
     )
+    const cycles = fixture.descriptor.edges.filter((edge) => edge.role === 'cycle')
 
     expect(selected).toEqual(minimum)
     expect(treeEdges).toHaveLength(fixture.descriptor.anchors.length - 1)
-    expect(fixture.descriptor.edges.filter((edge) => edge.role === 'cycle')).toHaveLength(2)
-    expect(2 / fixture.eligibleNonBackboneLinks).toBe(0.125)
+    expect(cycles).toHaveLength(6)
+    expect(cycles.length / fixture.eligibleNonBackboneLinks)
+      .toBeGreaterThanOrEqual(0.12)
+    expect(cycles.length / fixture.eligibleNonBackboneLinks)
+      .toBeLessThanOrEqual(0.25)
     expect(latticeContractReasons(fixture)).toEqual([])
   })
 
@@ -774,7 +857,7 @@ describe('Lattice graph and malformed-descriptor controls', () => {
       label: 'duplicate participant',
       reason: 'duplicate-participant',
       damage(fixture) {
-        fixture.descriptor.participants[8] = { ...fixture.descriptor.participants[0] }
+        fixture.descriptor.participants[15] = { ...fixture.descriptor.participants[0] }
       },
     },
     {
@@ -792,11 +875,11 @@ describe('Lattice graph and malformed-descriptor controls', () => {
       },
     },
     {
-      label: 'non-3x3 participant shape',
+      label: 'non-4x4 participant shape',
       reason: 'participant-shape',
       damage(fixture) {
-        fixture.descriptor.participants[8].cx += 1
-        fixture.ownership[8].cx += 1
+        fixture.descriptor.participants[15].cx += 1
+        fixture.ownership[15].cx += 1
       },
     },
     {
@@ -808,16 +891,16 @@ describe('Lattice graph and malformed-descriptor controls', () => {
     },
     {
       label: 'oversized horizontal district',
-      reason: 'bounded-3x3x3',
+      reason: 'bounded-4x4x5',
       damage(fixture) {
-        fixture.descriptor.district.size = 4
+        fixture.descriptor.district.size = 5
       },
     },
     {
       label: 'oversized floor band',
-      reason: 'bounded-3x3x3',
+      reason: 'bounded-4x4x5',
       damage(fixture) {
-        fixture.descriptor.levelCount = 4
+        fixture.descriptor.levelCount = 6
         fixture.descriptor.topCy += 1
       },
     },
@@ -848,7 +931,7 @@ describe('Lattice graph and malformed-descriptor controls', () => {
       },
     },
     {
-      label: 'cycle reinsertion below 8 percent',
+      label: 'cycle reinsertion below 12 percent',
       reason: 'cycle-rate',
       damage(fixture) {
         const index = fixture.descriptor.edges.findIndex((edge) => edge.role === 'cycle')
@@ -856,18 +939,24 @@ describe('Lattice graph and malformed-descriptor controls', () => {
       },
     },
     {
-      label: 'cycle reinsertion above 15 percent',
+      label: 'cycle reinsertion above 25 percent',
       reason: 'cycle-rate',
       damage(fixture) {
-        const used = new Set(fixture.descriptor.edges.map(edgeKey))
-        const link = fixture.candidateLinks.find((edge) => !used.has(edgeKey(edge)))
         const anchors = new Map(fixture.descriptor.anchors.map((anchor) => [anchor.id, anchor]))
-        fixture.descriptor.edges.push({
-          a: link.a,
-          b: link.b,
-          role: 'cycle',
-          cells: edgeCellsBetween(anchors.get(link.a), anchors.get(link.b)),
-        })
+        const used = new Set(fixture.descriptor.edges.map(edgeKey))
+        for (const link of fixture.candidateLinks) {
+          const cycles = fixture.descriptor.edges
+            .filter((edge) => edge.role === 'cycle').length
+          if (cycles / fixture.eligibleNonBackboneLinks > 0.25) break
+          if (used.has(edgeKey(link))) continue
+          used.add(edgeKey(link))
+          fixture.descriptor.edges.push({
+            a: link.a,
+            b: link.b,
+            role: 'cycle',
+            cells: edgeCellsBetween(anchors.get(link.a), anchors.get(link.b)),
+          })
+        }
         fixture.descriptor.edges.sort(compareEdges)
       },
     },
@@ -888,6 +977,14 @@ describe('Lattice graph and malformed-descriptor controls', () => {
         fixture.descriptor.edges = fixture.descriptor.edges
           .filter((edge) => edge.role === 'vertical')
           .sort(compareEdges)
+      },
+    },
+    {
+      label: 'missing floor-boundary stair',
+      reason: 'vertical-link-descriptor',
+      damage(fixture) {
+        fixture.descriptor.verticalLinks =
+          fixture.descriptor.verticalLinks.slice(1)
       },
     },
     {
@@ -952,8 +1049,8 @@ describe('Lattice graph and malformed-descriptor controls', () => {
 })
 
 describe('Lattice atomic release-state gate', () => {
-  it('[R05-S02..S04][R06-S01..S03][R20-S02][R31-S01..S04][R33-S02][D11] binds the active Lattice profile to v23 pins, corpus identity, and Tower-independent generation', () => {
-    expect(WORLD_GEN_VERSION).toBe(23)
+  it('[R05-S02..S04][R06-S01..S03][R20-S02][R31-S01..S04][R33-S02][D11] binds the active Lattice profile to v24 pins, corpus identity, and Tower-independent generation', () => {
+    expect(WORLD_GEN_VERSION).toBe(24)
     expect(DEFAULT_WORLD_CONFIG.mapFamily.selected).toBe('office')
     expect(Object.fromEntries(Object.entries(DEFAULT_WORLD_CONFIG.mapFamily.profiles)
       .map(([family, profile]) => [family, profile.enabled]))).toEqual({
@@ -967,9 +1064,9 @@ describe('Lattice atomic release-state gate', () => {
     expect(LATTICE_RELEASE_EVIDENCE).toMatchObject({
       family: MAP_FAMILY_LATTICE,
       byteImpact: 'changed-output',
-      previousVersion: 22,
-      generatorVersion: 23,
-      profileIdentity: 'lattice-forced-audit:levels-3:district-3:anchors-5:cycles-0.08-0.15:exposure-5-20:cues-8',
+      previousVersion: 23,
+      generatorVersion: 24,
+      profileIdentity: 'lattice-forced-audit:levels-5:district-4:anchors-8:cycles-0.12-0.25:exposure-5-20:cues-8',
       seedDerivation: 'hashStr("audit-lattice-N#1"), N=0..2',
       affectsMaximumHeight: true,
     })
@@ -992,7 +1089,7 @@ describe('Lattice atomic release-state gate', () => {
     expect(descriptor).toMatchObject({
       family: MAP_FAMILY_LATTICE,
       kind: LATTICE_KIND,
-      levelCount: 3,
+      levelCount: LEVELS,
     })
   })
 })

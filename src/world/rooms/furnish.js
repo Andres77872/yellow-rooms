@@ -246,7 +246,8 @@ function furnishWorkstations(ctx, space, candidates) {
   return placed
 }
 
-const PIECE_DIMS = {
+// Piece footprints (unrotated), exported for editor-side manual placement.
+export const PIECE_DIMS = {
   [FURN_DESK]: [DESK_W, DESK_D],
   [FURN_CABINET]: [CABINET_W, CABINET_D],
   [FURN_COPIER]: [COPIER_W, COPIER_D],

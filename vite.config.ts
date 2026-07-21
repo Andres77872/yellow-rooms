@@ -1,8 +1,38 @@
-import { defineConfig } from 'vitest/config'
+import { defineConfig, type Plugin } from 'vitest/config'
+import { resolve } from 'node:path'
+
+// Serve the editor at the clean /editor URL. Vite's multi-page build only
+// knows /editor.html, so rewrite the pretty path in dev/preview; static hosts
+// need the same rewrite (or users can hit /editor.html directly).
+function editorRoute(): Plugin {
+  const rewrite = (req: { url?: string }) => {
+    if (req.url === '/editor' || req.url?.startsWith('/editor?')) {
+      req.url = '/editor.html' + req.url.slice('/editor'.length)
+    }
+  }
+  return {
+    name: 'editor-route',
+    configureServer(server) {
+      server.middlewares.use((req, _res, next) => { rewrite(req); next() })
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use((req, _res, next) => { rewrite(req); next() })
+    },
+  }
+}
 
 // https://vite.dev/config/
 // Vanilla JS + Three.js app — no framework plugin needed.
 export default defineConfig({
+  plugins: [editorRoute()],
+  build: {
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, 'index.html'),
+        editor: resolve(__dirname, 'editor.html'),
+      },
+    },
+  },
   test: {
     environment: 'node',
     include: ['src/**/*.test.js'],

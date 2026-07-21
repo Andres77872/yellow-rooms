@@ -33,10 +33,10 @@ const COMPLETE_PROFILES = {
   },
   lattice: {
     enabled: false,
-    districtChunks: 3,
-    levels: 3,
-    anchorsPerAxis: 5,
-    cycleRate: [0.08, 0.15],
+    districtChunks: 4,
+    levels: 5,
+    anchorsPerAxis: 8,
+    cycleRate: [0.12, 0.25],
     defaultExposureM: 5,
     maxExposureM: 20,
     minimumCueCells: 8,
@@ -438,7 +438,7 @@ describe('void-safety family eligibility', () => {
       lattice: true,
       hotel: false,
     })
-    expect(WORLD_GEN_VERSION).toBe(23)
+    expect(WORLD_GEN_VERSION).toBe(24)
     expect(DEFAULT_WORLD_CONFIG.mapFamily.profiles).toMatchObject({
       office: { enabled: true },
       sewer: { enabled: true },
@@ -578,9 +578,9 @@ describe('byte-impact version and atomic pin activation', () => {
     expect(LATTICE_RELEASE_EVIDENCE).toMatchObject({
       family: 'lattice',
       byteImpact: 'changed-output',
-      previousVersion: 22,
-      generatorVersion: 23,
-      profileIdentity: 'lattice-forced-audit:levels-3:district-3:anchors-5:cycles-0.08-0.15:exposure-5-20:cues-8',
+      previousVersion: 23,
+      generatorVersion: 24,
+      profileIdentity: 'lattice-forced-audit:levels-5:district-4:anchors-8:cycles-0.12-0.25:exposure-5-20:cues-8',
       seedDerivation: 'hashStr("audit-lattice-N#1"), N=0..2',
       affectsMaximumHeight: true,
     })
@@ -638,9 +638,9 @@ describe('byte-impact version and atomic pin activation', () => {
     expect(WORLD_GEN_VERSION).toBe(HOTEL_RELEASE_EVIDENCE.generatorVersion)
     expect(HOTEL_RELEASE_EVIDENCE).toMatchObject({
       family: 'hotel',
-      byteImpact: 'first-emission',
-      previousVersion: 22,
-      generatorVersion: 23,
+      byteImpact: 'changed-output',
+      previousVersion: 23,
+      generatorVersion: 24,
       profileIdentity: 'hotel-forced-audit',
       seedDerivation: 'hashStr("audit-hotel-N#1")',
       affectsMaximumHeight: false,
@@ -649,6 +649,13 @@ describe('byte-impact version and atomic pin activation', () => {
       .toBe(HOTEL_RELEASE_EVIDENCE.previousVersion + 1)
     expect(HOTEL_RELEASE_EVIDENCE.familyRepresentativeDigest).toMatch(/^[0-9a-f]{64}$/)
     expect(HOTEL_RELEASE_EVIDENCE.familyCorpusDigest).toMatch(/^[0-9a-f]{64}$/)
+    // v24 changed every family's bytes, so Hotel is now changed-output and its
+    // previous digests must be real v23 digests, not the first-emission zero
+    // sentinel.
+    expect(HOTEL_RELEASE_EVIDENCE.previousFamilyRepresentativeDigest).toMatch(/^[0-9a-f]{64}$/)
+    expect(HOTEL_RELEASE_EVIDENCE.previousFamilyCorpusDigest).toMatch(/^[0-9a-f]{64}$/)
+    expect(HOTEL_RELEASE_EVIDENCE.previousFamilyRepresentativeDigest).not.toBe('0'.repeat(64))
+    expect(HOTEL_RELEASE_EVIDENCE.previousFamilyCorpusDigest).not.toBe('0'.repeat(64))
     expect(HOTEL_RELEASE_EVIDENCE.familyCorpusDigest)
       .not.toBe(HOTEL_RELEASE_EVIDENCE.previousFamilyCorpusDigest)
     expect(HOTEL_RELEASE_EVIDENCE.globalGoldenDigest)

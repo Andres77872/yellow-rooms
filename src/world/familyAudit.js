@@ -15,6 +15,7 @@ import {
   MAP_FAMILY_SEWER,
   MAP_FAMILY_TOWER,
   CELL_ATRIUM,
+  CELL_OPEN,
   CELL_BRIDGE,
   CELL_LOBBY,
   CELL_STAIR,
@@ -120,6 +121,7 @@ export const LATTICE_AUDIT_DIMENSIONS = Object.freeze([
   'boundaryCues',
   'plainWalls',
   'guards',
+  'reachability',
   'lethalVoid',
 ])
 
@@ -129,7 +131,7 @@ const LATTICE_AUDIT_REASONS = Object.freeze({
   canonicalIdMismatch: 'lattice:canonical-id-mismatch',
   participantCardinality: 'lattice:participant-cardinality',
   missingParticipant: 'lattice:missing-participant',
-  bounded: 'lattice:bounded-3x3x3',
+  bounded: 'lattice:bounded-4x4x5',
   anchorShape: 'lattice:anchor-shape',
   edgeShape: 'lattice:edge-shape',
   duplicateEdge: 'lattice:duplicate-edge',
@@ -151,6 +153,7 @@ const LATTICE_AUDIT_REASONS = Object.freeze({
   nonSparseBridgeFabric: 'lattice:non-sparse-bridge-fabric',
   invalidGuard: 'lattice:invalid-guard',
   invalidApproach: 'lattice:invalid-approach',
+  unreachableCells: 'lattice:unreachable-cells',
   missingFloorAudit: 'lattice:missing-floor-audit',
   stampMismatch: 'lattice:stamp-mismatch',
   crossDistrictNetwork: 'lattice:cross-district-network',
@@ -997,11 +1000,16 @@ function auditLatticeRaster(chunks, analysis) {
     minimumCombined: Infinity,
     minimumRails: Infinity,
     minimumSeams: Infinity,
+    reachability: null,
   }
   const expectedChunkKeys = latticeSliceCoordinates(descriptor).map(
     ({ cx, cy, cz }) => latticeChunkKey(cx, cy, cz)
   )
-  if (chunks.size !== 27 || expectedChunkKeys.some((key) => !chunks.has(key))) {
+  if (
+    expectedChunkKeys.length === 0 ||
+    chunks.size !== expectedChunkKeys.length ||
+    expectedChunkKeys.some((key) => !chunks.has(key))
+  ) {
     result.stampMismatch = true
     return result
   }
@@ -1050,7 +1058,11 @@ function auditLatticeRaster(chunks, analysis) {
             if (![CELL_ATRIUM, CELL_STAIR, CELL_LOBBY].includes(actualKind)) {
               result.stampMismatch = true
             }
-          } else if (actualKind !== CELL_VOID) {
+          } else if (
+            actualKind !== (cy === descriptor.baseCy ? CELL_OPEN : CELL_VOID)
+          ) {
+            // The bottom floor is walkable street level; every floor above
+            // keeps the lethal void mask.
             result.stampMismatch = true
           }
         }
@@ -1146,7 +1158,9 @@ function auditLatticeRaster(chunks, analysis) {
     result.minimumSeams = Math.min(result.minimumSeams, seams.size)
   }
 
-  for (let cy = descriptor.baseCy; cy <= descriptor.topCy; cy++) {
+  // Drop-guard rails are demanded only on elevated floors; street level has
+  // ground on every cell and deliberately carries no boundary fence.
+  for (let cy = descriptor.baseCy + 1; cy <= descriptor.topCy; cy++) {
     const retained = latticeFloorGeometry(descriptor, cy).retained
     for (const key of retained) {
       const [gx, gz] = key.split(',').map(Number)
@@ -1172,7 +1186,126 @@ function auditLatticeRaster(chunks, analysis) {
       }
     }
   }
+
+  result.reachability = auditLatticeReachability(chunks, descriptor)
   return result
+}
+
+// Physical walk audit: flood the rasterized district across every floor and
+// stair and demand ONE component. Graph-level connectivity (the spanning tree)
+// says the plan is connected; this proves the stamped geometry the player
+// actually walks agrees — no stranded chamber, catwalk, stair pocket, or
+// entirely sealed floor anywhere in the volume.
+function auditLatticeReachability(chunks, descriptor) {
+  const bounds = descriptor.globalBounds
+  const nodeKey = (gx, gz, cy) => `${gx},${gz},${cy}`
+  const walkable = new Set()
+  const rampCells = new Set()
+  const stairLinks = []
+  for (const data of chunks.values()) {
+    if (data.stairUp) {
+      for (const cell of data.stairUp.run) {
+        rampCells.add(nodeKey(
+          data.cx * CHUNK + cell.lx,
+          data.cz * CHUNK + cell.lz,
+          data.cy
+        ))
+      }
+      stairLinks.push([
+        nodeKey(
+          data.cx * CHUNK + data.stairUp.landing.lx,
+          data.cz * CHUNK + data.stairUp.landing.lz,
+          data.cy
+        ),
+        nodeKey(
+          data.cx * CHUNK + data.stairUp.exit.lx,
+          data.cz * CHUNK + data.stairUp.exit.lz,
+          data.cy + 1
+        ),
+      ])
+    }
+    if (data.stairDown) {
+      for (const cell of data.stairDown.run) {
+        rampCells.add(nodeKey(
+          data.cx * CHUNK + cell.lx,
+          data.cz * CHUNK + cell.lz,
+          data.cy
+        ))
+      }
+    }
+  }
+  for (const data of chunks.values()) {
+    const chunkGx = data.cx * CHUNK
+    const chunkGz = data.cz * CHUNK
+    for (let lz = 0; lz < CHUNK; lz++) {
+      for (let lx = 0; lx < CHUNK; lx++) {
+        if (data.cellKind[cIdx(lx, lz)] === CELL_VOID) continue
+        const key = nodeKey(chunkGx + lx, chunkGz + lz, data.cy)
+        if (!rampCells.has(key)) walkable.add(key)
+      }
+    }
+  }
+
+  const floorsPopulated = new Set()
+  for (const key of walkable) {
+    floorsPopulated.add(Number(key.slice(key.lastIndexOf(',') + 1)))
+  }
+  const stairEdgesByNode = new Map()
+  for (const [lower, upper] of stairLinks) {
+    if (!walkable.has(lower) || !walkable.has(upper)) continue
+    stairEdgesByNode.set(lower, upper)
+    stairEdgesByNode.set(upper, lower)
+  }
+
+  let components = 0
+  let largest = 0
+  const seen = new Set()
+  for (const start of walkable) {
+    if (seen.has(start)) continue
+    components++
+    let size = 0
+    const queue = [start]
+    seen.add(start)
+    while (queue.length > 0) {
+      const node = queue.pop()
+      size++
+      const [gx, gz, cy] = node.split(',').map(Number)
+      const steps = [
+        { key: nodeKey(gx + 1, gz, cy), axis: 'v', wx: gx + 1, wz: gz },
+        { key: nodeKey(gx - 1, gz, cy), axis: 'v', wx: gx, wz: gz },
+        { key: nodeKey(gx, gz + 1, cy), axis: 'h', wx: gx, wz: gz + 1 },
+        { key: nodeKey(gx, gz - 1, cy), axis: 'h', wx: gx, wz: gz },
+      ]
+      for (const step of steps) {
+        if (seen.has(step.key) || !walkable.has(step.key)) continue
+        const [nx, nz] = step.key.split(',').map(Number)
+        if (nx < bounds.x0 || nx > bounds.x1 || nz < bounds.z0 || nz > bounds.z1) continue
+        const state = latticeGlobalEdge(chunks, step.axis, step.wx, step.wz, cy)
+        if (!state || state.wall !== 0) continue
+        seen.add(step.key)
+        queue.push(step.key)
+      }
+      const across = stairEdgesByNode.get(node)
+      if (across && !seen.has(across)) {
+        seen.add(across)
+        queue.push(across)
+      }
+    }
+    largest = Math.max(largest, size)
+  }
+
+  const expectedFloors = descriptor.topCy - descriptor.baseCy + 1
+  let populated = 0
+  for (let cy = descriptor.baseCy; cy <= descriptor.topCy; cy++) {
+    if (floorsPopulated.has(cy)) populated++
+  }
+  return {
+    components,
+    walkableCells: walkable.size,
+    strandedCells: walkable.size - largest,
+    floorsPopulated: populated,
+    expectedFloors,
+  }
 }
 
 function latticeFixtureAudit(fixture) {
@@ -1223,7 +1356,13 @@ function latticeFixtureAudit(fixture) {
   const expectedKeys = new Set(latticeSliceCoordinates(descriptor).map(
     ({ cx, cy, cz }) => latticeChunkKey(cx, cy, cz)
   ))
-  if (expectedKeys.size !== 27 || [...expectedKeys].some((key) => !chunks.has(key))) {
+  const expectedSliceCount =
+    LATTICE_FLOOR_OFFSETS.length * (descriptor.participants?.length ?? 0)
+  if (
+    expectedKeys.size !== expectedSliceCount ||
+    expectedSliceCount === 0 ||
+    [...expectedKeys].some((key) => !chunks.has(key))
+  ) {
     return {
       reasons: [LATTICE_AUDIT_REASONS.missingParticipant],
       metrics: null,
@@ -1244,6 +1383,12 @@ function latticeFixtureAudit(fixture) {
   else if (raster.cueSourcesFailure) rasterReason = LATTICE_AUDIT_REASONS.cueSources
   else if (raster.cueCountFailure) rasterReason = LATTICE_AUDIT_REASONS.cueCount
   else if (raster.guardFailures > 0) rasterReason = LATTICE_AUDIT_REASONS.invalidGuard
+  else if (
+    raster.reachability &&
+    (raster.reachability.components !== 1 ||
+      raster.reachability.strandedCells !== 0 ||
+      raster.reachability.floorsPopulated !== raster.reachability.expectedFloors)
+  ) rasterReason = LATTICE_AUDIT_REASONS.unreachableCells
 
   const exposures = descriptor.anchors.map((anchor) =>
     latticeEffectiveExposureM(anchor, LATTICE_PROFILE)
@@ -1256,8 +1401,8 @@ function latticeFixtureAudit(fixture) {
     anchorCount: descriptor.anchors.length,
     backbone: {
       edgeCount: analysis.treeEdges.length,
-      connected: analysis.treeEdges.length === 24,
-      acyclic: analysis.treeEdges.length === 24,
+      connected: analysis.treeEdges.length === descriptor.anchors.length - 1,
+      acyclic: analysis.treeEdges.length === descriptor.anchors.length - 1,
       minimum: [...analysis.minimumTree].every((key) =>
         analysis.treeEdges.some((edge) => latticeEdgeKey(edge) === key)
       ),
@@ -1272,14 +1417,28 @@ function latticeFixtureAudit(fixture) {
       vertical: descriptor.edges.some(({ role }) => role === 'vertical'),
     },
     verticalConnections: {
-      lowerMiddle: descriptor.verticalLinks.some(({ lowerCy }) => lowerCy === descriptor.baseCy),
-      middleUpper: descriptor.verticalLinks.some(({ lowerCy }) => lowerCy === descriptor.baseCy + 1),
+      boundaries: descriptor.topCy - descriptor.baseCy,
+      covered: new Set(
+        descriptor.verticalLinks
+          .map(({ lowerCy }) => lowerCy)
+          .filter((lowerCy) =>
+            lowerCy >= descriptor.baseCy && lowerCy < descriptor.topCy
+          )
+      ).size,
+      stairs: descriptor.verticalLinks.length,
     },
     stamping: {
       floorSlices: chunks.size,
       chamberContexts: descriptor.anchors.length,
       bridgeSegmentsMatchDescriptor: !raster.stampMismatch,
       enclosedRoomSlices: raster.enclosedRoomSlices,
+    },
+    reachability: raster.reachability ?? {
+      components: 0,
+      walkableCells: 0,
+      strandedCells: 0,
+      floorsPopulated: 0,
+      expectedFloors: descriptor.topCy - descriptor.baseCy + 1,
     },
     exposure: {
       defaultM: LATTICE_PROFILE.defaultExposureM,
@@ -2449,8 +2608,15 @@ function addLatticeMetricReasons(reasons, row) {
     typeof orientations.horizontal === 'boolean' &&
     typeof orientations.vertical === 'boolean' &&
     isRecord(verticalConnections) &&
-    typeof verticalConnections.lowerMiddle === 'boolean' &&
-    typeof verticalConnections.middleUpper === 'boolean' &&
+    Number.isSafeInteger(verticalConnections.boundaries) &&
+    Number.isSafeInteger(verticalConnections.covered) &&
+    Number.isSafeInteger(verticalConnections.stairs) &&
+    isRecord(metrics.reachability) &&
+    Number.isSafeInteger(metrics.reachability.components) &&
+    Number.isSafeInteger(metrics.reachability.walkableCells) &&
+    Number.isSafeInteger(metrics.reachability.strandedCells) &&
+    Number.isSafeInteger(metrics.reachability.floorsPopulated) &&
+    Number.isSafeInteger(metrics.reachability.expectedFloors) &&
     isRecord(stamping) &&
     Number.isSafeInteger(stamping.floorSlices) &&
     Number.isSafeInteger(stamping.chamberContexts) &&
@@ -2477,21 +2643,21 @@ function addLatticeMetricReasons(reasons, row) {
   }
 
   if (
-    metrics.participantCardinality !== 9 ||
-    metrics.districtFootprint.x !== 3 ||
-    metrics.districtFootprint.z !== 3 ||
+    metrics.participantCardinality !== 16 ||
+    metrics.districtFootprint.x !== 4 ||
+    metrics.districtFootprint.z !== 4 ||
     metrics.districtCount !== 1 ||
-    metrics.anchorCount !== 25
+    metrics.anchorCount !== 64
   ) addReason(reasons, LATTICE_AUDIT_REASONS.bounded)
   if (
-    metrics.floorCoverage.length !== 3 ||
+    metrics.floorCoverage.length !== LATTICE_FLOOR_OFFSETS.length ||
     LATTICE_FLOOR_OFFSETS.some(
       (floor) => !metrics.floorCoverage.includes(floor)
     ) ||
-    stamping.floorSlices !== 27
+    stamping.floorSlices !== LATTICE_FLOOR_OFFSETS.length * 16
   ) addReason(reasons, LATTICE_AUDIT_REASONS.missingFloorAudit)
   if (
-    backbone.edgeCount !== 24 ||
+    backbone.edgeCount !== metrics.anchorCount - 1 ||
     backbone.connected !== true ||
     backbone.acyclic !== true
   ) addReason(reasons, LATTICE_AUDIT_REASONS.disconnectedBackbone)
@@ -2510,13 +2676,21 @@ function addLatticeMetricReasons(reasons, row) {
   }
   if (
     orientations.vertical !== true ||
-    verticalConnections.lowerMiddle !== true ||
-    verticalConnections.middleUpper !== true
+    verticalConnections.boundaries !== LATTICE_FLOOR_OFFSETS.length - 1 ||
+    verticalConnections.covered !== verticalConnections.boundaries ||
+    verticalConnections.stairs < verticalConnections.boundaries
   ) addReason(reasons, LATTICE_AUDIT_REASONS.missingVerticalLink)
   if (
-    stamping.chamberContexts !== 25 ||
+    stamping.chamberContexts !== 64 ||
     stamping.bridgeSegmentsMatchDescriptor !== true
   ) addReason(reasons, LATTICE_AUDIT_REASONS.stampMismatch)
+  if (
+    metrics.reachability.components !== 1 ||
+    metrics.reachability.walkableCells <= 0 ||
+    metrics.reachability.strandedCells !== 0 ||
+    metrics.reachability.expectedFloors !== LATTICE_FLOOR_OFFSETS.length ||
+    metrics.reachability.floorsPopulated !== metrics.reachability.expectedFloors
+  ) addReason(reasons, LATTICE_AUDIT_REASONS.unreachableCells)
   if (stamping.enclosedRoomSlices !== 0) {
     addReason(reasons, LATTICE_AUDIT_REASONS.enclosedRoomIdentity)
   }
@@ -2806,10 +2980,22 @@ function localLatticeEdgeState(data, axis, line, cell) {
       }
 }
 
+// Evaluate the 3x3 chamber window around every anchor this chunk hosts on its
+// own floor. Windows are descriptor-aimed rather than scanned: on street level
+// an arbitrary all-open window would out-score the real chamber (12 seams, no
+// rails) and misreport its cue sources.
 function bestPartialLatticeChamber(data, descriptor) {
   let best = null
-  for (let z = 0; z <= CHUNK - 4; z++) {
-    for (let x = 0; x <= CHUNK - 4; x++) {
+  const windows = (descriptor.anchors ?? []).filter((anchor) =>
+    anchor.levelCy === data.cy &&
+    Math.floor(anchor.gx / CHUNK) === data.cx &&
+    Math.floor(anchor.gz / CHUNK) === data.cz
+  ).map((anchor) => ({
+    x: anchor.gx - data.cx * CHUNK - 1,
+    z: anchor.gz - data.cz * CHUNK - 1,
+  })).filter(({ x, z }) => x >= 0 && x <= CHUNK - 4 && z >= 0 && z <= CHUNK - 4)
+  for (const { x, z } of windows) {
+    {
       const sides = [
         Array.from({ length: 3 }, (_, offset) => ['h', z, x + offset]),
         Array.from({ length: 3 }, (_, offset) => ['v', x + 3, z + offset]),
@@ -2834,7 +3020,10 @@ function bestPartialLatticeChamber(data, descriptor) {
             state.passage === PASSAGE_WALL &&
             state.feature === WALL_RAIL
           ) rails++
-          if (state.wall === 0 && state.passage === PASSAGE_WIDE) seams++
+          // Same seam rule as the complete-fixture path: any open passage
+          // counts — stair-halo carves legitimately relabel approach edges
+          // from PASSAGE_WIDE to PASSAGE_OPEN.
+          if (state.wall === 0 && state.passage !== PASSAGE_WALL) seams++
           if (state.wall === 1 && state.feature === WALL_PLAIN) plainCells++
         }
         if (plainCells >= 2) plainSides++
@@ -2884,26 +3073,56 @@ function partialLatticeGuardGap(data) {
 
 function auditPartialLatticeGroup(descriptor, chunks) {
   const reasons = []
+  // A streamed patch is a rectangular window: some participant columns across
+  // some contiguous floors. Every loaded column must therefore carry the same
+  // floor set — a punched-out slice inside the window is a missing owner, not
+  // a smaller window, and must fail rather than slide past the partial path.
+  const columns = new Set(chunks.map((data) => `${data.cx},${data.cz}`))
+  const floors = new Set(chunks.map((data) => data.cy))
+  if (chunks.length !== columns.size * floors.size) {
+    reasons.push(LATTICE_AUDIT_REASONS.missingParticipant)
+  }
   const exposures = descriptor.anchors?.map((anchor) =>
     latticeEffectiveExposureM(anchor, LATTICE_PROFILE)
   ) ?? []
   if (
-    exposures.length !== 25 ||
+    exposures.length !== 64 ||
     exposures.some((value) =>
       !Number.isFinite(value) || value < 0 || value > LATTICE_PROFILE.maxExposureM
     )
   ) reasons.push(LATTICE_AUDIT_REASONS.exposureRange)
 
-  const chambers = chunks.map((data) => bestPartialLatticeChamber(data, descriptor))
-  const minimumCombined = Math.min(...chambers.map(({ combined }) => combined))
-  const maximumPlainWallSides = Math.max(...chambers.map(({ plainSides }) => plainSides))
-  const minimumRails = Math.min(...chambers.map(({ rails }) => rails))
-  const minimumSeams = Math.min(...chambers.map(({ seams }) => seams))
+  // Chamber cues are anchored to chambers: a streamed chunk floor that hosts
+  // no anchor at its level (an all-void deck layer or bare street span) has
+  // no perimeter to cue and must not fail the group.
+  const chamberChunks = chunks.filter((data) =>
+    descriptor.anchors?.some((anchor) =>
+      anchor.levelCy === data.cy &&
+      Math.floor(anchor.gx / CHUNK) === data.cx &&
+      Math.floor(anchor.gz / CHUNK) === data.cz
+    )
+  )
+  const chambers = chamberChunks.map((data) => bestPartialLatticeChamber(data, descriptor))
+  const minimumCombined = chambers.length
+    ? Math.min(...chambers.map(({ combined }) => combined))
+    : 0
+  const maximumPlainWallSides = chambers.length
+    ? Math.max(...chambers.map(({ plainSides }) => plainSides))
+    : 0
+  const minimumRails = chambers.length
+    ? Math.min(...chambers.map(({ rails }) => rails))
+    : 0
+  const minimumSeams = chambers.length
+    ? Math.min(...chambers.map(({ seams }) => seams))
+    : 0
   if (maximumPlainWallSides >= 3) {
     reasons.push(LATTICE_AUDIT_REASONS.plainWallSides)
-  } else if (minimumRails <= 0 || minimumSeams <= 0) {
+  } else if (chambers.length > 0 && (minimumRails <= 0 || minimumSeams <= 0)) {
     reasons.push(LATTICE_AUDIT_REASONS.cueSources)
-  } else if (minimumCombined < LATTICE_PROFILE.minimumCueCells) {
+  } else if (
+    chambers.length > 0 &&
+    minimumCombined < LATTICE_PROFILE.minimumCueCells
+  ) {
     reasons.push(LATTICE_AUDIT_REASONS.cueCount)
   } else if (chunks.some(partialLatticeGuardGap)) {
     reasons.push(LATTICE_AUDIT_REASONS.invalidGuard)
@@ -3078,7 +3297,10 @@ export function auditChunkFamilyRegistrations(
     const loadedKeys = new Set(latticeChunks.map((data) =>
       latticeChunkKey(data.cx, data.cy, data.cz)
     ))
-    const complete = expectedKeys.length === 27 &&
+    const expectedSliceCount =
+      LATTICE_FLOOR_OFFSETS.length * (descriptor.participants?.length ?? 0)
+    const complete = expectedSliceCount > 0 &&
+      expectedKeys.length === expectedSliceCount &&
       expectedKeys.every((key) => loadedKeys.has(key))
     const result = complete
       ? latticeFixtureAudit({ chunks: latticeChunks })

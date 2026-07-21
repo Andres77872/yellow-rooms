@@ -21,8 +21,6 @@ export const LATTICE_EDGE_ROLE_ORDER = Object.freeze([
   'vertical',
 ])
 
-export const LATTICE_FLOOR_OFFSETS = Object.freeze([0, 1, 2])
-
 export const LATTICE_TREE_EDGE_ROLES = Object.freeze([
   'backbone',
   'spine',
@@ -57,7 +55,7 @@ export const LATTICE_DESCRIPTOR_REASONS = Object.freeze({
   orphanDescriptor: 'orphan-descriptor',
   familyMismatch: 'family-mismatch',
   canonicalIdMismatch: 'canonical-id-mismatch',
-  bounded: 'bounded-3x3x3',
+  bounded: 'bounded-4x4x5',
   anchorShape: 'anchor-shape',
   edgeShape: 'edge-shape',
   duplicateEdge: 'duplicate-edge',
@@ -75,18 +73,29 @@ export const LATTICE_DESCRIPTOR_REASONS = Object.freeze({
   crossDistrictNetwork: 'cross-district-network',
 })
 
-const DISTRICT_CHUNKS = 3
+// The multilayer lattice district (v24): a 4x4-chunk city block of narrow
+// catwalks. 8x8 anchors at a uniform 7-cell pitch terrace across 5 floors, so
+// every chunk hosts a 2x2 anchor quad at locals {3,10} — the whole strip of a
+// stair (landing + 2 runs + exit) always fits inside its anchor's chunk in
+// every axis direction.
+const DISTRICT_CHUNKS = 4
+const LEVELS = 5
 const VERTICAL_PERIOD = STRUCTURE_VERTICAL_PERIOD
-const ANCHORS_PER_AXIS = 5
-const ANCHOR_LOCAL_COORDINATES = Object.freeze([3, 11, 20, 29, 38])
-const FLOOR_BAND_WIDTHS = Object.freeze([
-  Object.freeze([1, 1, 3]),
-  Object.freeze([1, 3, 1]),
-  Object.freeze([3, 1, 1]),
-  Object.freeze([1, 2, 2]),
-  Object.freeze([2, 1, 2]),
-  Object.freeze([2, 2, 1]),
-])
+const ANCHORS_PER_AXIS = 8
+const ANCHOR_LOCAL_COORDINATES = Object.freeze(
+  Array.from({ length: ANCHORS_PER_AXIS }, (_, index) =>
+    Math.floor(index / 2) * CHUNK + (index % 2 === 0 ? 3 : 10)
+  )
+)
+const ANCHOR_COUNT = ANCHORS_PER_AXIS * ANCHORS_PER_AXIS
+const CANDIDATE_COUNT = 2 * ANCHORS_PER_AXIS * (ANCHORS_PER_AXIS - 1)
+// Bounded retry budget for the deterministic stair-conflict resolution loop.
+const STAIR_PLAN_ATTEMPTS = 16
+
+export const LATTICE_FLOOR_OFFSETS = Object.freeze(
+  Array.from({ length: LEVELS }, (_, offset) => offset)
+)
+
 const EMPTY_CANDIDATE_LINKS = Object.freeze([])
 const WEIGHT_SCALE = 100_000
 const UINT32_MAX = 0xffffffff
@@ -100,13 +109,17 @@ const SALTS = Object.freeze({
   verticalPhase: 0x1a7701,
   id: 0x1a7702,
   floorAxis: 0x1a7703,
-  floorBands: 0x1a7704,
+  floorCuts: 0x1a7704,
   floorDirection: 0x1a7705,
   maximumExposure: 0x1a7706,
   edgeWeight: 0x1a7707,
   cycleSelection: 0x1a7708,
-  stairDirection: 0x1a7709,
 })
+
+// Terracing modes: the floor field can climb along either axis or either
+// diagonal. Diagonal modes cut the district into staircase terraces, so two
+// districts with the same cut widths still read differently underfoot.
+const FLOOR_AXIS_MODES = Object.freeze(['x', 'z', 'diagonal', 'antidiagonal'])
 
 const LATTICE_POLYGON_CONFIG = Object.freeze({
   districtChunks: DISTRICT_CHUNKS,
@@ -156,6 +169,8 @@ export const compareLatticeEdges = (a, b) =>
     LATTICE_EDGE_ROLE_ORDER.indexOf(b.role) ||
   a.a - b.a ||
   a.b - b.b
+export const compareLatticeVerticalLinks = (a, b) =>
+  a.lowerCy - b.lowerCy || a.cz - b.cz || a.cx - b.cx
 
 export const isLatticeTreeEdge = (edge) =>
   LATTICE_TREE_EDGE_ROLE_SET.has(edge?.role)
@@ -164,14 +179,14 @@ export function isCanonicalLatticeProfile(profile) {
   return profile?.family === MAP_FAMILY_LATTICE &&
     profile.enabled === true &&
     profile.districtChunks === DISTRICT_CHUNKS &&
-    profile.levels === 3 &&
+    profile.levels === LEVELS &&
     profile.anchorsPerAxis === ANCHORS_PER_AXIS &&
     Array.isArray(profile.cycleRate) &&
     profile.cycleRate.length === 2 &&
     Number.isFinite(profile.cycleRate[0]) &&
     Number.isFinite(profile.cycleRate[1]) &&
-    profile.cycleRate[0] >= 0.08 &&
-    profile.cycleRate[1] <= 0.15 &&
+    profile.cycleRate[0] >= 0.12 &&
+    profile.cycleRate[1] <= 0.25 &&
     profile.cycleRate[0] <= profile.cycleRate[1] &&
     profile.defaultExposureM === 5 &&
     profile.maxExposureM === 20 &&
@@ -189,7 +204,7 @@ export function hasExactLatticeParticipants(structure) {
   const district = structure?.district
   if (
     !Array.isArray(participants) ||
-    participants.length !== 9 ||
+    participants.length !== DISTRICT_CHUNKS * DISTRICT_CHUNKS ||
     !Number.isInteger(district?.x) ||
     !Number.isInteger(district?.z) ||
     district.size !== DISTRICT_CHUNKS
@@ -235,7 +250,7 @@ export function hasCanonicalLatticeOwnershipShape(structure) {
 
 // Canonical Lattice volume traversal is floor-major over the descriptor's
 // already-canonical participant order. Audit and runtime ownership consumers
-// reuse this finite 27-slice order instead of rebuilding it independently.
+// reuse this finite 80-slice order instead of rebuilding it independently.
 export function latticeSliceCoordinates(structure) {
   if (
     !Number.isInteger(structure?.baseCy) ||
@@ -276,29 +291,56 @@ function bandIndexAtBase(seed, districtX, districtZ, baseCy) {
   )
 }
 
-function floorOffsetAtGridIndex(index, widths) {
-  if (index < widths[0]) return 0
-  if (index < widths[0] + widths[1]) return 1
-  return 2
+function floorAxisPosition(mode, row, column) {
+  if (mode === 'x') return column
+  if (mode === 'z') return row
+  if (mode === 'diagonal') return row + column
+  return row + (ANCHORS_PER_AXIS - 1 - column)
+}
+
+function floorAxisPositionCount(mode) {
+  return mode === 'x' || mode === 'z'
+    ? ANCHORS_PER_AXIS
+    : 2 * ANCHORS_PER_AXIS - 1
+}
+
+// Partition the terracing axis into LEVELS contiguous bands (each at least one
+// position wide) by drawing LEVELS-1 distinct cut positions from one hashed
+// stream. Grid-adjacent anchors move at most one axis position, so they can
+// never differ by more than one floor — the invariant every vertical link and
+// stair depends on.
+function floorBandCuts(cutStream, positionCount) {
+  const gaps = Array.from({ length: positionCount - 1 }, (_, index) => index + 1)
+  const cuts = []
+  for (let pick = 0; pick < LEVELS - 1; pick++) {
+    const index = hash2i(SALTS.floorCuts, cutStream | 0, pick) % gaps.length
+    cuts.push(gaps.splice(index, 1)[0])
+  }
+  return cuts.sort(compareNumbers)
+}
+
+function floorOffsetAtPosition(position, cuts) {
+  let offset = 0
+  for (const cut of cuts) {
+    if (position >= cut) offset++
+  }
+  return offset
 }
 
 function latticeAnchors(seed, districtX, districtZ, bandIndex, baseCy, profile) {
   const originGx = districtX * DISTRICT_CHUNKS * CHUNK
   const originGz = districtZ * DISTRICT_CHUNKS * CHUNK
-  const floorAxis = plannerHash(
+  const mode = FLOOR_AXIS_MODES[plannerHash(
     seed,
     SALTS.floorAxis,
     districtX,
     bandIndex,
     districtZ
-  ) % 2 === 0 ? 'x' : 'z'
-  const widths = FLOOR_BAND_WIDTHS[plannerHash(
-    seed,
-    SALTS.floorBands,
-    districtX,
-    bandIndex,
-    districtZ
-  ) % FLOOR_BAND_WIDTHS.length]
+  ) % FLOOR_AXIS_MODES.length]
+  const cuts = floorBandCuts(
+    plannerHash(seed, SALTS.floorCuts, districtX, bandIndex, districtZ),
+    floorAxisPositionCount(mode)
+  )
   const reverseFloors = plannerHash(
     seed,
     SALTS.floorDirection,
@@ -319,17 +361,20 @@ function latticeAnchors(seed, districtX, districtZ, bandIndex, baseCy, profile) 
     districtX,
     bandIndex,
     districtZ
-  ) % (ANCHORS_PER_AXIS * ANCHORS_PER_AXIS)
-  const defaultExposureIndex = (maximumExposureIndex + 1) %
-    (ANCHORS_PER_AXIS * ANCHORS_PER_AXIS)
+  ) % ANCHOR_COUNT
+  const defaultExposureIndex = (maximumExposureIndex + 1) % ANCHOR_COUNT
   const anchors = []
 
   for (let row = 0; row < ANCHORS_PER_AXIS; row++) {
     for (let column = 0; column < ANCHORS_PER_AXIS; column++) {
       const positionIndex = row * ANCHORS_PER_AXIS + column
-      const axisIndex = floorAxis === 'x' ? column : row
-      const rawFloorOffset = floorOffsetAtGridIndex(axisIndex, widths)
-      const floorOffset = reverseFloors ? 2 - rawFloorOffset : rawFloorOffset
+      const rawFloorOffset = floorOffsetAtPosition(
+        floorAxisPosition(mode, row, column),
+        cuts
+      )
+      const floorOffset = reverseFloors
+        ? LEVELS - 1 - rawFloorOffset
+        : rawFloorOffset
       const anchor = {
         id: (idBase + positionIndex) >>> 0,
         gx: originGx + ANCHOR_LOCAL_COORDINATES[column],
@@ -349,7 +394,7 @@ function latticeAnchors(seed, districtX, districtZ, bandIndex, baseCy, profile) 
 }
 
 function validCandidateAnchors(anchors) {
-  if (!Array.isArray(anchors) || anchors.length !== 25) return false
+  if (!Array.isArray(anchors) || anchors.length !== ANCHOR_COUNT) return false
   const ids = new Set()
   const positions = new Set()
   for (const anchor of anchors) {
@@ -442,23 +487,125 @@ export function latticeMinimumSpanningLinks(anchorIds, candidates) {
   return selected
 }
 
-// Candidate weighting, Kruskal selection, and the horizontal cycle denominator
-// form one planner-owned computation. Stamping and auditing consume this
+const STAIR_DIRECTIONS = Object.freeze([
+  Object.freeze({ dir: 0, dx: 0, dz: -1 }),
+  Object.freeze({ dir: 1, dx: 1, dz: 0 }),
+  Object.freeze({ dir: 2, dx: 0, dz: 1 }),
+  Object.freeze({ dir: 3, dx: -1, dz: 0 }),
+])
+
+const localCoordinate = (globalCoordinate) =>
+  ((globalCoordinate % CHUNK) + CHUNK) % CHUNK
+
+// A vertical tree edge realizes as one stair whose strip runs from the lower
+// anchor STRAIGHT TOWARD the upper anchor — directly under the edge's upper
+// catwalk. The stair top therefore always opens onto that catwalk; direction is
+// geometry, never a hash.
+function verticalLinkSite(candidate, anchorById) {
+  const left = anchorById.get(candidate.a)
+  const right = anchorById.get(candidate.b)
+  const [lower, upper] = left.levelCy < right.levelCy
+    ? [left, right]
+    : [right, left]
+  const dx = Math.sign(upper.gx - lower.gx)
+  const dz = Math.sign(upper.gz - lower.gz)
+  const direction = STAIR_DIRECTIONS.find(
+    (entry) => entry.dx === dx && entry.dz === dz
+  )
+  if (!direction) return null
+  const lx = localCoordinate(lower.gx)
+  const lz = localCoordinate(lower.gz)
+  const cellAt = (distance) => ({
+    lx: lx + dx * distance,
+    lz: lz + dz * distance,
+  })
+  return {
+    lowerCy: lower.levelCy,
+    cx: Math.floor(lower.gx / CHUNK),
+    cz: Math.floor(lower.gz / CHUNK),
+    stair: {
+      dir: direction.dir,
+      landing: cellAt(0),
+      run: [cellAt(1), cellAt(2)],
+      exit: cellAt(3),
+    },
+  }
+}
+
+// ChunkData carries exactly one up-stair and one down-stair slot per chunk
+// layer, and a chunk layer between two links realizes both halves. Two links
+// therefore conflict when they share a chunk column and their lower floors are
+// identical or adjacent.
+function conflictingVerticalPair(sites) {
+  for (let i = 0; i < sites.length; i++) {
+    for (let j = i + 1; j < sites.length; j++) {
+      if (
+        sites[i].site.cx === sites[j].site.cx &&
+        sites[i].site.cz === sites[j].site.cz &&
+        Math.abs(sites[i].site.lowerCy - sites[j].site.lowerCy) <= 1
+      ) {
+        return [sites[i], sites[j]]
+      }
+    }
+  }
+  return null
+}
+
+// Candidate weighting, conflict-resolved Kruskal selection, and the horizontal
+// cycle denominator form one planner-owned computation. When the raw MST would
+// demand two stairs the raster cannot host, the heavier vertical candidate is
+// excluded and the tree recomputed — a bounded, deterministic loop that keeps
+// graph and geometry in exact agreement. Stamping and auditing consume this
 // evidence directly; candidates remain transient and never enter the descriptor.
 export function latticeGraphEvidence(anchors) {
   if (!validCandidateAnchors(anchors)) return null
   const anchorById = new Map(anchors.map((anchor) => [anchor.id, anchor]))
   const candidates = latticeCandidateLinks(anchors)
-  if (candidates.length !== 40) return null
+  if (candidates.length !== CANDIDATE_COUNT) return null
   const candidateByKey = new Map(candidates.map((candidate) => [
     latticeEdgeKey(candidate),
     candidate,
   ]))
-  const minimumTreeLinks = latticeMinimumSpanningLinks(
-    anchors.map(({ id }) => id),
-    candidates
-  )
-  if (minimumTreeLinks.length !== anchors.length - 1) return null
+  const anchorIds = anchors.map(({ id }) => id)
+
+  const excludedKeys = new Set()
+  let minimumTreeLinks = null
+  let verticalSites = null
+  for (let attempt = 0; attempt < STAIR_PLAN_ATTEMPTS; attempt++) {
+    const usable = candidates.filter(
+      (candidate) => !excludedKeys.has(latticeEdgeKey(candidate))
+    )
+    const tree = latticeMinimumSpanningLinks(anchorIds, usable)
+    if (tree.length !== anchors.length - 1) return null
+    const sites = []
+    let invalidSite = false
+    for (const candidate of tree) {
+      const left = anchorById.get(candidate.a)
+      const right = anchorById.get(candidate.b)
+      if (left.levelCy === right.levelCy) continue
+      const site = Math.abs(left.levelCy - right.levelCy) === 1
+        ? verticalLinkSite(candidate, anchorById)
+        : null
+      if (!site) {
+        invalidSite = true
+        break
+      }
+      sites.push({ candidate, site })
+    }
+    if (invalidSite) return null
+    const conflict = conflictingVerticalPair(sites)
+    if (!conflict) {
+      minimumTreeLinks = tree
+      verticalSites = sites
+      break
+    }
+    const loser = conflict[0].candidate.weight >= conflict[1].candidate.weight
+      ? conflict[0].candidate
+      : conflict[1].candidate
+    excludedKeys.add(latticeEdgeKey(loser))
+  }
+  if (!minimumTreeLinks) return null
+
   const minimumTreeKeys = new Set(minimumTreeLinks.map(latticeEdgeKey))
   const eligibleCycleLinks = candidates.filter((candidate) =>
     !minimumTreeKeys.has(latticeEdgeKey(candidate)) &&
@@ -469,31 +616,56 @@ export function latticeGraphEvidence(anchors) {
     anchorById,
     candidates,
     candidateByKey,
+    excludedCandidateKeys: excludedKeys,
     minimumTreeLinks,
     minimumTreeKeys,
+    verticalSites,
     eligibleCycleLinks,
     eligibleCycleKeys,
   }
 }
 
-function edgeCellsBetween(left, right) {
-  const cells = []
-  let gx = left.gx
-  let gz = left.gz
-  let cy = left.levelCy
-  cells.push({ gx, gz, cy })
-  while (gx !== right.gx) {
-    gx += Math.sign(right.gx - gx)
-    cells.push({ gx, gz, cy })
+// Canonical edge geometry. A horizontal edge is the straight catwalk between
+// its grid-adjacent anchors. A vertical edge owns the lower anchor's cell (the
+// stair landing) plus the FULL catwalk on the upper floor from the upper
+// anchor to directly above that landing — so the stair's upper exit is always
+// an interior cell of its own edge's deck, never a stranded island.
+export function latticeEdgeCells(left, right) {
+  if (left.levelCy === right.levelCy) {
+    const cells = []
+    let gx = left.gx
+    let gz = left.gz
+    cells.push({ gx, gz, cy: left.levelCy })
+    while (gx !== right.gx) {
+      gx += Math.sign(right.gx - gx)
+      cells.push({ gx, gz, cy: left.levelCy })
+    }
+    while (gz !== right.gz) {
+      gz += Math.sign(right.gz - gz)
+      cells.push({ gx, gz, cy: left.levelCy })
+    }
+    return dedupeSortedCells(cells)
   }
-  while (gz !== right.gz) {
-    gz += Math.sign(right.gz - gz)
-    cells.push({ gx, gz, cy })
+  if (Math.abs(left.levelCy - right.levelCy) !== 1) return []
+  const [lower, upper] = left.levelCy < right.levelCy
+    ? [left, right]
+    : [right, left]
+  const dx = Math.sign(upper.gx - lower.gx)
+  const dz = Math.sign(upper.gz - lower.gz)
+  const span = Math.abs(upper.gx - lower.gx) + Math.abs(upper.gz - lower.gz)
+  if ((dx !== 0 && dz !== 0) || span === 0) return []
+  const cells = [{ gx: lower.gx, gz: lower.gz, cy: lower.levelCy }]
+  for (let distance = 0; distance <= span; distance++) {
+    cells.push({
+      gx: lower.gx + dx * distance,
+      gz: lower.gz + dz * distance,
+      cy: upper.levelCy,
+    })
   }
-  while (cy !== right.levelCy) {
-    cy += Math.sign(right.levelCy - cy)
-    cells.push({ gx, gz, cy })
-  }
+  return dedupeSortedCells(cells)
+}
+
+function dedupeSortedCells(cells) {
   return [...new Map(cells.map((cell) => [
     `${cell.gx},${cell.gz},${cell.cy}`,
     cell,
@@ -505,7 +677,7 @@ function descriptorEdge(candidate, role, anchorById) {
     a: candidate.a,
     b: candidate.b,
     role,
-    cells: edgeCellsBetween(
+    cells: latticeEdgeCells(
       anchorById.get(candidate.a),
       anchorById.get(candidate.b)
     ),
@@ -522,7 +694,7 @@ function latticeEdges(anchors, evidence, profile, baseCy) {
     anchorById.get(candidate.a).levelCy === anchorById.get(candidate.b).levelCy
   )
   const middleFloorTree = horizontalTree.filter((candidate) =>
-    anchorById.get(candidate.a).levelCy === baseCy + 1
+    anchorById.get(candidate.a).levelCy === baseCy + (LEVELS >> 1)
   )
   const spine = (middleFloorTree.length > 0 ? middleFloorTree : horizontalTree)
     .slice()
@@ -562,16 +734,6 @@ function latticeEdges(anchors, evidence, profile, baseCy) {
   }
 }
 
-const STAIR_DIRECTIONS = Object.freeze([
-  Object.freeze({ dir: 0, dx: 0, dz: -1 }),
-  Object.freeze({ dir: 1, dx: 1, dz: 0 }),
-  Object.freeze({ dir: 2, dx: 0, dz: 1 }),
-  Object.freeze({ dir: 3, dx: -1, dz: 0 }),
-])
-
-const localCoordinate = (globalCoordinate) =>
-  ((globalCoordinate % CHUNK) + CHUNK) % CHUNK
-
 export function isCanonicalLatticeStair(stair) {
   const cells = [stair?.landing, ...(stair?.run ?? []), stair?.exit]
   if (
@@ -600,71 +762,41 @@ export function isCanonicalLatticeStair(stair) {
   )
 }
 
-function stairDescriptor(anchor, lowerCy) {
-  const lx = localCoordinate(anchor.gx)
-  const lz = localCoordinate(anchor.gz)
-  const validDirections = STAIR_DIRECTIONS.filter(({ dx, dz }) => {
-    const exitX = lx + dx * 3
-    const exitZ = lz + dz * 3
-    return exitX >= 1 && exitX < CHUNK - 1 &&
-      exitZ >= 1 && exitZ < CHUNK - 1
-  })
-  const direction = validDirections[
-    hash2i(SALTS.stairDirection, anchor.id | 0, lowerCy) % validDirections.length
-  ]
-  const cellAt = (distance) => ({
-    lx: lx + direction.dx * distance,
-    lz: lz + direction.dz * distance,
-  })
-  return {
-    dir: direction.dir,
-    landing: cellAt(0),
-    run: [cellAt(1), cellAt(2)],
-    exit: cellAt(3),
-  }
+function latticeVerticalLinks(evidence) {
+  return evidence.verticalSites
+    .map(({ site }) => site)
+    .sort(compareLatticeVerticalLinks)
 }
 
-function latticeVerticalLinks(anchors, treeLinks) {
-  const anchorById = new Map(anchors.map((anchor) => [anchor.id, anchor]))
-  return treeLinks.filter((candidate) =>
-    anchorById.get(candidate.a).levelCy !== anchorById.get(candidate.b).levelCy
-  ).map((candidate) => {
-    const left = anchorById.get(candidate.a)
-    const right = anchorById.get(candidate.b)
-    const lower = left.levelCy < right.levelCy ? left : right
-    const lowerCy = lower.levelCy
-    return {
-      lowerCy,
-      cx: Math.floor(lower.gx / CHUNK),
-      cz: Math.floor(lower.gz / CHUNK),
-      stair: stairDescriptor(lower, lowerCy),
-    }
-  }).sort((a, b) => a.lowerCy - b.lowerCy)
+function sameStairCell(a, b) {
+  return Number.isInteger(a?.lx) &&
+    a.lx === b?.lx &&
+    Number.isInteger(a?.lz) &&
+    a.lz === b?.lz
 }
 
-function validLatticeEdgeCells(edge, left, right, structure) {
-  if (!Array.isArray(edge?.cells) || edge.cells.length === 0) return false
-  const keys = new Set()
-  for (let index = 0; index < edge.cells.length; index++) {
-    const cell = edge.cells[index]
-    const key = latticeGlobalCellKey(cell?.gx, cell?.gz, cell?.cy)
-    if (
-      !Number.isInteger(cell?.gx) ||
-      !Number.isInteger(cell?.gz) ||
-      !Number.isInteger(cell?.cy) ||
-      cell.gx < structure.globalBounds.x0 ||
-      cell.gx > structure.globalBounds.x1 ||
-      cell.gz < structure.globalBounds.z0 ||
-      cell.gz > structure.globalBounds.z1 ||
-      cell.cy < structure.baseCy ||
-      cell.cy > structure.topCy ||
-      keys.has(key) ||
-      (index > 0 && compareLatticeCells(edge.cells[index - 1], cell) >= 0)
-    ) return false
-    keys.add(key)
-  }
-  return keys.has(latticeGlobalCellKey(left.gx, left.gz, left.levelCy)) &&
-    keys.has(latticeGlobalCellKey(right.gx, right.gz, right.levelCy))
+function sameVerticalLink(link, expected) {
+  return link?.lowerCy === expected.lowerCy &&
+    link?.cx === expected.cx &&
+    link?.cz === expected.cz &&
+    link?.stair?.dir === expected.stair.dir &&
+    sameStairCell(link?.stair?.landing, expected.stair.landing) &&
+    Array.isArray(link?.stair?.run) &&
+    link.stair.run.length === 2 &&
+    sameStairCell(link.stair.run[0], expected.stair.run[0]) &&
+    sameStairCell(link.stair.run[1], expected.stair.run[1]) &&
+    sameStairCell(link?.stair?.exit, expected.stair.exit)
+}
+
+function sameEdgeCells(edge, left, right) {
+  const expected = latticeEdgeCells(left, right)
+  if (expected.length === 0 || !Array.isArray(edge?.cells)) return false
+  return edge.cells.length === expected.length &&
+    expected.every((cell, index) =>
+      edge.cells[index]?.gx === cell.gx &&
+      edge.cells[index]?.gz === cell.gz &&
+      edge.cells[index]?.cy === cell.cy
+    )
 }
 
 function failedLatticeAnalysis(structure, reason, partial = {}) {
@@ -682,8 +814,9 @@ function failedLatticeAnalysis(structure, reason, partial = {}) {
 }
 
 // One strict descriptor/graph boundary backs stamping, runtime slice parity,
-// and release audit. It recomputes candidate weights, Kruskal, and eligible
-// cycles from canonical anchors and rejects parallel DTO/network authority.
+// and release audit. It recomputes candidate weights, the conflict-resolved
+// Kruskal tree, and eligible cycles from canonical anchors and rejects
+// parallel DTO/network authority.
 export function analyzeLatticeDescriptor(structure, profile) {
   if (!isRecord(structure)) {
     return failedLatticeAnalysis(
@@ -749,9 +882,9 @@ function computeLatticeAnalysis(structure, profile) {
   }
   if (
     !isCanonicalLatticeProfile(profile) ||
-    structure.levelCount !== 3 ||
+    structure.levelCount !== LEVELS ||
     !Number.isInteger(structure.baseCy) ||
-    structure.topCy !== structure.baseCy + 2 ||
+    structure.topCy !== structure.baseCy + LEVELS - 1 ||
     !hasExactLatticeParticipants(structure) ||
     !hasExactLatticeBounds(structure)
   ) {
@@ -762,7 +895,7 @@ function computeLatticeAnalysis(structure, profile) {
   }
 
   const anchors = structure.anchors
-  if (!Array.isArray(anchors) || anchors.length !== 25) {
+  if (!Array.isArray(anchors) || anchors.length !== ANCHOR_COUNT) {
     return failedLatticeAnalysis(
       structure,
       LATTICE_DESCRIPTOR_REASONS.anchorShape
@@ -770,6 +903,7 @@ function computeLatticeAnalysis(structure, profile) {
   }
   const anchorById = new Map()
   const positions = new Set()
+  const anchorByPosition = new Map()
   const floors = new Set()
   let exposureValid = true
   for (let index = 0; index < anchors.length; index++) {
@@ -805,23 +939,46 @@ function computeLatticeAnalysis(structure, profile) {
       exposureM >= 0 && exposureM <= profile.maxExposureM
     anchorById.set(anchor.id, anchor)
     positions.add(positionKey)
+    anchorByPosition.set(positionKey, anchor)
     floors.add(anchor.levelCy)
   }
-  const xs = [...new Set(anchors.map(({ gx }) => gx))]
-  const zs = [...new Set(anchors.map(({ gz }) => gz))]
-  if (
-    anchorById.size !== 25 ||
-    positions.size !== 25 ||
-    xs.length !== ANCHORS_PER_AXIS ||
-    zs.length !== ANCHORS_PER_AXIS ||
-    !xs.every((gx) => zs.every((gz) =>
+  const xs = [...new Set(anchors.map(({ gx }) => gx))].sort(compareNumbers)
+  const zs = [...new Set(anchors.map(({ gz }) => gz))].sort(compareNumbers)
+  let terracedField = anchorById.size === ANCHOR_COUNT &&
+    positions.size === ANCHOR_COUNT &&
+    xs.length === ANCHORS_PER_AXIS &&
+    zs.length === ANCHORS_PER_AXIS &&
+    xs.every((gx) => zs.every((gz) =>
       positions.has(latticeHorizontalCellKey(gx, gz))
-    )) ||
-    floors.size !== 3 ||
-    !floors.has(structure.baseCy) ||
-    !floors.has(structure.baseCy + 1) ||
-    !floors.has(structure.topCy)
-  ) {
+    )) &&
+    floors.size === LEVELS
+  if (terracedField) {
+    for (let offset = 0; offset < LEVELS; offset++) {
+      terracedField &&= floors.has(structure.baseCy + offset)
+    }
+    // Grid-adjacent anchors may differ by at most one floor: that bound is
+    // what makes every vertical candidate a single-flight stair.
+    for (let row = 0; terracedField && row < zs.length; row++) {
+      for (let column = 0; terracedField && column < xs.length; column++) {
+        const anchor = anchorByPosition.get(
+          latticeHorizontalCellKey(xs[column], zs[row])
+        )
+        if (column + 1 < xs.length) {
+          const east = anchorByPosition.get(
+            latticeHorizontalCellKey(xs[column + 1], zs[row])
+          )
+          terracedField &&= Math.abs(anchor.levelCy - east.levelCy) <= 1
+        }
+        if (row + 1 < zs.length) {
+          const south = anchorByPosition.get(
+            latticeHorizontalCellKey(xs[column], zs[row + 1])
+          )
+          terracedField &&= Math.abs(anchor.levelCy - south.levelCy) <= 1
+        }
+      }
+    }
+  }
+  if (!terracedField) {
     return failedLatticeAnalysis(
       structure,
       LATTICE_DESCRIPTOR_REASONS.anchorShape,
@@ -874,7 +1031,7 @@ function computeLatticeAnalysis(structure, profile) {
       !left ||
       !right ||
       !graph.candidateByKey.has(key) ||
-      !validLatticeEdgeCells(edge, left, right, structure) ||
+      !sameEdgeCells(edge, left, right) ||
       ((edge.role === 'vertical') !== (left.levelCy !== right.levelCy)) ||
       (edge.role === 'cycle' && left.levelCy !== right.levelCy)
     ) {
@@ -905,27 +1062,7 @@ function computeLatticeAnalysis(structure, profile) {
     )
   }
 
-  const verticalEdges = treeEdges.filter(({ role }) => role === 'vertical')
-  const links = structure.verticalLinks
-  if (
-    verticalEdges.length !== 2 ||
-    !Array.isArray(links) ||
-    links.length !== 2 ||
-    links[0]?.lowerCy !== structure.baseCy ||
-    links[1]?.lowerCy !== structure.baseCy + 1
-  ) {
-    return failedLatticeAnalysis(
-      structure,
-      LATTICE_DESCRIPTOR_REASONS.missingVerticalLink,
-      {
-        anchorById,
-        minimumTreeKeys: graph.minimumTreeKeys,
-        treeEdges,
-        cycleEdges,
-      }
-    )
-  }
-  if (treeEdges.length < 24) {
+  if (treeEdges.length < anchors.length - 1) {
     return failedLatticeAnalysis(
       structure,
       LATTICE_DESCRIPTOR_REASONS.disconnectedBackbone,
@@ -937,7 +1074,7 @@ function computeLatticeAnalysis(structure, profile) {
       }
     )
   }
-  if (treeEdges.length > 24) {
+  if (treeEdges.length > anchors.length - 1) {
     return failedLatticeAnalysis(
       structure,
       LATTICE_DESCRIPTOR_REASONS.cyclicBackbone,
@@ -987,6 +1124,58 @@ function computeLatticeAnalysis(structure, profile) {
     )
   }
 
+  // Vertical links: one canonical stair per vertical tree edge, sorted, with
+  // every adjacent floor pair of the band bridged at least once — the "always
+  // a way to the next layer" contract — and no two stairs demanding the same
+  // chunk slot.
+  const verticalEdges = treeEdges.filter(({ role }) => role === 'vertical')
+  const expectedLinks = latticeVerticalLinks(graph)
+  const links = structure.verticalLinks
+  const coveredBoundaries = new Set(
+    Array.isArray(links)
+      ? links.map((link) => link?.lowerCy).filter(Number.isInteger)
+      : []
+  )
+  let boundariesCovered = true
+  for (let lowerCy = structure.baseCy; lowerCy < structure.topCy; lowerCy++) {
+    boundariesCovered &&= coveredBoundaries.has(lowerCy)
+  }
+  if (
+    verticalEdges.length < LEVELS - 1 ||
+    !Array.isArray(links) ||
+    links.length !== verticalEdges.length ||
+    !boundariesCovered
+  ) {
+    return failedLatticeAnalysis(
+      structure,
+      LATTICE_DESCRIPTOR_REASONS.missingVerticalLink,
+      {
+        anchorById,
+        minimumTreeKeys: graph.minimumTreeKeys,
+        treeEdges,
+        cycleEdges,
+      }
+    )
+  }
+  const linksValid = links.length === expectedLinks.length &&
+    links.every((link, index) =>
+      sameVerticalLink(link, expectedLinks[index]) &&
+      isCanonicalLatticeStair(link?.stair)
+    )
+  if (!linksValid) {
+    return failedLatticeAnalysis(
+      structure,
+      LATTICE_DESCRIPTOR_REASONS.verticalLinkDescriptor,
+      {
+        anchorById,
+        minimumTreeKeys: graph.minimumTreeKeys,
+        treeEdges,
+        cycleEdges,
+        eligibleCycleKeys: graph.eligibleCycleKeys,
+      }
+    )
+  }
+
   const cycleRate = cycleEdges.length / graph.eligibleCycleKeys.size
   if (
     structure.eligibleNonBackboneLinks !== graph.eligibleCycleKeys.size ||
@@ -1006,37 +1195,6 @@ function computeLatticeAnalysis(structure, profile) {
         eligibleCycleKeys: graph.eligibleCycleKeys,
       }
     )
-  }
-
-  for (const link of links) {
-    const vertical = verticalEdges.find((edge) => {
-      const left = anchorById.get(edge.a)
-      const right = anchorById.get(edge.b)
-      return Math.min(left.levelCy, right.levelCy) === link.lowerCy
-    })
-    const lower = vertical && [
-      anchorById.get(vertical.a),
-      anchorById.get(vertical.b),
-    ].find((anchor) => anchor.levelCy === link.lowerCy)
-    if (
-      !vertical ||
-      !lower ||
-      link.cx !== Math.floor(lower.gx / CHUNK) ||
-      link.cz !== Math.floor(lower.gz / CHUNK) ||
-      !isCanonicalLatticeStair(link.stair)
-    ) {
-      return failedLatticeAnalysis(
-        structure,
-        LATTICE_DESCRIPTOR_REASONS.verticalLinkDescriptor,
-        {
-          anchorById,
-          minimumTreeKeys: graph.minimumTreeKeys,
-          treeEdges,
-          cycleEdges,
-          eligibleCycleKeys: graph.eligibleCycleKeys,
-        }
-      )
-    }
   }
 
   return {
@@ -1063,7 +1221,7 @@ function structureForDistrict(seed, districtX, districtZ, baseCy, profile) {
     districtZ,
     LATTICE_POLYGON_CONFIG,
     {
-      shape: 'lattice3x3',
+      shape: 'lattice',
       bridgeAxis: null,
       avoidSpawn: baseCy <= 0 && topCy >= 0,
     }
@@ -1083,12 +1241,11 @@ function structureForDistrict(seed, districtX, districtZ, baseCy, profile) {
   if (!evidence) return null
   const graph = latticeEdges(anchors, evidence, profile, baseCy)
   if (!graph) return null
-  const verticalLinks = latticeVerticalLinks(anchors, evidence.minimumTreeLinks)
-  if (
-    verticalLinks.length !== 2 ||
-    verticalLinks[0].lowerCy !== baseCy ||
-    verticalLinks[1].lowerCy !== baseCy + 1
-  ) return null
+  const verticalLinks = latticeVerticalLinks(evidence)
+  const coveredBoundaries = new Set(verticalLinks.map(({ lowerCy }) => lowerCy))
+  for (let lowerCy = baseCy; lowerCy < topCy; lowerCy++) {
+    if (!coveredBoundaries.has(lowerCy)) return null
+  }
 
   const originGx = districtX * DISTRICT_CHUNKS * CHUNK
   const originGz = districtZ * DISTRICT_CHUNKS * CHUNK
@@ -1128,7 +1285,7 @@ function structureForDistrict(seed, districtX, districtZ, baseCy, profile) {
 }
 
 // Recover one immutable bounded Lattice descriptor from any declared
-// participant and floor in its three-level band. Runtime carriage remains the
+// participant and floor in its five-level band. Runtime carriage remains the
 // existing data.structure field; this planner exposes no parallel DTO.
 export function latticeStructureAt(seed, cx, cz, levelCy, profile) {
   if (

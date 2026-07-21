@@ -134,15 +134,15 @@ function normalizeProfile(family, profile, requireEnabled) {
     }
   } else if (family === MAP_FAMILY_LATTICE) {
     requireConstraint(
-      profile.districtChunks === 3 &&
-      profile.levels === 3 &&
-      profile.anchorsPerAxis === 5 &&
+      profile.districtChunks === 4 &&
+      profile.levels === 5 &&
+      profile.anchorsPerAxis === 8 &&
       Array.isArray(profile.cycleRate) &&
       profile.cycleRate.length === 2 &&
       Number.isFinite(profile.cycleRate[0]) &&
       Number.isFinite(profile.cycleRate[1]) &&
-      profile.cycleRate[0] >= 0.08 &&
-      profile.cycleRate[1] <= 0.15 &&
+      profile.cycleRate[0] >= 0.12 &&
+      profile.cycleRate[1] <= 0.25 &&
       profile.cycleRate[0] <= profile.cycleRate[1] &&
       profile.defaultExposureM === 5 &&
       profile.maxExposureM === 20 &&

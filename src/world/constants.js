@@ -364,7 +364,15 @@ export const OUTLINE_FADE_FAR = 0.95
 
 // --- Thin-wall model (refactor) ---------------------------------------
 // World-gen version: bump whenever the algorithm changes the bytes a seed
-// produces. Guards the golden determinism test. v23 expands the room layer
+// produces. Guards the golden determinism test. v24 is the multilayer
+// lattice-district redesign: 4x4-chunk districts, five terraced floors, an
+// 8x8 anchor grid at a uniform 7-cell pitch, four terracing modes with
+// hash-drawn band cuts, a higher cycle budget, and as many stairs as the
+// conflict-resolved spanning tree demands — each stair now runs from its
+// lower anchor straight toward the upper anchor, directly under that edge's
+// upper catwalk, and chamber rails open wherever a stair halo touches them,
+// so every stamped district is one physically connected walk volume (the
+// audit now proves this with a flood fill). v23 expands the room layer
 // to every family and hardens its invariants: election quotas are now
 // composition targets filled by a deterministic backstop pass; lattice's
 // office shell elects a maintenance mix and furnishes; sewer chambers
@@ -382,7 +390,7 @@ export const OUTLINE_FADE_FAR = 0.95
 // release-eligible bounded Lattice stream; v17 introduced the bounded
 // Tower/skybridge stream, v16 the bounded Sewer stream; v15 added the
 // collision-real furniture layer.
-export const WORLD_GEN_VERSION = 23
+export const WORLD_GEN_VERSION = 24
 
 // Interior archetypes. The room-dominant macro planner bounds the two open
 // styles; the registry in zones/index.js maps ids to their chunk compilers.

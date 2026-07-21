@@ -143,7 +143,7 @@ function plannedLatticeGenerationFixture() {
 
   expect(
     latticeGenerationDiscovery.structure,
-    'task 5.3 RED: forced Lattice generation must expose one canonical 3x3x3 district'
+    'task 5.3 RED: forced Lattice generation must expose one canonical 4x4x5 district'
   ).not.toBeNull()
   const { seed, config, structure } = latticeGenerationDiscovery
   return {
@@ -767,8 +767,8 @@ describe('generated Lattice aperture and bounded-audit integration (task 5.3 RED
     expect(structure).toMatchObject({
       family: MAP_FAMILY_LATTICE,
       kind: 'latticeDistrict',
-      district: { size: 3 },
-      levelCount: 3,
+      district: { size: 4 },
+      levelCount: 5,
       baseCy: expect.any(Number),
       topCy: expect.any(Number),
       globalBounds: {
@@ -778,14 +778,14 @@ describe('generated Lattice aperture and bounded-audit integration (task 5.3 RED
         z1: expect.any(Number),
       },
     })
-    expect(structure.participants).toHaveLength(9)
-    expect(structure.anchors).toHaveLength(25)
-    expect(structure.topCy - structure.baseCy).toBe(2)
+    expect(structure.participants).toHaveLength(16)
+    expect(structure.anchors).toHaveLength(64)
+    expect(structure.topCy - structure.baseCy).toBe(4)
     expect(structure).not.toHaveProperty('latticeSpan')
-    expect(chunks.size).toBe(27)
+    expect(chunks.size).toBe(80)
 
     const participantKeys = structure.participants.map(({ cx, cz }) => `${cx},${cz}`)
-    expect(new Set(participantKeys).size).toBe(9)
+    expect(new Set(participantKeys).size).toBe(16)
     expect(participantKeys).toEqual([...participantKeys].sort((a, b) => {
       const [ax, az] = a.split(',').map(Number)
       const [bx, bz] = b.split(',').map(Number)
@@ -793,8 +793,8 @@ describe('generated Lattice aperture and bounded-audit integration (task 5.3 RED
     }))
     const participantXs = new Set(structure.participants.map(({ cx }) => cx))
     const participantZs = new Set(structure.participants.map(({ cz }) => cz))
-    expect(participantXs.size).toBe(3)
-    expect(participantZs.size).toBe(3)
+    expect(participantXs.size).toBe(4)
+    expect(participantZs.size).toBe(4)
     expect(new Set([...participantZs].flatMap((cz) =>
       [...participantXs].map((cx) => `${cx},${cz}`)
     ))).toEqual(new Set(participantKeys))
@@ -900,6 +900,8 @@ describe('generated Lattice aperture and bounded-audit integration (task 5.3 RED
     expect(apertureFloors).toEqual(new Set([
       structure.baseCy,
       structure.baseCy + 1,
+      structure.baseCy + 2,
+      structure.baseCy + 3,
     ]))
 
     const parityParticipant = structure.participants.find(({ cx, cz }) => {
@@ -950,8 +952,8 @@ describe('generated Lattice aperture and bounded-audit integration (task 5.3 RED
     const z0 = Math.min(...zs)
     const sizeX = Math.max(...xs) - x0 + 1
     const sizeZ = Math.max(...zs) - z0 + 1
-    expect(sizeX).toBe(3)
-    expect(sizeZ).toBe(3)
+    expect(sizeX).toBe(4)
+    expect(sizeZ).toBe(4)
 
     const audit = auditLayeredPatch(
       (cx, cy, cz) => get(chunks, cx, cy, cz),
@@ -962,7 +964,7 @@ describe('generated Lattice aperture and bounded-audit integration (task 5.3 RED
       structure.levelCount,
       sizeZ
     )
-    expect(audit.chunks).toBe(27)
+    expect(audit.chunks).toBe(80)
     expect(audit.missingMultilevelSlices).toBe(0)
     expect(audit.mismatchedDescriptors).toBe(0)
     expect(audit.mismatchedMultilevelDescriptors).toBe(0)
@@ -971,13 +973,14 @@ describe('generated Lattice aperture and bounded-audit integration (task 5.3 RED
     expect(audit.familyAdapterFailures).toBe(0)
     expect(audit.kindAdapterFailures).toBe(0)
     expect(audit.familyDescriptorFailures).toBe(0)
-    expect(audit.familyAudit.familyCounts).toEqual({ lattice: 27 })
-    expect(audit.familyAudit.kindCounts).toMatchObject({ latticeDistrict: 27 })
-    // Layered connectivity remains a raster-only diagnostic: multilevel void
-    // apertures provide sight/light regions, not extra walk edges. The focused
-    // path suite separately proves the bounded lower-to-upper stair route.
-    expect(audit.components).toBe(3)
-    expect(audit.connected).toBe(false)
+    expect(audit.familyAudit.familyCounts).toEqual({ lattice: 80 })
+    expect(audit.familyAudit.kindCounts).toMatchObject({ latticeDistrict: 80 })
+    // v24 makes the district one walkable component: the base floor is street
+    // level (CELL_OPEN ground instead of fenced void) and every adjacent floor
+    // pair is bridged by at least one canonical stair link, so the layered walk
+    // graph — which traverses those links — reaches every floor.
+    expect(audit.components).toBe(1)
+    expect(audit.connected).toBe(true)
     expect(audit.ok).toBe(true)
 
     const missingFloorChunks = new Map(chunks)
@@ -996,7 +999,7 @@ describe('generated Lattice aperture and bounded-audit integration (task 5.3 RED
       structure.levelCount,
       sizeZ
     )
-    expect(missingFloorAudit.chunks).toBe(26)
+    expect(missingFloorAudit.chunks).toBe(79)
     expect(missingFloorAudit.familyDescriptorFailures).toBeGreaterThan(0)
     expect(missingFloorAudit.ok).toBe(false)
   })

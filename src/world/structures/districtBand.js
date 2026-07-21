@@ -91,7 +91,7 @@ export function canonicalParticipants(participants) {
 
 // Enumerate a district's candidate participant polygons. Pair mode retains its
 // exact legacy enumeration and byte order; lattice is deliberately one complete
-// polygon rather than a generalized polyomino.
+// KxK polygon rather than a generalized polyomino.
 export function polygonCandidates(
   districtX,
   districtZ,
@@ -99,17 +99,18 @@ export function polygonCandidates(
   { shape, bridgeAxis = null, avoidSpawn = false } = {}
 ) {
   if (
-    shape === 'lattice3x3' &&
+    shape === 'lattice' &&
     Number.isInteger(districtX) &&
     Number.isInteger(districtZ) &&
     Number.isInteger(normalized?.districtChunks) &&
-    normalized.districtChunks === 3
+    normalized.districtChunks >= 2
   ) {
-    const originCx = districtX * normalized.districtChunks
-    const originCz = districtZ * normalized.districtChunks
+    const K = normalized.districtChunks
+    const originCx = districtX * K
+    const originCz = districtZ * K
     const participants = []
-    for (let localZ = 0; localZ < 3; localZ++) {
-      for (let localX = 0; localX < 3; localX++) {
+    for (let localZ = 0; localZ < K; localZ++) {
+      for (let localX = 0; localX < K; localX++) {
         participants.push({
           cx: originCx + localX,
           cz: originCz + localZ,

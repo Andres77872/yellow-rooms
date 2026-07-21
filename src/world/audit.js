@@ -591,7 +591,7 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
     latticeMetrics: familyAudit.latticeMetrics,
   }
   details.familyAuditFailures.push(...familyAudit.failures)
-  // Lattice's complete 27-slice audit proves its descriptor graph, raster
+  // Lattice's complete 80-slice audit proves its descriptor graph, raster
   // projection, paired vertical links, approaches, and guards here. Generic
   // walk-graph traversal remains a separate task-5.7 runtime integration gate,
   // so retain `audit.connected` as honest diagnostics without making it a 5.6
