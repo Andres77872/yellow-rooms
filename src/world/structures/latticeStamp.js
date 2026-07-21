@@ -6,6 +6,7 @@ import {
   CELL_VOID,
   PASSAGE_WALL,
   PASSAGE_WIDE,
+  SPACE_ROLE_NONE,
   WALL_RAIL,
 } from '../mapTypes.js'
 import {
@@ -230,6 +231,10 @@ function resetLatticeRaster(data, structure, geometry) {
       const key = latticeHorizontalCellKey(chunkGx + lx, chunkGz + lz)
       data.setCol(lx, lz, 0)
       data.spaceId[cIdx(lx, lz)] = structure.id
+      // The office fabric's elected roles die with the fabric: a lattice deck
+      // is never a named room, and stale role bytes would leak into dressing
+      // and debug reads that trust "roles only ride CELL_ROOM".
+      data.spaceRole[cIdx(lx, lz)] = SPACE_ROLE_NONE
       data.cellKind[cIdx(lx, lz)] = geometry.chamberCells.has(key) ||
         geometry.stairSafeCells.has(key)
         ? CELL_ATRIUM

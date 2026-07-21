@@ -1,5 +1,5 @@
 import { cIdx, CHUNK } from '../constants.js'
-import { PASSAGE_WALL, PASSAGE_WIDE, CELL_LOBBY, CELL_STAIR } from '../mapTypes.js'
+import { PASSAGE_WALL, PASSAGE_WIDE, CELL_LOBBY, CELL_STAIR, SPACE_ROLE_NONE } from '../mapTypes.js'
 import {
   chunkStairs,
   stairStrip,
@@ -78,11 +78,14 @@ function carveHalo(data, contract) {
   data.carveRect(x0 - 1, z0 - 1, x1 + 1, z1 + 1)
   // Office plans reserve this exact rect before room allocation. Open zones do
   // not have a macro plan, so applying the same semantic label here keeps
-  // lighting/debug/gameplay consumers aligned with the carved geometry.
+  // lighting/debug/gameplay consumers aligned with the carved geometry. Any
+  // role byte on a relabelled cell dies with it — the halo is circulation,
+  // and SPACE_ROLE_* may only ride CELL_ROOM.
   for (let z = z0 - 1; z <= z1 + 1; z++) {
     for (let x = x0 - 1; x <= x1 + 1; x++) {
       if (x < 0 || x >= CHUNK || z < 0 || z >= CHUNK) continue
       data.cellKind[cIdx(x, z)] = CELL_LOBBY
+      data.spaceRole[cIdx(x, z)] = SPACE_ROLE_NONE
     }
   }
 }

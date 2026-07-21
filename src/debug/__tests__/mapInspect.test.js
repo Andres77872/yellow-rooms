@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  collectRoomLabels,
   describeCell,
   exploreConfigForFamily,
   formatFamilyCounts,
@@ -8,6 +9,7 @@ import {
   formatMultilevelStructure,
   formatStructureDetail,
   listFamilyFailures,
+  roomRoleLabel,
   spaceIdColor,
   structureAtCell,
 } from '../mapInspect.js'
@@ -207,5 +209,65 @@ describe('spaceIdColor', () => {
   it('is deterministic and hue-bounded', () => {
     expect(spaceIdColor(421)).toBe(spaceIdColor(421))
     expect(spaceIdColor(421)).toMatch(/^hsla\(\d+, 65%, 55%, \.28\)$/)
+  })
+})
+
+describe('collectRoomLabels', () => {
+  const roomCells = (data, cells, id, role) => {
+    for (const [lx, lz] of cells) {
+      const i = lz * CHUNK + lx
+      data.cellKind[i] = CELL_ROOM
+      data.spaceId[i] = id
+      data.spaceRole[i] = role
+    }
+  }
+
+  it('labels a seam-crossing room once, at its shared centroid', () => {
+    // One space split across the West/East chunk seam: cells lx=13 in chunk
+    // (0,0) touch lx=0 in chunk (1,0).
+    const west = new ChunkData(0, 0, 0, ZONE_OFFICE)
+    const east = new ChunkData(1, 0, 0, ZONE_OFFICE)
+    roomCells(west, [[12, 4], [13, 4]], 77, SPACE_ROLE_SERVER)
+    roomCells(east, [[0, 4], [1, 4]], 77, SPACE_ROLE_SERVER)
+    // Noise that must not label: ordinary cells and a far role-less space.
+    roomCells(west, [[5, 5]], 78, 0)
+    const labels = collectRoomLabels([{ data: west }, { data: east }])
+    expect(labels).toHaveLength(1)
+    expect(labels[0].role).toBe(SPACE_ROLE_SERVER)
+    expect(labels[0].cells).toBe(4)
+    expect(labels[0].gx).toBeCloseTo((12 + 13 + 14 + 15) / 4)
+    expect(labels[0].gz).toBeCloseTo(4)
+  })
+
+  it('splits disjoint clusters that share one space id', () => {
+    // Space ids are only district-unique: two far-apart rooms carrying the
+    // same id must label separately.
+    const a = new ChunkData(0, 0, 0, ZONE_OFFICE)
+    const b = new ChunkData(4, 0, 0, ZONE_OFFICE)
+    roomCells(a, [[2, 2], [3, 2]], 99, SPACE_ROLE_SERVER)
+    roomCells(b, [[2, 2], [3, 2]], 99, SPACE_ROLE_SERVER)
+    const labels = collectRoomLabels([{ data: a }, { data: b }])
+    expect(labels).toHaveLength(2)
+    expect(labels.map((l) => l.cells).sort()).toEqual([2, 2])
+  })
+
+  it('reads real generated rooms across families', () => {
+    for (const family of MAP_FAMILY_ORDER) {
+      const { config } = exploreConfigForFamily(family)
+      const entries = []
+      for (let cx = -2; cx <= 2; cx++) {
+        for (let cz = -2; cz <= 2; cz++) {
+          entries.push({ data: buildChunk(777, cx, 0, cz, config) })
+        }
+      }
+      const labels = collectRoomLabels(entries)
+      for (const label of labels) {
+        expect(roomRoleLabel(label.role), `${family} label for role ${label.role}`).toBeTruthy()
+        expect(label.cells).toBeGreaterThan(0)
+      }
+      // Office and sewer are dense with named rooms; tower/lattice shells
+      // elect fewer — but every family labels something on this corpus.
+      expect(labels.length, `${family} labels present`).toBeGreaterThan(0)
+    }
   })
 })

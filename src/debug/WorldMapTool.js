@@ -33,10 +33,11 @@ import {
   formatStructureDetail,
   listFamilyFailures,
   multilevelAuditBox,
+  collectRoomLabels,
   structureAtCell,
 } from './mapInspect.js'
 import { MAP_FAMILY_ORDER } from '../world/mapFamily.js'
-import { makeView, paintCellOverlays, paintSewerGraph, paintStructures } from './familyOverlays.js'
+import { makeView, paintCellOverlays, paintRoomLabels, paintSewerGraph, paintStructures } from './familyOverlays.js'
 
 // The historical helper exports moved to mapInspect.js; re-export so existing
 // imports (tests, DebugMode) keep working.
@@ -70,6 +71,7 @@ export class WorldMapTool {
     this._exploreConfig = exploreConfigForFamily(this.family)
     this.fillMode = 'zones' // zones | spaceId | role | owner | none
     this.showFamilyStructures = true
+    this.showRoomLabels = true // room-type text over named rooms
     this.showLethal = true
     this._pinned = null // structure pinned via the `inspect` click mode
     this._gen = new Map() // explore cache: `${family}:${seed}:cx,cy,cz` -> ChunkData
@@ -207,6 +209,13 @@ export class WorldMapTool {
         label: 'family structures',
         value: this.showFamilyStructures,
         onChange: (v) => (this.showFamilyStructures = v),
+      }).el
+    )
+    ctl.body.appendChild(
+      toggle({
+        label: 'room labels',
+        value: this.showRoomLabels,
+        onChange: (v) => (this.showRoomLabels = v),
       }).el
     )
     ctl.body.appendChild(
@@ -472,6 +481,7 @@ export class WorldMapTool {
       [ZONE_SEWER]: 0,
     }
     const structuresByKey = new Map()
+    const drawnChunks = [] // every resolved chunk — room labels group across seams
     let knownChunks = 0
     const wallW = Math.max(1, scale * 0.12)
     const view = makeView(this)
@@ -481,6 +491,7 @@ export class WorldMapTool {
         const d = this._chunkData(ccx, ccz)
         if (!d) continue
         knownChunks++
+        drawnChunks.push({ data: d })
         const structure = d.structure
         if (structure?.hasRoom) {
           structuresByKey.set(
@@ -627,6 +638,10 @@ export class WorldMapTool {
     if (this.showFamilyStructures) {
       paintStructures(view, visibleStructures, this._pinned)
     }
+
+    // Room-type text over named rooms (one label per room, grouped across
+    // chunk seams by collectRoomLabels).
+    if (this.showRoomLabels) paintRoomLabels(view, collectRoomLabels(drawnChunks))
 
     let selectedStructure = null
     let selectedSource = 'visible'

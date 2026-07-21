@@ -28,6 +28,9 @@ import {
   SPACE_ROLE_ARCHIVE,
   SPACE_ROLE_SERVER,
   SPACE_ROLE_STORAGE,
+  SPACE_ROLE_LIBRARY,
+  SPACE_ROLE_OFFICE,
+  SPACE_ROLE_LOUNGE,
   PASSAGE_DOOR,
   PASSAGE_WIDE,
 } from '../mapTypes.js'
@@ -53,8 +56,8 @@ describe('office space roles', () => {
           rooms++
           const role = s.role ?? SPACE_ROLE_NONE
           counts.set(role, (counts.get(role) ?? 0) + 1)
-          // Size contract: meeting/server/break only in genuinely large rooms.
-          if ([SPACE_ROLE_MEETING, SPACE_ROLE_SERVER].includes(role)) {
+          // Size contract: meeting/server/library only in genuinely large rooms.
+          if ([SPACE_ROLE_MEETING, SPACE_ROLE_SERVER, SPACE_ROLE_LIBRARY].includes(role)) {
             expect(s.area).toBeGreaterThanOrEqual(20)
           }
         }
@@ -63,7 +66,17 @@ describe('office space roles', () => {
     const none = counts.get(SPACE_ROLE_NONE) ?? 0
     expect(none / rooms).toBeGreaterThan(0.5) // most rooms stay ordinary
     // Every special family shows up somewhere in a 5x5-district corpus.
-    for (const role of [SPACE_ROLE_MEETING, SPACE_ROLE_BREAK, SPACE_ROLE_COPY, SPACE_ROLE_ARCHIVE, SPACE_ROLE_SERVER, SPACE_ROLE_STORAGE]) {
+    for (const role of [
+      SPACE_ROLE_MEETING,
+      SPACE_ROLE_BREAK,
+      SPACE_ROLE_COPY,
+      SPACE_ROLE_ARCHIVE,
+      SPACE_ROLE_SERVER,
+      SPACE_ROLE_STORAGE,
+      SPACE_ROLE_LIBRARY,
+      SPACE_ROLE_OFFICE,
+      SPACE_ROLE_LOUNGE,
+    ]) {
       expect(counts.get(role) ?? 0, `role ${role} present`).toBeGreaterThan(0)
     }
   })
@@ -150,6 +163,34 @@ describe('role-driven furnishing', () => {
     placeFurniture(data, ctx)
     expect(kinds(data)).toContain(FURN_TABLE)
   })
+
+  it('lines a library with shelf runs and a reading island', () => {
+    const data = roomWithRole(SPACE_ROLE_LIBRARY)
+    placeFurniture(data, ctx)
+    const set = new Set(kinds(data))
+    expect(set.has(FURN_BOOKSHELF)).toBe(true)
+    for (const k of set) {
+      expect([FURN_BOOKSHELF, FURN_TABLE, FURN_CHAIR, FURN_PLANT]).toContain(k)
+    }
+  })
+
+  it('always puts a desk in a private office', () => {
+    const data = roomWithRole(SPACE_ROLE_OFFICE)
+    placeFurniture(data, ctx)
+    const set = new Set(kinds(data))
+    expect(set.has(FURN_DESK)).toBe(true)
+    for (const k of set) {
+      expect([FURN_DESK, FURN_CHAIR, FURN_CABINET, FURN_PLANT]).toContain(k)
+    }
+  })
+
+  it('furnishes a lounge with sofas and plants only', () => {
+    const data = roomWithRole(SPACE_ROLE_LOUNGE)
+    placeFurniture(data, ctx)
+    const set = new Set(kinds(data))
+    expect(set.has(FURN_SOFA)).toBe(true)
+    for (const k of set) expect([FURN_SOFA, FURN_PLANT]).toContain(k)
+  })
 })
 
 // Room/furniture coherence invariants (v21): a room's architectural claims —
@@ -162,6 +203,9 @@ describe('room coherence', () => {
     [SPACE_ROLE_ARCHIVE]: FURN_BOOKSHELF,
     [SPACE_ROLE_SERVER]: FURN_RACK,
     [SPACE_ROLE_STORAGE]: FURN_CABINET,
+    [SPACE_ROLE_LIBRARY]: FURN_BOOKSHELF,
+    [SPACE_ROLE_OFFICE]: FURN_DESK,
+    [SPACE_ROLE_LOUNGE]: FURN_SOFA,
   }
   const ROLE_WHITELIST = {
     [SPACE_ROLE_MEETING]: new Set([FURN_TABLE, FURN_CHAIR, FURN_WHITEBOARD]),
@@ -170,6 +214,9 @@ describe('room coherence', () => {
     [SPACE_ROLE_ARCHIVE]: new Set([FURN_BOOKSHELF, FURN_CABINET]),
     [SPACE_ROLE_SERVER]: new Set([FURN_RACK]),
     [SPACE_ROLE_STORAGE]: new Set([FURN_CABINET]),
+    [SPACE_ROLE_LIBRARY]: new Set([FURN_BOOKSHELF, FURN_TABLE, FURN_CHAIR, FURN_PLANT]),
+    [SPACE_ROLE_OFFICE]: new Set([FURN_DESK, FURN_CHAIR, FURN_CABINET, FURN_PLANT]),
+    [SPACE_ROLE_LOUNGE]: new Set([FURN_SOFA, FURN_PLANT]),
   }
   // One theme per ordinary room: huddle, workroom, lounge, or stash.
   const ORDINARY_THEMES = [

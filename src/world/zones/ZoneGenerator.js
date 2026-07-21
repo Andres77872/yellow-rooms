@@ -1,6 +1,6 @@
 import { CHUNK } from '../constants.js'
 import { borderPairMode } from '../border.js'
-import { CELL_LOBBY, PASSAGE_OPEN } from '../mapTypes.js'
+import { CELL_LOBBY, PASSAGE_OPEN, SPACE_ROLE_NONE } from '../mapTypes.js'
 
 // Shared, THREE-free helpers used by the zone generators. All operate on a
 // ChunkData instance through its edge accessors.
@@ -55,7 +55,12 @@ function carveThresholdSlabs(
   const carveS = shouldCarve('s')
   const mark = (x, z) => {
     if (markLobby && x >= 0 && x < CHUNK && z >= 0 && z < CHUNK) {
-      data.cellKind[z * CHUNK + x] = CELL_LOBBY
+      const i = z * CHUNK + x
+      data.cellKind[i] = CELL_LOBBY
+      // The threshold is circulation, never a named room: a role the office
+      // plan elected for this cell must not survive the relabel (consumers
+      // trust that SPACE_ROLE_* only rides CELL_ROOM).
+      data.spaceRole[i] = SPACE_ROLE_NONE
     }
   }
   for (let i = 0; i < CHUNK; i++) {

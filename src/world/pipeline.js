@@ -168,14 +168,16 @@ export function buildChunk(seed, cx, cy, cz, config = DEFAULT_WORLD_CONFIG, exit
   // L5 — lights (independent stream, global module grid).
   placeLights(data, { seed: lseed, cx, cz, zone, config })
 
-  // L5.5 — interior furniture (v15). Collision-real office pieces (desks,
-  // chairs, conference tables, storage) stamped into room cells as
-  // COLUMN_FURNITURE blockers with precise player-collision AABBs. Runs after
-  // lamps so fixtures keep their grid (pieces skip lamp cells), before the
-  // anomaly carves so a clearing can still evict a piece wholesale.
-  if (profile.family === MAP_FAMILY_OFFICE) {
-    placeFurniture(data, { zone, config })
-  }
+  // L5.5 — interior furniture (v15, catalog-driven v22, all families v23).
+  // Collision-real pieces stamped into room cells as COLUMN_FURNITURE
+  // blockers with precise player-collision AABBs. Runs after lamps so
+  // fixtures keep their grid (pieces skip lamp cells), before the anomaly
+  // carves so a clearing can still evict a piece wholesale. Every family
+  // furnishes its rooms from the same catalog (rooms/catalog.js): office
+  // floors elect the institutional mix, towers and the lattice shell read as
+  // infrastructure, sewer chambers roll their own utility roles. The zone
+  // gate inside placeFurniture keeps pillar/warehouse halls empty.
+  placeFurniture(data, { zone, config })
 
   // L6 — anomaly: carve clearings for the exit and/or spawn, if this is the host.
   if (exitCell) {

@@ -13,6 +13,7 @@ import {
   SPACE_ROLE_PALETTE,
   STRUCTURE_FAMILY_COLORS,
   ZONE_TINT,
+  roomRoleLabel,
   spaceIdColor,
 } from './mapInspect.js'
 
@@ -129,6 +130,31 @@ export function paintCellOverlays(view, d, ccx, ccz, { fillMode = 'zones', letha
       }
     }
   }
+}
+
+// Room-type text labels, one per named room (collectRoomLabels did the
+// cross-chunk grouping). Drawn over the wall layer with a dark backing so the
+// type reads over any fill mode; hidden when zoomed too far out for 9px text
+// to map to cells.
+export function paintRoomLabels(view, labels) {
+  const { ctx, scale, sx, sy } = view
+  if (scale < 1.8) return
+  ctx.font = '9px ui-monospace, monospace'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  for (const label of labels) {
+    const text = roomRoleLabel(label.role)
+    if (!text) continue
+    const x = sx((label.gx + 0.5) * CELL)
+    const y = sy((label.gz + 0.5) * CELL)
+    const w = text.length * 5.4 + 4
+    ctx.fillStyle = 'rgba(10,10,8,.6)'
+    ctx.fillRect(x - w / 2, y - 6, w, 12)
+    ctx.fillStyle = SPACE_ROLE_PALETTE[label.role] ?? '#d8b24a'
+    ctx.fillText(text, x, y)
+  }
+  ctx.textAlign = 'start'
+  ctx.textBaseline = 'alphabetic'
 }
 
 // Sewer module graph: solid tree edges, dashed loop closures, a square on the

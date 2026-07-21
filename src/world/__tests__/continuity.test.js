@@ -30,14 +30,14 @@ const N = 14
 const SEEDS = [1, 42, 0xbeef, 314159, 0xc0ffee, 99999, 7, 2026]
 
 const OFFICE_CONTINUITY_GOLDEN = [
-  { seed: 1, open: 15, mouth: 14, office: 133, cornerWalls: 131, planned: 202, patterns: 55, officeChunks: 185, largestOpen: 11, maxOpenRun: 4 },
-  { seed: 42, open: 0, mouth: 0, office: 140, cornerWalls: 139, planned: 224, patterns: 49, officeChunks: 196, largestOpen: 0, maxOpenRun: 0 },
-  { seed: 0xbeef, open: 16, mouth: 20, office: 130, cornerWalls: 130, planned: 198, patterns: 67, officeChunks: 183, largestOpen: 11, maxOpenRun: 4 },
-  { seed: 314159, open: 1, mouth: 6, office: 137, cornerWalls: 137, planned: 220, patterns: 57, officeChunks: 194, largestOpen: 2, maxOpenRun: 2 },
-  { seed: 0xc0ffee, open: 1, mouth: 6, office: 137, cornerWalls: 136, planned: 220, patterns: 58, officeChunks: 194, largestOpen: 2, maxOpenRun: 2 },
-  { seed: 99999, open: 4, mouth: 12, office: 136, cornerWalls: 136, planned: 212, patterns: 62, officeChunks: 191, largestOpen: 4, maxOpenRun: 2 },
-  { seed: 7, open: 1, mouth: 10, office: 136, cornerWalls: 134, planned: 217, patterns: 53, officeChunks: 193, largestOpen: 2, maxOpenRun: 2 },
-  { seed: 2026, open: 30, mouth: 28, office: 126, cornerWalls: 126, planned: 180, patterns: 56, officeChunks: 174, largestOpen: 11, maxOpenRun: 4 },
+  { seed: 1, open: 15, mouth: 14, office: 133, cornerWalls: 131, planned: 202, patterns: 66, officeChunks: 185, largestOpen: 11, maxOpenRun: 4 },
+  { seed: 42, open: 0, mouth: 0, office: 140, cornerWalls: 139, planned: 224, patterns: 70, officeChunks: 196, largestOpen: 0, maxOpenRun: 0 },
+  { seed: 0xbeef, open: 16, mouth: 20, office: 130, cornerWalls: 130, planned: 198, patterns: 73, officeChunks: 183, largestOpen: 11, maxOpenRun: 4 },
+  { seed: 314159, open: 1, mouth: 6, office: 137, cornerWalls: 137, planned: 220, patterns: 76, officeChunks: 194, largestOpen: 2, maxOpenRun: 2 },
+  { seed: 0xc0ffee, open: 1, mouth: 6, office: 137, cornerWalls: 136, planned: 220, patterns: 64, officeChunks: 194, largestOpen: 2, maxOpenRun: 2 },
+  { seed: 99999, open: 4, mouth: 12, office: 136, cornerWalls: 136, planned: 212, patterns: 79, officeChunks: 191, largestOpen: 4, maxOpenRun: 2 },
+  { seed: 7, open: 1, mouth: 10, office: 136, cornerWalls: 134, planned: 217, patterns: 71, officeChunks: 193, largestOpen: 2, maxOpenRun: 2 },
+  { seed: 2026, open: 30, mouth: 28, office: 126, cornerWalls: 126, planned: 180, patterns: 67, officeChunks: 174, largestOpen: 11, maxOpenRun: 4 },
 ]
 
 const inBounds = (bounds, gx, gz) =>

@@ -19,8 +19,11 @@ import {
   SPACE_ROLE_ARCHIVE,
   SPACE_ROLE_BREAK,
   SPACE_ROLE_COPY,
+  SPACE_ROLE_LIBRARY,
+  SPACE_ROLE_LOUNGE,
   SPACE_ROLE_MEETING,
   SPACE_ROLE_NONE,
+  SPACE_ROLE_OFFICE,
   SPACE_ROLE_SERVER,
   SPACE_ROLE_STORAGE,
 } from '../world/mapTypes.js'
@@ -145,6 +148,9 @@ export const SPACE_ROLE_PALETTE = {
   [SPACE_ROLE_ARCHIVE]: '#d0aa58',
   [SPACE_ROLE_SERVER]: '#ff7f7f',
   [SPACE_ROLE_STORAGE]: '#b09fff',
+  [SPACE_ROLE_LIBRARY]: '#8fbf6f',
+  [SPACE_ROLE_OFFICE]: '#9fb8d0',
+  [SPACE_ROLE_LOUNGE]: '#e09fb8',
 }
 
 // Deterministic hashed hue per spaceId (Knuth multiplicative hash) — stable
@@ -246,6 +252,64 @@ const SPACE_ROLE_LABEL = {
   [SPACE_ROLE_ARCHIVE]: 'archive',
   [SPACE_ROLE_SERVER]: 'server',
   [SPACE_ROLE_STORAGE]: 'storage',
+  [SPACE_ROLE_LIBRARY]: 'library',
+  [SPACE_ROLE_OFFICE]: 'office',
+  [SPACE_ROLE_LOUNGE]: 'lounge',
+}
+
+// Public accessor for the role vocabulary (label painters, tests).
+export const roomRoleLabel = (role) => SPACE_ROLE_LABEL[role] ?? null
+
+// One label per visible named room. Cells carrying a SPACE_ROLE_* byte are
+// grouped by space id, then split into 4-connected clusters: a room crossing
+// a chunk seam labels ONCE (its cells share the id and touch), while two
+// disjoint rooms that happen to share an id (space ids are only
+// district-unique) label separately. The anchor is the cluster's average
+// global cell coordinate. Input: [{data}] — ChunkData-bearing entries, as
+// drawn by the caller (any source, LIVE or EXPLORE).
+export function collectRoomLabels(entries) {
+  const bySpace = new Map() // spaceId -> Map<'gx,gz', {gx, gz, role}>
+  for (const { data } of entries) {
+    if (!data) continue
+    const baseGX = data.cx * CHUNK
+    const baseGZ = data.cz * CHUNK
+    for (let lz = 0; lz < CHUNK; lz++) {
+      for (let lx = 0; lx < CHUNK; lx++) {
+        const role = data.spaceRole[lz * CHUNK + lx]
+        if (!role) continue
+        const id = data.spaceId[lz * CHUNK + lx]
+        let cells = bySpace.get(id)
+        if (!cells) bySpace.set(id, (cells = new Map()))
+        cells.set(`${baseGX + lx},${baseGZ + lz}`, { gx: baseGX + lx, gz: baseGZ + lz, role })
+      }
+    }
+  }
+  const labels = []
+  for (const cells of bySpace.values()) {
+    const unseen = new Set(cells.keys())
+    while (unseen.size) {
+      const queue = [unseen.values().next().value]
+      unseen.delete(queue[0])
+      const cluster = []
+      let role = 0
+      while (queue.length) {
+        const cell = cells.get(queue.pop())
+        cluster.push(cell)
+        role = cell.role
+        for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const nk = `${cell.gx + dx},${cell.gz + dz}`
+          if (unseen.delete(nk)) queue.push(nk)
+        }
+      }
+      labels.push({
+        gx: cluster.reduce((sum, c) => sum + c.gx, 0) / cluster.length,
+        gz: cluster.reduce((sum, c) => sum + c.gz, 0) / cluster.length,
+        role,
+        cells: cluster.length,
+      })
+    }
+  }
+  return labels
 }
 
 // One-line cursor description of a hovered cell: semantic kind, space

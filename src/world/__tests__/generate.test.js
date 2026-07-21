@@ -436,33 +436,33 @@ function digest(d) {
 // v13 structures. The final twelve entries pin bottom/middle/top in both
 // chunks of deterministic maximum-height bridged and open-void structures.
 const GOLDEN = {
-  '0,0,0': '4ec51f7e',
-  '3,0,-2': '06af2e20',
-  '12,0,12': '02a39f67',
-  '-10,0,10': '2f4e7bd9',
-  '0,1,0': 'd85c5922',
-  '3,-1,-2': '57d54b8f',
-  '12,2,12': '86f881b4',
-  '3,-2,-12': '066b516c',
-  '3,-1,-12': '259f2d7d',
-  '1,0,-2': 'b55f26f1',
-  '2,1,-2': 'eab4be0d',
-  '1,7,-2': 'ad9fca28',
-  '-1,0,2': '02c9a866',
-  '-1,3,3': 'c27857cc',
-  '-7,9,-8': 'f01063cb',
-  '-3,-15,-1': '5f598bc5',
-  '-2,-15,-1': 'a1590e38',
-  '-3,-8,-1': '088abd3e',
-  '-2,-8,-1': '8113aaef',
-  '-3,-1,-1': '79433e57',
-  '-2,-1,-1': 'cbc9f76c',
-  '-10,0,8': '1c7ad6d2',
-  '-10,0,9': '6a0e1ea5',
-  '-10,7,8': '725a2e6a',
-  '-10,7,9': '74075988',
-  '-10,14,8': 'e40faa30',
-  '-10,14,9': 'd49b25fc',
+  '0,0,0': '95b53ccc',
+  '3,0,-2': 'd8a8366a',
+  '12,0,12': 'c5b5f1d0',
+  '-10,0,10': '737acbff',
+  '0,1,0': '6aec438d',
+  '3,-1,-2': '189bfa23',
+  '12,2,12': 'e64d2ddb',
+  '3,-2,-12': '2fdcfd0d',
+  '3,-1,-12': '877a995e',
+  '1,0,-2': '8d97f96d',
+  '2,1,-2': 'aa4ee959',
+  '1,7,-2': '727cb97c',
+  '-1,0,2': '74d58d05',
+  '-1,3,3': 'd675b626',
+  '-7,9,-8': '0c823df7',
+  '-3,-15,-1': '8b6e47ae',
+  '-2,-15,-1': '61e573b0',
+  '-3,-8,-1': '60f79b7d',
+  '-2,-8,-1': 'ff20109a',
+  '-3,-1,-1': '7088771f',
+  '-2,-1,-1': '51f943af',
+  '-10,0,8': 'c47c7d4f',
+  '-10,0,9': 'a951bd1b',
+  '-10,7,8': 'a8bde5e4',
+  '-10,7,9': '3535cc17',
+  '-10,14,8': '46c407ec',
+  '-10,14,9': '69a41575',
 }
 
 const MAX_HEIGHT_GOLDEN = {
@@ -471,16 +471,16 @@ const MAX_HEIGHT_GOLDEN = {
 }
 
 const SEWER_GOLDEN = Object.freeze([
-  { key: '24151,2,-1,-3', seed: 24151, cx: 2, cy: -1, cz: -3, digest: '1355b72f' },
-  { key: '24151,2,0,-3', seed: 24151, cx: 2, cy: 0, cz: -3, digest: '1f88a242' },
-  { key: '24151,2,1,-3', seed: 24151, cx: 2, cy: 1, cz: -3, digest: '4ac655e3' },
+  { key: '24151,2,-1,-3', seed: 24151, cx: 2, cy: -1, cz: -3, digest: '1631a255' },
+  { key: '24151,2,0,-3', seed: 24151, cx: 2, cy: 0, cz: -3, digest: 'a8fcc7ca' },
+  { key: '24151,2,1,-3', seed: 24151, cx: 2, cy: 1, cz: -3, digest: '2820d9a5' },
   {
     key: 'audit-0:4084550820,-3,0,-4',
     seed: 4084550820,
     cx: -3,
     cy: 0,
     cz: -4,
-    digest: '7a2261f4',
+    digest: '3a6d5ee0',
   },
   {
     key: 'audit-15:3752583958,-2,0,-1',
@@ -488,7 +488,7 @@ const SEWER_GOLDEN = Object.freeze([
     cx: -2,
     cy: 0,
     cz: -1,
-    digest: '50ec7115',
+    digest: '329482b1',
   },
   {
     key: 'audit-31:3566893867,0,0,-2',
@@ -496,54 +496,54 @@ const SEWER_GOLDEN = Object.freeze([
     cx: 0,
     cy: 0,
     cz: -2,
-    digest: '9d3ba5d8',
+    digest: 'c30ee333',
   },
 ])
 
-const SEWER_GOLDEN_DIGEST = '74866480be3e5d1c2b767e652c6ef6b922fec1f692d63f3cad372633508a6638'
+const SEWER_GOLDEN_DIGEST = '30147892c1c8202df42606804d5a40515ed3f3bd3244dbd37cafd8ba7da71234'
 
 const TOWER_GOLDEN = Object.freeze([
-  { key: '23063,-4,-22,-3', seed: 23063, cx: -4, cy: -22, cz: -3, digest: 'a1248af4' },
-  { key: '23063,-4,-22,-2', seed: 23063, cx: -4, cy: -22, cz: -2, digest: '70eea334' },
-  { key: '23063,-4,-21,-3', seed: 23063, cx: -4, cy: -21, cz: -3, digest: '5da4c19b' },
-  { key: '23063,-4,-21,-2', seed: 23063, cx: -4, cy: -21, cz: -2, digest: 'a959fee1' },
-  { key: '23063,-4,-20,-3', seed: 23063, cx: -4, cy: -20, cz: -3, digest: '567aefec' },
-  { key: '23063,-4,-20,-2', seed: 23063, cx: -4, cy: -20, cz: -2, digest: 'c691c274' },
+  { key: '23063,-4,-22,-3', seed: 23063, cx: -4, cy: -22, cz: -3, digest: '018ebf30' },
+  { key: '23063,-4,-22,-2', seed: 23063, cx: -4, cy: -22, cz: -2, digest: '30f53341' },
+  { key: '23063,-4,-21,-3', seed: 23063, cx: -4, cy: -21, cz: -3, digest: '8aabae08' },
+  { key: '23063,-4,-21,-2', seed: 23063, cx: -4, cy: -21, cz: -2, digest: 'ed7f0d17' },
+  { key: '23063,-4,-20,-3', seed: 23063, cx: -4, cy: -20, cz: -3, digest: 'aaca7f47' },
+  { key: '23063,-4,-20,-2', seed: 23063, cx: -4, cy: -20, cz: -2, digest: '5431742a' },
 ])
 
-const TOWER_GOLDEN_DIGEST = 'b978a5d9bfcfa2ba6ccd562fc8c5a93fc8a91ab141197ab7c4877b70307b5e42'
+const TOWER_GOLDEN_DIGEST = 'a66afb4d7dc55f42e35b262cd50c6297ed621b58352e3f84c73c504ddc3533e3'
 
 const LATTICE_GOLDEN = Object.freeze([
-  { key: '27750862,3,-24,-6', seed: 27750862, cx: 3, cy: -24, cz: -6, digest: 'c407dca2' },
-  { key: '27750862,4,-24,-6', seed: 27750862, cx: 4, cy: -24, cz: -6, digest: '969d4733' },
-  { key: '27750862,5,-24,-6', seed: 27750862, cx: 5, cy: -24, cz: -6, digest: 'cbac5960' },
-  { key: '27750862,3,-24,-5', seed: 27750862, cx: 3, cy: -24, cz: -5, digest: 'e16c0e8d' },
-  { key: '27750862,4,-24,-5', seed: 27750862, cx: 4, cy: -24, cz: -5, digest: '51191b28' },
-  { key: '27750862,5,-24,-5', seed: 27750862, cx: 5, cy: -24, cz: -5, digest: '35f1b14c' },
-  { key: '27750862,3,-24,-4', seed: 27750862, cx: 3, cy: -24, cz: -4, digest: 'c767d3bf' },
-  { key: '27750862,4,-24,-4', seed: 27750862, cx: 4, cy: -24, cz: -4, digest: 'bb5681f0' },
-  { key: '27750862,5,-24,-4', seed: 27750862, cx: 5, cy: -24, cz: -4, digest: '1ef162c2' },
-  { key: '27750862,3,-23,-6', seed: 27750862, cx: 3, cy: -23, cz: -6, digest: '43cb932a' },
-  { key: '27750862,4,-23,-6', seed: 27750862, cx: 4, cy: -23, cz: -6, digest: 'cd0aa123' },
-  { key: '27750862,5,-23,-6', seed: 27750862, cx: 5, cy: -23, cz: -6, digest: '56fadbde' },
-  { key: '27750862,3,-23,-5', seed: 27750862, cx: 3, cy: -23, cz: -5, digest: 'ca01eec1' },
-  { key: '27750862,4,-23,-5', seed: 27750862, cx: 4, cy: -23, cz: -5, digest: '4dcb1a63' },
-  { key: '27750862,5,-23,-5', seed: 27750862, cx: 5, cy: -23, cz: -5, digest: '74654b8b' },
-  { key: '27750862,3,-23,-4', seed: 27750862, cx: 3, cy: -23, cz: -4, digest: 'e9205451' },
-  { key: '27750862,4,-23,-4', seed: 27750862, cx: 4, cy: -23, cz: -4, digest: 'f43363b4' },
-  { key: '27750862,5,-23,-4', seed: 27750862, cx: 5, cy: -23, cz: -4, digest: 'cd529caf' },
-  { key: '27750862,3,-22,-6', seed: 27750862, cx: 3, cy: -22, cz: -6, digest: '163e582b' },
-  { key: '27750862,4,-22,-6', seed: 27750862, cx: 4, cy: -22, cz: -6, digest: '6bd8ab71' },
-  { key: '27750862,5,-22,-6', seed: 27750862, cx: 5, cy: -22, cz: -6, digest: 'd85e088c' },
-  { key: '27750862,3,-22,-5', seed: 27750862, cx: 3, cy: -22, cz: -5, digest: '0ef9520a' },
-  { key: '27750862,4,-22,-5', seed: 27750862, cx: 4, cy: -22, cz: -5, digest: 'ebc60159' },
-  { key: '27750862,5,-22,-5', seed: 27750862, cx: 5, cy: -22, cz: -5, digest: 'e03aea5f' },
-  { key: '27750862,3,-22,-4', seed: 27750862, cx: 3, cy: -22, cz: -4, digest: 'dfdbfd2d' },
-  { key: '27750862,4,-22,-4', seed: 27750862, cx: 4, cy: -22, cz: -4, digest: '6fe75da7' },
-  { key: '27750862,5,-22,-4', seed: 27750862, cx: 5, cy: -22, cz: -4, digest: '4631b8b7' },
+  { key: '27750862,3,-24,-6', seed: 27750862, cx: 3, cy: -24, cz: -6, digest: '61774467' },
+  { key: '27750862,4,-24,-6', seed: 27750862, cx: 4, cy: -24, cz: -6, digest: '969d5f67' },
+  { key: '27750862,5,-24,-6', seed: 27750862, cx: 5, cy: -24, cz: -6, digest: 'cfd1eced' },
+  { key: '27750862,3,-24,-5', seed: 27750862, cx: 3, cy: -24, cz: -5, digest: '030771ed' },
+  { key: '27750862,4,-24,-5', seed: 27750862, cx: 4, cy: -24, cz: -5, digest: '300a7fab' },
+  { key: '27750862,5,-24,-5', seed: 27750862, cx: 5, cy: -24, cz: -5, digest: '6235f801' },
+  { key: '27750862,3,-24,-4', seed: 27750862, cx: 3, cy: -24, cz: -4, digest: '3d700c7c' },
+  { key: '27750862,4,-24,-4', seed: 27750862, cx: 4, cy: -24, cz: -4, digest: '23691cc3' },
+  { key: '27750862,5,-24,-4', seed: 27750862, cx: 5, cy: -24, cz: -4, digest: 'aa4cf6af' },
+  { key: '27750862,3,-23,-6', seed: 27750862, cx: 3, cy: -23, cz: -6, digest: 'e8fedd99' },
+  { key: '27750862,4,-23,-6', seed: 27750862, cx: 4, cy: -23, cz: -6, digest: '1d032202' },
+  { key: '27750862,5,-23,-6', seed: 27750862, cx: 5, cy: -23, cz: -6, digest: 'ea994715' },
+  { key: '27750862,3,-23,-5', seed: 27750862, cx: 3, cy: -23, cz: -5, digest: '62a91d92' },
+  { key: '27750862,4,-23,-5', seed: 27750862, cx: 4, cy: -23, cz: -5, digest: '37f4b267' },
+  { key: '27750862,5,-23,-5', seed: 27750862, cx: 5, cy: -23, cz: -5, digest: '33790149' },
+  { key: '27750862,3,-23,-4', seed: 27750862, cx: 3, cy: -23, cz: -4, digest: '4179af46' },
+  { key: '27750862,4,-23,-4', seed: 27750862, cx: 4, cy: -23, cz: -4, digest: 'c1a50c8a' },
+  { key: '27750862,5,-23,-4', seed: 27750862, cx: 5, cy: -23, cz: -4, digest: '069f11d6' },
+  { key: '27750862,3,-22,-6', seed: 27750862, cx: 3, cy: -22, cz: -6, digest: '1fc08392' },
+  { key: '27750862,4,-22,-6', seed: 27750862, cx: 4, cy: -22, cz: -6, digest: '45e25b8a' },
+  { key: '27750862,5,-22,-6', seed: 27750862, cx: 5, cy: -22, cz: -6, digest: '2f5feef2' },
+  { key: '27750862,3,-22,-5', seed: 27750862, cx: 3, cy: -22, cz: -5, digest: '91340dcd' },
+  { key: '27750862,4,-22,-5', seed: 27750862, cx: 4, cy: -22, cz: -5, digest: 'e3aedae2' },
+  { key: '27750862,5,-22,-5', seed: 27750862, cx: 5, cy: -22, cz: -5, digest: '58de48e6' },
+  { key: '27750862,3,-22,-4', seed: 27750862, cx: 3, cy: -22, cz: -4, digest: 'ece51613' },
+  { key: '27750862,4,-22,-4', seed: 27750862, cx: 4, cy: -22, cz: -4, digest: 'ee3470cd' },
+  { key: '27750862,5,-22,-4', seed: 27750862, cx: 5, cy: -22, cz: -4, digest: '7fcc5365' },
 ])
 
-const LATTICE_GOLDEN_DIGEST = '9ff95853484ce64189e9274df596a119d1d43d0f257272042c7bff811559c229'
+const LATTICE_GOLDEN_DIGEST = '1c75114c9a666e15c2d8963ab8762a0c394545d221ca67b46889201ad59e9604'
 
 const OFFICE_PAIR_DESCRIPTOR_GOLDEN = {
   id: 1394823709,
@@ -2047,13 +2047,16 @@ describe('anomaly determinism', () => {
     const cfg = structuredClone(CFG)
     cfg.stairs.enabled = false
     // This fixture targets the transition/door-normalization integration, not
-    // the default landmark election. Recover the broad-field coordinate that
-    // originally exposed the unsupported frame.
+    // the default landmark election. The coordinate is re-found per worldgen
+    // version (v22: the shape/catalog rework re-carved the old v21 site): a
+    // chunk where the district plan placed a PASSAGE_DOOR whose supporting
+    // walls a later carve removed, so the doorway must read as a wide
+    // threshold instead of an unsupported frame.
     cfg.region.roomDominance.enabled = false
-    const data = buildChunk(89, -10, 0, -6, cfg)
+    const data = buildChunk(89, -11, 0, 10, cfg)
     expect(data.zone).toBe(ZONE_OFFICE)
-    expect(data.hAt(5, 12)).toBe(0)
-    expect(data.hAt(7, 12)).toBe(0)
-    expect(data.passageHAt(6, 12)).toBe(PASSAGE_WIDE)
+    expect(data.hAt(7, 2)).toBe(0)
+    expect(data.hAt(9, 2)).toBe(0)
+    expect(data.passageHAt(8, 2)).toBe(PASSAGE_WIDE)
   })
 })

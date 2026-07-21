@@ -8,6 +8,7 @@ import {
   PASSAGE_DOOR,
   PASSAGE_WALL,
   PASSAGE_WIDE,
+  SPACE_ROLE_NONE,
   WALL_RAIL,
   WALL_WINDOW,
 } from '../mapTypes.js'
@@ -91,6 +92,15 @@ function carveStructure(data, slice) {
   data.carveRect(x0 - 1, z0 - 1, x1 + 1, z1 + 1)
   openOwnedStructureSeams(data, slice)
   labelRing(data, slice)
+  // The office district plan elected roles for the fabric under this volume;
+  // every cell the structure takes (hall, gallery, ring, stair) stops being a
+  // furnishable room, so its SPACE_ROLE_* byte must not survive into the
+  // dressing/lighting/debug reads that trust "roles only ride CELL_ROOM".
+  for (let z = Math.max(0, z0 - 1); z <= Math.min(CHUNK - 1, z1 + 1); z++) {
+    for (let x = Math.max(0, x0 - 1); x <= Math.min(CHUNK - 1, x1 + 1); x++) {
+      data.spaceRole[cIdx(x, z)] = SPACE_ROLE_NONE
+    }
+  }
 }
 
 function stampBottom(data, slice) {

@@ -3,10 +3,12 @@ import { hash3i } from '../core/hash.js'
 import { deepFreeze } from '../mapFamily.js'
 import { countChunkComponents } from '../topology.js'
 import { chunkStairs, stairStrip } from '../structures/slab.js'
+import { SEWER_CHAMBER_CATALOG } from '../rooms/catalog.js'
 import {
   CELL_CORRIDOR,
   CELL_LOBBY,
   CELL_OPEN,
+  CELL_ROOM,
   COLUMN_STANDARD,
   MAP_FAMILY_SEWER,
   PASSAGE_OPEN,
@@ -23,6 +25,7 @@ import {
   SEWER_MODULE_MANHOLE_DOWN,
   SEWER_MODULE_MANHOLE_UP,
   SEWER_MODULE_T,
+  SPACE_ROLE_NONE,
 } from '../mapTypes.js'
 
 export const id = ZONE_SEWER
@@ -61,6 +64,7 @@ const SEWER_SALTS = Object.freeze({
   loopPick: 0x5e10,
   chamberSmall: 0x5e21,
   chamberLarge: 0x5e22,
+  chamberSpace: 0x5e24,
   branchSlot: 0x5e30,
   branchLen: 0x5e40,
   branchElbow: 0x5e50,
@@ -716,6 +720,42 @@ function stampPlan(data, plan) {
   }
   for (const hole of plan.holes) {
     data.cellKind[hole.lz * CHUNK + hole.lx] = CELL_LOBBY
+  }
+
+  // Chambers graduate from generic lobbies to named, furnishable rooms: the
+  // whole prescribed rect (the descriptor's truth) becomes CELL_ROOM under
+  // one synthetic space id with a catalog-rolled role — or bare NONE when the
+  // roll lands past every window. Link cells that cut through the rect are
+  // relabelled with the room, so the raster stops disagreeing with the
+  // descriptor about where the chamber is. Pockets stay CELL_LOBBY: a
+  // manhole room is dressed (valve/ladder/stains), never furnished.
+  for (const [index, chamber] of plan.chambers.entries()) {
+    const spaceId =
+      (hash3i(
+        (plan.seed ^ SEWER_SALTS.chamberSpace) | 0,
+        chamber.x0,
+        chamber.z0,
+        index + 1
+      ) >>> 0) || 1
+    let role = SPACE_ROLE_NONE
+    for (const entry of SEWER_CHAMBER_CATALOG[chamber.kind] ?? []) {
+      const r =
+        saltedHash(plan.seed, chamber.anchor.lx, 0, chamber.anchor.lz, entry.salt) /
+        UINT32_RANGE
+      if (r < entry.window) {
+        role = entry.role
+        break
+      }
+    }
+    for (let z = chamber.z0; z <= chamber.z1; z++) {
+      for (let x = chamber.x0; x <= chamber.x1; x++) {
+        const i = z * CHUNK + x
+        if (data.cellKind[i] === CELL_OPEN) continue // never carved (defensive)
+        data.cellKind[i] = CELL_ROOM
+        data.spaceId[i] = spaceId
+        data.spaceRole[i] = role
+      }
+    }
   }
 }
 

@@ -11,7 +11,10 @@ import {
   SPACE_ROLE_ARCHIVE,
   SPACE_ROLE_BREAK,
   SPACE_ROLE_COPY,
+  SPACE_ROLE_LIBRARY,
+  SPACE_ROLE_LOUNGE,
   SPACE_ROLE_MEETING,
+  SPACE_ROLE_OFFICE,
   SPACE_ROLE_SERVER,
   SPACE_ROLE_STORAGE,
 } from './mapTypes.js'
@@ -72,6 +75,11 @@ const ROLE_LIGHT = Object.freeze({
   [SPACE_ROLE_ARCHIVE]: [0.94, 0.9, 0.82],
   [SPACE_ROLE_SERVER]: [0.85, 1.03, 1.14],
   [SPACE_ROLE_STORAGE]: [0.8, 0.78, 0.72],
+  // v22 catalog roles: a library sits warm and low like a reading lamp, a
+  // private office keeps a neutral task register, a lounge leans amber.
+  [SPACE_ROLE_LIBRARY]: [0.98, 0.92, 0.8],
+  [SPACE_ROLE_OFFICE]: [1.02, 1.01, 0.97],
+  [SPACE_ROLE_LOUNGE]: [1.06, 0.96, 0.88],
 })
 
 // Colour-temperature drift as a per-channel multiplier around 1 (applied on

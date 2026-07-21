@@ -35,6 +35,7 @@ import { structureAdapterFor } from '../src/world/structures/contract.js'
 import { LATTICE_STRUCTURE_KIND } from '../src/world/structures/lattice.js'
 import { TOWER_LANDMARK_SOCKET_KINDS } from '../src/world/structures/tower.js'
 import {
+  COLUMN_FURNITURE,
   MAP_FAMILY_LATTICE,
   MAP_FAMILY_OFFICE,
   MAP_FAMILY_SEWER,
@@ -373,10 +374,17 @@ function makeSewerFixture(data, lower, upper, profile, seams) {
   // Only the canonical ChunkData field is consumed. Return wrappers or aliases
   // are intentionally invisible to release auditing.
   const descriptor = data.sewerDescriptor
+  // Furnished chamber cells (COLUMN_FURNITURE) remain enterable: generation
+  // guarantees chamber furniture never severs the walk graph (pinned by the
+  // rooms.test sewer no-sever corpus), so only structural columns seal a
+  // module against traversal.
   const raster = {
     traversableModules: descriptor.modules
       .map((module, index) => ({ module, index }))
-      .filter(({ module }) => data.colAt(module.lx, module.lz) === 0)
+      .filter(({ module }) => {
+        const column = data.colAt(module.lx, module.lz)
+        return column === 0 || column === COLUMN_FURNITURE
+      })
       .map(({ index }) => index),
     links: physicalSewerLinks(data, descriptor),
   }

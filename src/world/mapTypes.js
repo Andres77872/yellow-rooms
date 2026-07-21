@@ -81,12 +81,16 @@ export const wallFeatureSeesThrough = (feature) =>
 
 export const isPassageOpen = (kind) => kind !== PASSAGE_WALL
 
-// Semantic room roles (v15). Assigned per office-district space at plan time
-// (officePlan.js) and compiled into ChunkData.spaceRole; topology never
+// Semantic room roles (v15, extended v22). Assigned per office-district space
+// at plan time (rooms/election.js, from the per-family catalog in
+// rooms/catalog.js) and compiled into ChunkData.spaceRole; topology never
 // changes — roles steer the dressing layer (furniture composition, wall
 // props, signage) so districts read as named places: meeting rooms, break
-// rooms, copy rooms, archives, server rooms, storage. Ordinary rooms keep
-// SPACE_ROLE_NONE and furnish generically.
+// rooms, copy rooms, archives, server rooms, storage, libraries, private
+// offices, lounges. Which roles a district may elect — and how many — is a
+// map-family decision (rooms/catalog.js), so an office floor and a tower
+// floor read as different institutions. Ordinary rooms keep SPACE_ROLE_NONE
+// and furnish generically.
 export const SPACE_ROLE_NONE = 0
 export const SPACE_ROLE_MEETING = 1
 export const SPACE_ROLE_BREAK = 2
@@ -94,3 +98,6 @@ export const SPACE_ROLE_COPY = 3
 export const SPACE_ROLE_ARCHIVE = 4
 export const SPACE_ROLE_SERVER = 5
 export const SPACE_ROLE_STORAGE = 6
+export const SPACE_ROLE_LIBRARY = 7
+export const SPACE_ROLE_OFFICE = 8
+export const SPACE_ROLE_LOUNGE = 9

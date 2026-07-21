@@ -2,7 +2,10 @@ import {
   SPACE_ROLE_ARCHIVE,
   SPACE_ROLE_BREAK,
   SPACE_ROLE_COPY,
+  SPACE_ROLE_LIBRARY,
+  SPACE_ROLE_LOUNGE,
   SPACE_ROLE_MEETING,
+  SPACE_ROLE_OFFICE,
   SPACE_ROLE_SERVER,
   SPACE_ROLE_STORAGE,
 } from '../../mapTypes.js'
@@ -68,6 +71,9 @@ export const ROLE_BAND = {
   [SPACE_ROLE_ARCHIVE]: [0.62, 0.52, 0.36], // ochre
   [SPACE_ROLE_SERVER]: [0.42, 0.62, 0.58], // machine teal
   [SPACE_ROLE_STORAGE]: [0.5, 0.47, 0.42], // putty
+  [SPACE_ROLE_LIBRARY]: [0.45, 0.56, 0.42], // reading-room green
+  [SPACE_ROLE_OFFICE]: [0.55, 0.58, 0.66], // clerical blue-grey
+  [SPACE_ROLE_LOUNGE]: [0.68, 0.52, 0.56], // dusty mauve
 }
 
 // Landmark accent cycle: one high-salience colour per pier/floor so every
