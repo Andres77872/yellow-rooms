@@ -1,21 +1,22 @@
 import { IGN, LAMP_ATT, VIEW_RECON, glslFloat } from './common.js'
-import { LIGHT_MAX, VOL_LIGHT_MAX, VOL_OCC_NEAR, VOL_OCC_FAR } from '../../world/constants.js'
-import { QUALITY } from '../../core/device.js'
+import { LIGHT_MAX, VOL_STEPS_MAX, VOL_LIGHTS_MAX, VOL_OCC_NEAR, VOL_OCC_FAR } from '../../world/constants.js'
 
 // --- Volumetric light shafts (half-res in-scatter raymarch) ----------------
 // Marches the camera ray and, at each step, gathers in-scatter from the nearest
-// VOL_LIGHT_MAX lamps + the flashlight cone. Each sample is gated by a SHORT
+// uMaxLights lamps + the flashlight cone. Each sample is gated by a SHORT
 // screen-space depth march toward the light (visToLight) so shafts stop at walls
 // and only beam through real openings — instead of glowing through solid geometry.
 // A Henyey-Greenstein phase biases scatter forward, so a lamp roughly ahead reads
 // as a directional god-ray. Like the shadow pass this is screen-space: occluders
 // off-screen or behind the camera can't block (acceptable for the look).
+// Loop bounds are the compile-time ceilings; uSteps / uMaxLights (runtime quality
+// tier) set the live trip counts, same pattern as the uLampCount break.
 export const VOL_FRAG = /* glsl */ `
   precision highp float;
   precision highp int;
-  #define VOL_STEPS ${QUALITY.volSteps}
+  #define STEPS_MAX ${VOL_STEPS_MAX}
   #define LIGHT_MAX ${LIGHT_MAX}
-  #define VOL_LIGHT_MAX ${VOL_LIGHT_MAX}
+  #define VOL_LIGHTS_MAX ${VOL_LIGHTS_MAX}
   in vec2 vUv;
   out vec4 outColor;
   uniform sampler2D tDepth;
@@ -28,6 +29,8 @@ export const VOL_FRAG = /* glsl */ `
   uniform float uLampIntensity;  // shared with the lit pass so shafts track lamp brightness
   uniform float uLampFlicker;    // shared fluorescent dip so shafts flicker with the lamps
   uniform float uLampRange;
+  uniform int uSteps;            // live march steps (quality tier), <= STEPS_MAX
+  uniform int uMaxLights;        // most lamps that in-scatter (quality tier)
   uniform float uDensity;
   uniform float uMaxDist;
   uniform float uPhaseG;         // Henyey-Greenstein anisotropy (forward beams)
@@ -77,24 +80,29 @@ export const VOL_FRAG = /* glsl */ `
     float plen = length(P);
     float maxT = min(plen, uMaxDist);
     vec3 dir = P / max(plen, 1e-4);
-    float step = maxT / float(VOL_STEPS);
+    float step = maxT / float(uSteps);
     // Interleaved Gradient Noise like the lighting/shadow passes — the old
     // HASH jitter degenerated into correlated streaks on some drivers.
     float jitter = ign(gl_FragCoord.xy);
+    bool flashOn = uFlashOn > 0.5;
 
-    // Single outer step loop: compute the ray sample S once per step, then gather
-    // in-scatter from each lamp (was re-walking the whole ray per lamp).
+    // Single march loop: compute the ray sample S once per step, then gather
+    // in-scatter from each lamp AND the flashlight cone (one walk, not two).
     // Each sample's in-scatter is attenuated by the camera->sample fog
     // transmittance (same exp^2 curve as the lit pass), so shafts melt into the
     // haze with everything else instead of gluing full-brightness streaks onto
     // an already-fogged background (and the uMaxDist clamp edge disappears).
+    // The flashlight term shares that transmittance — before it skipped the
+    // haze entirely, so its cone floated unfogged over distant surfaces.
     vec3 acc = vec3(0.0);
+    float fl = 0.0;
     float t = step * jitter;
-    for (int i = 0; i < VOL_STEPS; i++){
+    for (int i = 0; i < STEPS_MAX; i++){
+      if (i >= uSteps) break;
       vec3 S = dir * t;
       float trans = exp(-uFogDensity * uFogDensity * t * t);
-      for (int j = 0; j < LIGHT_MAX; j++){
-        if (j >= uLampCount || j >= VOL_LIGHT_MAX) break;
+      for (int j = 0; j < VOL_LIGHTS_MAX; j++){
+        if (j >= uLampCount || j >= uMaxLights) break;
         vec3 Lv = uLampViewPos[j];
         float dl = distance(S, Lv);
         if (dl < uLampRange){
@@ -103,30 +111,20 @@ export const VOL_FRAG = /* glsl */ `
             (uLampChar[j].a * lampAtt(dl, uLampRange) * phase * visToLight(S, Lv) * trans);
         }
       }
+      // Flashlight in-scatter: a dusty cone from the camera (view origin, axis -z).
+      if (flashOn){
+        float cosA = -S.z / max(t, 1e-4);
+        float cone = smoothstep(uFlashCosOuter, uFlashCosInner, cosA);
+        if (cone > 0.0){
+          float a = clamp(1.0 - t / uFlashRange, 0.0, 1.0);
+          fl += a * a * cone * trans;
+        }
+      }
       t += step;
     }
     // Scale the lamp in-scatter by lamp intensity (parity with the lit pass and
-    // with the flashlight shaft's uFlashIntensity). Runs before the flashlight
-    // term so only the lamp shafts are affected.
-    acc *= uLampColor * uLampIntensity * uLampFlicker;
-
-    // Flashlight in-scatter: a dusty cone from the camera (view origin, axis -z).
-    if (uFlashOn > 0.5){
-      float fl = 0.0;
-      float t = step * jitter;
-      for (int i = 0; i < VOL_STEPS; i++){
-        vec3 S = dir * t;
-        float ds = length(S);
-        float cosA = -S.z / max(ds, 1e-4);
-        float cone = smoothstep(uFlashCosOuter, uFlashCosInner, cosA);
-        if (cone > 0.0){
-          float a = clamp(1.0 - ds / uFlashRange, 0.0, 1.0);
-          fl += a * a * cone;
-        }
-        t += step;
-      }
-      acc += uFlashColor * (fl * uFlashIntensity);
-    }
+    // with the flashlight shaft's uFlashIntensity).
+    acc = acc * (uLampColor * uLampIntensity * uLampFlicker) + uFlashColor * (fl * uFlashIntensity);
 
     acc *= uDensity * step;
     outColor = vec4(acc, 1.0);

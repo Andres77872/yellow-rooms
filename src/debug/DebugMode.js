@@ -198,6 +198,8 @@ export class DebugMode {
     this.active = false
     this.freeze = false
     this.setChannel(0)
+    e.deferred.setTiming(false) // GPU timing is a debug-panel-only cost
+    e._applyGraphics?.() // undo any pass-isolation toggles from the light tab
     e.deferred.setOutline(this._savedOutline)
     e.deferred.scene = e.scene
     e.deferred.camera = e.camera

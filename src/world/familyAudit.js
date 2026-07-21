@@ -9,6 +9,7 @@ import {
 } from './constants.js'
 import { DEFAULT_WORLD_CONFIG } from './config.js'
 import {
+  MAP_FAMILY_HOTEL,
   MAP_FAMILY_LATTICE,
   MAP_FAMILY_OFFICE,
   MAP_FAMILY_SEWER,
@@ -1751,6 +1752,20 @@ function makeSewerKindAdapter() {
   })
 }
 
+// Hotel is an office-fabric family: its chunks own explicit mapFamily
+// identity, but the multilevel descriptors they stamp carry no family field
+// and therefore validate through the office adapter — the same default that
+// structureFamily applies at runtime (structures/contract.js). Registration
+// audits expect the office adapter namespace for these families rather than
+// a parallel hotel adapter set.
+const OFFICE_FABRIC_FAMILIES = Object.freeze([
+  MAP_FAMILY_OFFICE,
+  MAP_FAMILY_HOTEL,
+])
+
+const expectedAdapterFamily = (family) =>
+  OFFICE_FABRIC_FAMILIES.includes(family) ? MAP_FAMILY_OFFICE : family
+
 const FAMILY_ADAPTERS = Object.freeze({
   [MAP_FAMILY_OFFICE]: makeFamilyAdapter(
     MAP_FAMILY_OFFICE,
@@ -1764,6 +1779,10 @@ const FAMILY_ADAPTERS = Object.freeze({
   [MAP_FAMILY_LATTICE]: makeFamilyAdapter(
     MAP_FAMILY_LATTICE,
     [STRUCTURE_KIND_LATTICE]
+  ),
+  [MAP_FAMILY_HOTEL]: makeFamilyAdapter(
+    MAP_FAMILY_HOTEL,
+    [STRUCTURE_KIND_OFFICE]
   ),
 })
 
@@ -1893,7 +1912,11 @@ function validRollbackState(state, scope, family) {
     !state.enabledFamilies.includes(family)
   ) return false
 
-  if (family === MAP_FAMILY_SEWER) return maximumHeight === null
+  // Families without authored maximum-height output pin that namespace as
+  // null rather than as a stale golden.
+  if (family === MAP_FAMILY_SEWER || family === MAP_FAMILY_HOTEL) {
+    return maximumHeight === null
+  }
   return validVersionRecord(maximumHeight) &&
     maximumHeight.version === state.version
 }
@@ -2556,7 +2579,7 @@ function rowReasons({
       const kindAdapter = adapters?.kinds?.[emission?.kind]
       if (
         !kindAdapter ||
-        kindAdapter.family !== family ||
+        kindAdapter.family !== expectedAdapterFamily(family) ||
         (familyAdapter && !familyAdapter.kinds.includes(emission?.kind))
       ) {
         addReason(reasons, AUDIT_REASONS.missingKindAdapter)
@@ -2971,12 +2994,15 @@ export function auditChunkFamilyRegistrations(
       ? null
       : adapters?.kinds?.[structureKind]
     const structureFamilyAdapter = adapters?.families?.[family]
+    // Office-fabric chunks (office, hotel) stamp family-less descriptors that
+    // resolve to the office adapter; every other family must match its own
+    // adapter namespace exactly.
     if (
       !structureAdapter ||
-      structureAdapter.family !== family ||
+      structureAdapter.family !== expectedAdapterFamily(family) ||
       !structureFamilyAdapter?.kinds?.includes(structureKind) ||
       !structureAuditAdapter ||
-      structureAuditAdapter.family !== family
+      structureAuditAdapter.family !== expectedAdapterFamily(family)
     ) {
       fail(family, structureKind, AUDIT_REASONS.missingKindAdapter)
       continue

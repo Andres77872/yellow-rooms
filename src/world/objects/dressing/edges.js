@@ -50,6 +50,7 @@ import {
   SPACE_ROLE_BREAK,
   SPACE_ROLE_MEETING,
   SPACE_ROLE_SERVER,
+  MAP_FAMILY_HOTEL,
 } from '../../mapTypes.js'
 import { PROP_TINT, ROLE_BAND, SIGN_TINT } from './palette.js'
 
@@ -121,9 +122,10 @@ export function dressEdge(data, axis, line, cell, trim, props, signs) {
 
   // Wall-mounted props: one roll per wall face, driven by the adjacent cell
   // kind. Corridor walls get extinguisher cabinets; rooms/lobbies get clocks
-  // and notice boards — modulated by the district plan's room role: break
-  // rooms always pin notices, server rooms get warning plates instead of
-  // homely clutter. Plates sit shallower than the door casings.
+  // and notice boards (framed prints in the hotel family) — modulated by the
+  // district plan's room role: break rooms always pin notices, server rooms
+  // get warning plates instead of homely clutter. Plates sit shallower than
+  // the door casings.
   for (const s of [-1, 1]) {
     const cx = vertical ? line + (s > 0 ? 0 : -1) : cell
     const cz = vertical ? cell : line + (s > 0 ? 0 : -1)
@@ -154,6 +156,25 @@ export function dressEdge(data, axis, line, cell, trim, props, signs) {
         continue
       }
       const boardChance = role === SPACE_ROLE_BREAK ? 0.4 : role === SPACE_ROLE_MEETING ? 0.16 : BOARD_CHANCE
+      if (data.mapFamily === MAP_FAMILY_HOTEL) {
+        // Hotel rooms hang a framed print, not office clutter — nobody WORKED
+        // here, they stayed here. Same roll cadence as the clock/notice
+        // outcomes below (the break/meeting boosts are office-role keyed and
+        // never fire for residential roles).
+        if (r < CLOCK_CHANCE + boardChance) {
+          // Framed print: dark wood frame, muted field, 1-2 accent strokes.
+          const off = plane + s * (THICK / 2 + PROP_PLATE_T / 2)
+          box(props, centre, BOARD_Y, off, BOARD_W + 0.08, BOARD_H + 0.08, PROP_PLATE_T, PROP_TINT.boardFrame)
+          const faceOff = off + s * (PROP_PLATE_T / 2 + 0.006)
+          box(props, centre, BOARD_Y, faceOff, BOARD_W, BOARD_H, 0.012, PROP_TINT.print)
+          box(props, centre - 0.18, BOARD_Y + 0.1, faceOff + s * 0.01, 0.34, 0.07, 0.008, PROP_TINT.printAqua)
+          const h2 = hash2i((PROP_SALT ^ 0xbeef) | 0, gx, gz)
+          if ((h2 & 1) === 0) {
+            box(props, centre + 0.16, BOARD_Y - 0.14, faceOff + s * 0.01, 0.2, 0.05, 0.008, PROP_TINT.printWine)
+          }
+        }
+        continue
+      }
       if (r < CLOCK_CHANCE && role !== SPACE_ROLE_BREAK) {
         // Wall clock: dark case, cream face, two static hands.
         const off = plane + s * (THICK / 2 + PROP_PLATE_T / 2)

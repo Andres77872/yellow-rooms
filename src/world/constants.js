@@ -291,7 +291,20 @@ export const SHADOW_BIAS = 0.04 // view-space near acceptance bias for the depth
 export const SHADOW_MAX_DARK = 0.85 // darkest the contact-hardening march returns on a hit
 export const SHADOW_SCALE = 0.5 // screen-space shadow mask computed at half res, then bilateral-blurred + upsampled
 
-// Effect resolution scales / step counts (perf knobs)
+// Compile-time CEILINGS for the runtime graphics quality system (core/graphics.js).
+// Loop bounds and uniform-array sizes must be GLSL constants, so shaders compile
+// against these maxima and the live tier drives `uniform int` trip counts that
+// break out early (same pattern as the uLampCount loop). Raising a ceiling is a
+// shader recompile; moving inside it is free.
+export const AO_SAMPLES_MAX = 24 // uKernel[] size (ultra tier uses 24)
+export const SHADOW_STEPS_MAX = 32 // shadow march loop bound
+export const SHADOW_LAMPS_MAX = 8 // most lamps the shadow pass may march
+export const VOL_STEPS_MAX = 48 // volumetric march loop bound
+export const VOL_LIGHTS_MAX = 12 // most lamps that may in-scatter
+
+// Effect resolution scales / step counts (perf knobs). The *_SAMPLES / *_STEPS /
+// *_MAX values below are the HIGH-tier defaults consumed by core/graphics.js —
+// the shaders themselves read the ceilings above.
 export const AO_SCALE = 0.5 // SSAO at half res
 export const AO_SAMPLES = 16 // hemisphere kernel size
 export const AO_RADIUS = 0.8 // view-space sample radius
@@ -575,9 +588,10 @@ export const WINDOW_SALT = 0x71d0 | 0
 // cell. Placement is per-chunk deterministic from global coordinates, keeps a
 // 2-cell margin off chunk borders (no cross-seam overlap), skips doorway
 // approaches, and rolls back any piece that would split its room's remaining
-// walk cells. Lamps and sight lines are unaffected: pieces stay below
-// eye height except the cabinet, which still never blocks the collision DDA
-// (it stands against a wall, so its cell edge occludes nothing new).
+// walk cells. Lamps and sight lines are unaffected: wall-hugged storage
+// pieces may exceed eye height (rack 1.9, wardrobe 2.05, vanity mirror 1.98)
+// because furniture columns never enter the sight DDA, so they occlude
+// nothing new; every other piece stays below EYE_H.
 export const FURN_MARGIN = 2 // cells kept clear of each chunk border
 export const FURN_SALT = 0x51de | 0
 // Desk + chair workstation against a room wall.
@@ -620,6 +634,48 @@ export const BOOKSHELF_H = 1.85
 export const WHITEBOARD_W = 1.8
 export const WHITEBOARD_D = 0.1
 export const WHITEBOARD_H = 1.1
+// --- Residential furniture (hotel family) -------------------------
+// Bed: headboard against the wall, mattress + blanket + pillows.
+export const BED_W = 1.5
+export const BED_D = 2.1
+export const BED_H = 0.62
+// Nightstand: small bedside drawer unit.
+export const NIGHTSTAND_W = 0.5
+export const NIGHTSTAND_H = 0.58
+// Wardrobe: tall bedroom storage, the residential cabinet silhouette.
+export const WARDROBE_W = 1.25
+export const WARDROBE_D = 0.62
+export const WARDROBE_H = 2.05
+// Bathroom set: toilet (tank against the wall), vanity sink with mirror,
+// bathtub along a wall.
+export const TOILET_W = 0.45
+export const TOILET_D = 0.72
+export const TOILET_H = 0.78
+export const SINK_W = 0.75
+export const SINK_D = 0.5
+export const SINK_H = 0.85
+export const TUB_W = 1.65
+export const TUB_D = 0.75
+export const TUB_H = 0.55
+// Kitchen set: counter modules, range, refrigerator (tall like the cabinet).
+export const COUNTER_W = 1.25
+export const COUNTER_D = 0.65
+export const COUNTER_H = 0.9
+export const STOVE_W = 0.65
+export const STOVE_D = 0.65
+export const STOVE_H = 0.9
+export const FRIDGE_W = 0.75
+export const FRIDGE_D = 0.72
+export const FRIDGE_H = 1.85
+// Living set: media console with TV panel, single armchair.
+export const TV_W = 1.45
+export const TV_D = 0.45
+export const TV_H = 1.35
+export const ARMCHAIR_W = 0.85
+export const ARMCHAIR_H = 0.9
+// Laundry: front-loading washer cube.
+export const WASHER_W = 0.62
+export const WASHER_H = 0.85
 
 // Helpers ---------------------------------------------------------------
 export const idx = (lx, lz) => lz * CHUNK + lx

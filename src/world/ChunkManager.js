@@ -36,6 +36,7 @@ import {
   wallFeatureSeesThrough,
 } from './mapTypes.js'
 import { validatedRuntimeStructure } from './structures/contract.js'
+import { resolveStepSurface } from './stepSurface.js'
 
 const UINT32_MAX = 0xffffffff
 const HARD_VOID_PLANE_KEYS = Object.freeze(['deathYmm', 'family', 'id'])
@@ -593,6 +594,22 @@ export class ChunkManager {
     const c = this._chunkAt(gx, gz, cy)
     if (!c) return null
     return c.stairCells.get(cIdx(gx - c.cx * CHUNK, gz - c.cz * CHUNK)) || null
+  }
+
+  // Audible floor material at a cell (see stepSurface.js): the family's floor
+  // style refined by the cell's semantics (stair treads, bridges, wet rooms,
+  // server rooms). An unloaded chunk resolves to the configured family's base
+  // so a footstep can never pop to a different material mid-stream.
+  surfaceAt(gx, gz, cy = 0) {
+    const c = this._chunkAt(gx, gz, cy)
+    const family = c?.data.mapFamily ?? this.config?.mapFamily?.selected
+    if (!c) return resolveStepSurface({ family })
+    const i = cIdx(gx - c.cx * CHUNK, gz - c.cz * CHUNK)
+    return resolveStepSurface({
+      family,
+      cellKind: c.data.cellKind[i],
+      spaceRole: c.data.spaceRole[i],
+    })
   }
 
   // Is this floor slab holed at the cell? A stair hole exposes the ramp from

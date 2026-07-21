@@ -64,11 +64,20 @@ export const LAMP_ATT = /* glsl */ `
 
 // View-space position / Z from the depth buffer (perspective unproject). Used by
 // SSAO, the lighting shadow march and the volumetric occlusion taps.
+// viewZAt exploits the symmetric-perspective inverse structure: its z-row is
+// (0,0,0,-1) and its w-row is (0,0,ip23,ip33), so viewZ collapses to two MADs
+// and a divide instead of a full mat4 transform. The bilateral blurs tap it 25x
+// per pixel and the shadow/volumetric marches dozens of times, so this is one
+// of the hottest expressions in the pipeline. Exact for every camera the game
+// uses (PerspectiveCamera, symmetric frustum).
 export const VIEW_RECON = /* glsl */ `
   vec3 viewPosFromDepth(vec2 uv){
     float d = texture(tDepth, uv).x;
     vec4 v = uProjInverse * vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
     return v.xyz / v.w;
   }
-  float viewZAt(vec2 uv){ return viewPosFromDepth(uv).z; }
+  float viewZAt(vec2 uv){
+    float ndcZ = texture(tDepth, uv).x * 2.0 - 1.0;
+    return -1.0 / (ndcZ * uProjInverse[2][3] + uProjInverse[3][3]);
+  }
 `

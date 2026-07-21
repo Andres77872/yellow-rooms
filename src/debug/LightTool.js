@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { section, slider, colorPicker, toggle, button, segmented, buttonRow } from './widgets.js'
+import { section, slider, colorPicker, toggle, button, segmented, buttonRow, readout, textBlock } from './widgets.js'
 import { formatTuning, copyText } from './tuningExport.js'
 import {
   PANEL_COLOR,
@@ -10,10 +10,16 @@ import {
   OUTLINE_INK,
   RIM_COLOR,
   ENTITY_RIM,
+  LIGHT_MAX,
 } from '../world/constants.js'
 
 // Names double as the status-line label (DebugMode) — keep them short.
-export const CHANNELS = ['final', 'albedo', 'matID', 'normal', 'depth', 'AO', 'lit', 'vol', 'bloom', 'comp']
+// Index == the DEBUG_VIEW_FRAG uMode that blits that channel.
+export const CHANNELS = ['final', 'albedo', 'matID', 'normal', 'depth', 'AO', 'lit', 'vol', 'bloom', 'comp', 'shadow']
+
+// Pipeline order for the GPU pass-timing table (matches _pass names in
+// DeferredRenderer.render).
+const PASS_ORDER = ['gbuffer', 'ssao', 'shadow', 'lighting', 'volumetric', 'bloom', 'composite', 'outline', 'grade', 'fxaa']
 
 // Lighting / post-processing tuning panel. Every control binds live to a public
 // deferred uniform. Grade controls and the light room require the sim frozen
@@ -70,6 +76,42 @@ export class LightTool {
         copyBtn,
       ]).el
     )
+
+    // --- Pipeline: light-field readouts, pass isolation, GPU timings ----
+    // The pass toggles poke the live enable flags directly (bypassing the
+    // graphics settings), so a pass can be isolated while tuning; any settings
+    // change re-stamps them from the stored quality (Engine._applyGraphics).
+    const pp = section('pipeline')
+    root.appendChild(pp.el)
+    this._lampCount = readout('active lamps')
+    pp.body.appendChild(this._lampCount.el)
+    this._shadowBudget = readout('shadow march / vol lamps')
+    pp.body.appendChild(this._shadowBudget.el)
+    this._passToggles = []
+    const passToggle = (label, key) => {
+      const w = toggle({ label, value: d[key], onChange: (v) => (d[key] = v) })
+      this._passToggles.push({ w, key })
+      pp.body.appendChild(w.el)
+    }
+    passToggle('ssao pass', 'aoEnabled')
+    passToggle('shadow pass', 'shadowEnabled')
+    passToggle('volumetric pass', 'volEnabled')
+    passToggle('bloom pass', 'bloomEnabled')
+    passToggle('fxaa pass', 'fxaaEnabled')
+    this._timing = toggle({
+      label: 'gpu pass timings',
+      value: false,
+      onChange: (v) => {
+        const ok = d.setTiming(v)
+        if (v && !ok) {
+          this._timing.set(false)
+          this._passTimes.set('EXT_disjoint_timer_query_webgl2 unavailable')
+        } else if (!v) this._passTimes.set('')
+      },
+    })
+    pp.body.appendChild(this._timing.el)
+    this._passTimes = textBlock()
+    pp.body.appendChild(this._passTimes.el)
 
     // --- Light room -----------------------------------------------------
     const lr = section('light room')
@@ -228,10 +270,33 @@ export class LightTool {
   }
 
   // Keep the freeze checkbox + channel strip in sync with changes made
-  // elsewhere (the F3 hotkey, the AI tab's live-observe toggle).
+  // elsewhere (the F3 hotkey, the AI tab's live-observe toggle), and refresh
+  // the live pipeline readouts.
   update() {
     this._freeze.set(this.dbg.freeze)
     this._chan.set(this.dbg.channel)
+    const d = this.d
+    this._lampCount.set(`${d.lamps.uLampCount.value} / ${LIGHT_MAX}`)
+    this._shadowBudget.set(
+      `${d.shadowUniforms.uMaxLamps.value} × ${d.shadowUniforms.uSteps.value} steps / ` +
+        `${d.volUniforms.uMaxLights.value} × ${d.volUniforms.uSteps.value} steps`
+    )
+    // Settings changes re-stamp the enable flags behind our back — mirror them
+    // (and DebugMode.deactivate turns GPU timing off when the panel closes).
+    for (const { w, key } of this._passToggles) w.set(d[key])
+    this._timing.set(d.timingEnabled)
+    if (d.timingEnabled && d.timer) {
+      const lines = []
+      let total = 0
+      for (const name of PASS_ORDER) {
+        const ms = d.timer.results.get(name)
+        if (ms === undefined) continue
+        total += ms
+        lines.push(`${name.padEnd(10)} ${ms.toFixed(2)} ms`)
+      }
+      if (lines.length) lines.push(`${'total'.padEnd(10)} ${total.toFixed(2)} ms`)
+      this._passTimes.set(lines)
+    }
   }
 
   onShow() {}

@@ -124,8 +124,10 @@ export class LightRoom {
     for (let i = 0; i < n; i++) {
       L.uLampPos.value[i].copy(this.lampPos[i])
       lampTint(this.lampPos[i].x, this.lampPos[i].z, 0, tint)
-      // w = 1: isolated room runs steady tubes (no flicker dip on cast light).
+      // raw flicker 1: isolated room runs steady tubes (no flicker dip on cast
+      // light). DeferredRenderer folds raw * query-edge fade into uLampChar.w.
       L.uLampChar.value[i].set(tint[0], tint[1], tint[2], 1)
+      L.lampFlickerRaw[i] = 1
     }
     L.uLampCount.value = n
     deferred.lightUniforms.uLampIntensity.value = this.config.intensity

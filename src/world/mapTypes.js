@@ -9,6 +9,7 @@ export const MAP_FAMILY_OFFICE = 'office'
 export const MAP_FAMILY_SEWER = 'sewer'
 export const MAP_FAMILY_TOWER = 'tower'
 export const MAP_FAMILY_LATTICE = 'lattice'
+export const MAP_FAMILY_HOTEL = 'hotel'
 
 // Bounded dry sewer MVP vocabulary. Chambers and manholes are module-level
 // landmarks; deferred wet/U/cross/vent modules deliberately have no token here.
@@ -81,7 +82,7 @@ export const wallFeatureSeesThrough = (feature) =>
 
 export const isPassageOpen = (kind) => kind !== PASSAGE_WALL
 
-// Semantic room roles (v15, extended v22). Assigned per office-district space
+// Semantic room roles (v15, extended v23). Assigned per office-district space
 // at plan time (rooms/election.js, from the per-family catalog in
 // rooms/catalog.js) and compiled into ChunkData.spaceRole; topology never
 // changes — roles steer the dressing layer (furniture composition, wall
@@ -101,3 +102,13 @@ export const SPACE_ROLE_STORAGE = 6
 export const SPACE_ROLE_LIBRARY = 7
 export const SPACE_ROLE_OFFICE = 8
 export const SPACE_ROLE_LOUNGE = 9
+// Residential roles (hotel family): the household room vocabulary.
+// Same contract as the institutional roles — assigned per district space at
+// plan time from the hotel catalog, compiled into ChunkData.spaceRole, and
+// always backed by the room type's anchor furniture (a bedroom HAS its bed).
+export const SPACE_ROLE_BEDROOM = 10
+export const SPACE_ROLE_BATHROOM = 11
+export const SPACE_ROLE_KITCHEN = 12
+export const SPACE_ROLE_LIVING = 13
+export const SPACE_ROLE_DINING = 14
+export const SPACE_ROLE_LAUNDRY = 15

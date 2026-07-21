@@ -50,18 +50,22 @@ export class LightField {
         const v = cand[i]
         pos[i].copy(v)
         lampTint(v.x, v.z, v.cy ?? 0, this._tint, v.role ?? 0)
-        char[i].set(this._tint[0], this._tint[1], this._tint[2], 1)
+        char[i].set(this._tint[0], this._tint[1], this._tint[2], char[i].w)
       }
       this.u.uLampCount.value = n
     }
 
     // Per-frame flicker: <= LIGHT_MAX hash+sin evaluations, no allocations.
+    // Written to the RAW side-array, not uLampChar.w: DeferredRenderer's
+    // _updateFrame recombines raw * query-edge fade into .w every frame (it
+    // owns the fade because only it knows the view transform), and doing the
+    // combine from a pristine base keeps it idempotent while the sim is frozen.
     const n = this.u.uLampCount.value
     const pos = this.u.uLampPos.value
-    const char = this.u.uLampChar.value
+    const raw = this.u.lampFlickerRaw
     for (let i = 0; i < n; i++) {
       const v = pos[i]
-      char[i].w = lampFlicker(v.x, v.z, v.cy ?? 0, this._time)
+      raw[i] = lampFlicker(v.x, v.z, v.cy ?? 0, this._time)
     }
   }
 }
@@ -88,5 +92,11 @@ export function makeLampUniforms() {
     // a = flicker) — one array, not two, keeps every pass well under the 224
     // vec4 fragment-uniform floor WebGL2 guarantees on weak GPUs.
     uLampChar: { value: char },
+    // Raw per-fixture flicker written by LightField (or LightRoom). NOT a
+    // uniform: DeferredRenderer._updateFrame multiplies it by the query-edge
+    // set fade (a per-lamp camera-distance term) into uLampChar.w each frame,
+    // so the lighting / shadow / volumetric passes all see one consistent
+    // faded weight and no pass recomputes the fade per pixel.
+    lampFlickerRaw: new Float32Array(LIGHT_MAX).fill(1),
   }
 }

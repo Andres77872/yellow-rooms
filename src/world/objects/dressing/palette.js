@@ -1,8 +1,14 @@
 import {
   SPACE_ROLE_ARCHIVE,
+  SPACE_ROLE_BATHROOM,
+  SPACE_ROLE_BEDROOM,
   SPACE_ROLE_BREAK,
   SPACE_ROLE_COPY,
+  SPACE_ROLE_DINING,
+  SPACE_ROLE_KITCHEN,
+  SPACE_ROLE_LAUNDRY,
   SPACE_ROLE_LIBRARY,
+  SPACE_ROLE_LIVING,
   SPACE_ROLE_LOUNGE,
   SPACE_ROLE_MEETING,
   SPACE_ROLE_OFFICE,
@@ -22,6 +28,9 @@ export const PROP_TINT = {
   board: [0.66, 0.54, 0.36], // cork
   boardFrame: [0.3, 0.24, 0.17], // wood frame
   paper: [0.93, 0.91, 0.82], // pinned notices
+  print: [0.85, 0.82, 0.72], // framed-print field (hotel walls)
+  printAqua: [0.55, 0.68, 0.72], // print accent — towel aqua
+  printWine: [0.56, 0.34, 0.36], // print accent — wine
   extinguisher: [0.62, 0.14, 0.1], // safety red
   glassPale: [0.78, 0.86, 0.88], // cabinet glazing
   radiator: [0.82, 0.8, 0.72], // painted enamel
@@ -74,6 +83,13 @@ export const ROLE_BAND = {
   [SPACE_ROLE_LIBRARY]: [0.45, 0.56, 0.42], // reading-room green
   [SPACE_ROLE_OFFICE]: [0.55, 0.58, 0.66], // clerical blue-grey
   [SPACE_ROLE_LOUNGE]: [0.68, 0.52, 0.56], // dusty mauve
+  // Residential roles (hotel family).
+  [SPACE_ROLE_BEDROOM]: [0.66, 0.44, 0.42], // warm rose
+  [SPACE_ROLE_BATHROOM]: [0.58, 0.7, 0.72], // porcelain aqua
+  [SPACE_ROLE_KITCHEN]: [0.74, 0.66, 0.38], // mustard tile
+  [SPACE_ROLE_LIVING]: [0.62, 0.5, 0.34], // warm walnut
+  [SPACE_ROLE_DINING]: [0.56, 0.34, 0.36], // wine red
+  [SPACE_ROLE_LAUNDRY]: [0.56, 0.62, 0.7], // powder blue
 }
 
 // Landmark accent cycle: one high-salience colour per pier/floor so every

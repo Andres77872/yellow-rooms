@@ -961,6 +961,7 @@ describe('Lattice atomic release-state gate', () => {
       sewer: true,
       tower: true,
       lattice: true,
+      hotel: true,
     })
 
     expect(LATTICE_RELEASE_EVIDENCE).toMatchObject({

@@ -7,6 +7,7 @@ import {
 } from './lattice.js'
 import { deepFreeze, resolveMapFamily } from '../mapFamily.js'
 import {
+  MAP_FAMILY_HOTEL,
   MAP_FAMILY_LATTICE,
   MAP_FAMILY_OFFICE,
   MAP_FAMILY_TOWER,
@@ -72,7 +73,10 @@ export function structureAt(
 ) {
   const profile = resolveMapFamily(config)
   const { family } = profile
-  const structure = family === MAP_FAMILY_OFFICE
+  // Hotel is an office-fabric family: it plans and stamps the same canonical
+  // multilevel descriptors (atria read as hotel light wells), which carry no
+  // family field and therefore validate through the office adapter.
+  const structure = family === MAP_FAMILY_OFFICE || family === MAP_FAMILY_HOTEL
     ? multilevelStructureAt(seed, cx, cz, cy, config)
     : family === MAP_FAMILY_TOWER
       ? towerStructureAt(seed, cx, cz, cy, profile) ?? noStructure(family, cy)

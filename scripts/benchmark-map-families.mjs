@@ -14,6 +14,7 @@ import { DEFAULT_WORLD_CONFIG } from '../src/world/config.js'
 import { hashStr } from '../src/world/core/hash.js'
 import { worldConfigForFamily } from '../src/world/mapFamily.js'
 import {
+  MAP_FAMILY_HOTEL,
   MAP_FAMILY_LATTICE,
   MAP_FAMILY_OFFICE,
   MAP_FAMILY_SEWER,
@@ -27,6 +28,7 @@ const FAMILY_ORDER = Object.freeze([
   MAP_FAMILY_SEWER,
   MAP_FAMILY_TOWER,
   MAP_FAMILY_LATTICE,
+  MAP_FAMILY_HOTEL,
 ])
 const DEFAULT_WARMUP_ITERATIONS = 4
 const DEFAULT_SAMPLE_ITERATIONS = 32
@@ -91,7 +93,7 @@ function usage() {
   return `Usage: npm run benchmark:map-families -- [options]
 
 Options:
-  --family <office|sewer|tower|lattice|all>  Families to report (default: all)
+  --family <office|sewer|tower|lattice|hotel|all>  Families to report (default: all)
   --warmup <positive integer>                Warmup builds per family (default: 4)
   --samples <positive integer>               Timed builds per family (default: 32)
   --budget-generation-p50-ms <number>        Optional generation p50 ceiling
@@ -171,7 +173,7 @@ function parseOptions(args) {
           ? Object.freeze([read.value])
           : null
       if (!options.families) {
-        throw new Error('--family requires office, sewer, tower, lattice, or all')
+        throw new Error('--family requires office, sewer, tower, lattice, hotel, or all')
       }
       continue
     }

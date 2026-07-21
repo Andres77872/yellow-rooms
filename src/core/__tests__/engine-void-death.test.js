@@ -101,6 +101,7 @@ vi.mock('../../world/ChunkManager.js', () => ({
       this.updateVisibility = vi.fn()
       this.update = vi.fn()
       this.stairAt = vi.fn(() => null)
+      this.surfaceAt = vi.fn(() => 'carpet')
       this.lightAt = vi.fn(() => 0.1)
       this.prewarm = vi.fn((x, z) => {
         this.initialDigest = JSON.stringify({
@@ -131,6 +132,8 @@ vi.mock('../../player/Controller.js', () => ({
       this.lock = vi.fn()
       this.unlock = vi.fn()
       this.setBobEnabled = vi.fn()
+      this.setCameraFxEnabled = vi.fn()
+      this.resetCameraFx = vi.fn()
       this.setMove = vi.fn()
       this.lookDelta = vi.fn()
       this.toggleFlashlight = vi.fn()
@@ -151,6 +154,11 @@ vi.mock('../../audio/AudioBus.js', () => ({
       this.flickerDrop = vi.fn()
       this.entityThump = vi.fn()
       this.setHumProximity = vi.fn()
+      this.setFamily = vi.fn()
+      this.land = vi.fn()
+      this.flashlightClick = vi.fn()
+      this.deathStinger = vi.fn()
+      this.exitStinger = vi.fn()
       this.update = vi.fn()
     }
   },
@@ -196,6 +204,8 @@ vi.mock('../../render/DeferredRenderer.js', () => ({
       this.render = vi.fn()
       this.dispose = vi.fn()
       this.applyPalette = vi.fn()
+      this.applyQuality = vi.fn()
+      this.setTiming = vi.fn()
     }
   },
 }))

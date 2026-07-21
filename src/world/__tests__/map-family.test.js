@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_WORLD_CONFIG,
+  HOTEL_RELEASE_EVIDENCE,
   LATTICE_RELEASE_EVIDENCE,
   SEWER_RELEASE_EVIDENCE,
   TOWER_RELEASE_EVIDENCE,
@@ -262,6 +263,10 @@ function latticeReleaseActivationEvidence() {
   return releaseActivationEvidence(LATTICE_RELEASE_EVIDENCE)
 }
 
+function hotelReleaseActivationEvidence() {
+  return releaseActivationEvidence(HOTEL_RELEASE_EVIDENCE)
+}
+
 function expectActivationRejection(result, reason) {
   expect(result?.ok, `${reason}: activation must fail closed`).toBe(false)
   expect(result?.reasons, `${reason}: activation must expose distinct reasons`).toContain(reason)
@@ -398,10 +403,11 @@ describe('family digest identity', () => {
       'family-digest',
       'object'
     )
-    const families = ['office', 'sewer', 'tower', 'lattice']
+    const families = ['office', 'sewer', 'tower', 'lattice', 'hotel']
     const codes = families.map((family) => familyCodes[family])
 
     expect(familyCodes.office).toBe(0)
+    expect(familyCodes.hotel).toBe(4)
     expect(codes.every(Number.isInteger)).toBe(true)
     expect(new Set(codes).size).toBe(families.length)
 
@@ -423,13 +429,14 @@ describe('void-safety family eligibility', () => {
     )
 
     expect(Object.fromEntries(
-      ['office', 'sewer', 'tower', 'lattice']
+      ['office', 'sewer', 'tower', 'lattice', 'hotel']
         .map((family) => [family, requiresVoidSafety(family)])
     )).toEqual({
       office: false,
       sewer: false,
       tower: true,
       lattice: true,
+      hotel: false,
     })
     expect(WORLD_GEN_VERSION).toBe(23)
     expect(DEFAULT_WORLD_CONFIG.mapFamily.profiles).toMatchObject({
@@ -468,7 +475,7 @@ describe('byte-impact version and atomic pin activation', () => {
     expect(Object.fromEntries(
       Object.entries(DEFAULT_WORLD_CONFIG.mapFamily.profiles)
         .map(([family, profile]) => [family, profile.enabled])
-    )).toEqual({ office: true, sewer: true, tower: true, lattice: true })
+    )).toEqual({ office: true, sewer: true, tower: true, lattice: true, hotel: true })
     expect(resolveMapFamily(worldConfigForFamily('sewer')))
       .toMatchObject({ family: 'sewer', enabled: true })
     expect(validateActivationEvidence(evidence)).toEqual({ ok: true, reasons: [] })
@@ -607,6 +614,65 @@ describe('byte-impact version and atomic pin activation', () => {
     expectActivationRejection(
       validateActivationEvidence(staleSafety),
       'reset-baseline-mismatch'
+    )
+  })
+
+  it('accepts only the complete atomic Hotel release set', async () => {
+    const validateActivationEvidence = await plannedExport(
+      FAMILY_AUDIT_MODULE,
+      'validateActivationEvidence',
+      'hotel-release-evidence'
+    )
+    const resolveMapFamily = await plannedExport(
+      MAP_FAMILY_MODULE,
+      'resolveMapFamily',
+      'hotel-release-profile'
+    )
+    const worldConfigForFamily = await plannedExport(
+      MAP_FAMILY_MODULE,
+      'worldConfigForFamily',
+      'hotel-release-profile'
+    )
+    const evidence = hotelReleaseActivationEvidence()
+
+    expect(WORLD_GEN_VERSION).toBe(HOTEL_RELEASE_EVIDENCE.generatorVersion)
+    expect(HOTEL_RELEASE_EVIDENCE).toMatchObject({
+      family: 'hotel',
+      byteImpact: 'first-emission',
+      previousVersion: 22,
+      generatorVersion: 23,
+      profileIdentity: 'hotel-forced-audit',
+      seedDerivation: 'hashStr("audit-hotel-N#1")',
+      affectsMaximumHeight: false,
+    })
+    expect(HOTEL_RELEASE_EVIDENCE.generatorVersion)
+      .toBe(HOTEL_RELEASE_EVIDENCE.previousVersion + 1)
+    expect(HOTEL_RELEASE_EVIDENCE.familyRepresentativeDigest).toMatch(/^[0-9a-f]{64}$/)
+    expect(HOTEL_RELEASE_EVIDENCE.familyCorpusDigest).toMatch(/^[0-9a-f]{64}$/)
+    expect(HOTEL_RELEASE_EVIDENCE.familyCorpusDigest)
+      .not.toBe(HOTEL_RELEASE_EVIDENCE.previousFamilyCorpusDigest)
+    expect(HOTEL_RELEASE_EVIDENCE.globalGoldenDigest)
+      .toBe(SEWER_RELEASE_EVIDENCE.globalGoldenDigest)
+    expect(HOTEL_RELEASE_EVIDENCE.maximumHeightGoldenDigest)
+      .toBe(SEWER_RELEASE_EVIDENCE.maximumHeightGoldenDigest)
+    expect(resolveMapFamily(worldConfigForFamily('hotel')))
+      .toMatchObject({ family: 'hotel', enabled: true })
+    expect(validateActivationEvidence(evidence)).toEqual({ ok: true, reasons: [] })
+
+    for (const [namespace, reason] of [
+      ['global', 'missing-global-pin'],
+      ['family', 'missing-family-pin'],
+    ]) {
+      const missing = structuredClone(evidence)
+      missing.pins[namespace] = null
+      expectActivationRejection(validateActivationEvidence(missing), reason)
+    }
+
+    const staleCorpus = structuredClone(evidence)
+    staleCorpus.corpus.version = HOTEL_RELEASE_EVIDENCE.previousVersion
+    expectActivationRejection(
+      validateActivationEvidence(staleCorpus),
+      'stale-corpus-metadata'
     )
   })
 
@@ -886,6 +952,7 @@ describe('cross-family rollback configuration (task 6.1 RED)', () => {
       sewer: false,
       tower: true,
       lattice: true,
+      hotel: true,
     })
     expect(resolveMapFamily(rolledBack)).toMatchObject({ family: 'tower', enabled: true })
     expect(enabledFamilyFlags(base)).toEqual(before)
@@ -919,6 +986,41 @@ describe('cross-family rollback configuration (task 6.1 RED)', () => {
       sewer: true,
       tower: false,
       lattice: true,
+      hotel: true,
+    })
+    expect(resolveMapFamily(rolledBack)).toMatchObject({ family: 'lattice', enabled: true })
+    expect(enabledFamilyFlags(base)).toEqual(before)
+  })
+
+  it('[R33-S05][R34-S01][D01] rolls Hotel back without disabling or deselecting Lattice', async () => {
+    const rollbackMapFamily = await plannedExport(
+      MAP_FAMILY_MODULE,
+      'rollbackMapFamily',
+      'hotel-rollback-retains-lattice'
+    )
+    const resolveMapFamily = await plannedExport(
+      MAP_FAMILY_MODULE,
+      'resolveMapFamily',
+      'hotel-rollback-retains-lattice'
+    )
+    const worldConfigForFamily = await plannedExport(
+      MAP_FAMILY_MODULE,
+      'worldConfigForFamily',
+      'hotel-rollback-retains-lattice'
+    )
+    const base = worldConfigForFamily('lattice')
+    const before = enabledFamilyFlags(base)
+
+    const rolledBack = rollbackMapFamily('hotel', base)
+
+    expect(rolledBack).not.toBe(base)
+    expect(rolledBack.mapFamily.selected).toBe('lattice')
+    expect(enabledFamilyFlags(rolledBack)).toEqual({
+      office: true,
+      sewer: true,
+      tower: true,
+      lattice: true,
+      hotel: false,
     })
     expect(resolveMapFamily(rolledBack)).toMatchObject({ family: 'lattice', enabled: true })
     expect(enabledFamilyFlags(base)).toEqual(before)
@@ -951,6 +1053,7 @@ describe('cross-family rollback configuration (task 6.1 RED)', () => {
       sewer: false,
       tower: false,
       lattice: false,
+      hotel: true,
     })
     expect(resolveMapFamily(rolledBack)).toMatchObject({ family: 'office', enabled: true })
     expect(officeByteSnapshot(

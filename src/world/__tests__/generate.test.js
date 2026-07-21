@@ -5,6 +5,7 @@ import { generateChunk } from '../generate.js'
 import { vBorderContract, hBorderContract } from '../border.js'
 import {
   DEFAULT_WORLD_CONFIG as CFG,
+  HOTEL_RELEASE_EVIDENCE,
   LATTICE_RELEASE_EVIDENCE,
   SEWER_RELEASE_EVIDENCE,
   TOWER_RELEASE_EVIDENCE,
@@ -30,6 +31,7 @@ import {
   COLUMN_NONE,
   COLUMN_MONUMENTAL,
   COLUMN_STANDARD,
+  MAP_FAMILY_HOTEL,
   MAP_FAMILY_LATTICE,
   MAP_FAMILY_SEWER,
   MAP_FAMILY_TOWER,
@@ -545,6 +547,22 @@ const LATTICE_GOLDEN = Object.freeze([
 
 const LATTICE_GOLDEN_DIGEST = '1c75114c9a666e15c2d8963ab8762a0c394545d221ca67b46889201ad59e9604'
 
+// Hotel: representative residential-fabric block — 2x2 chunks over two
+// floors at the spawn neighbourhood (guest fabric, stairs, door joinery,
+// residential furnishing), pinned exactly like the other family goldens.
+const HOTEL_GOLDEN = Object.freeze([
+  { key: '777,-1,0,-1', seed: 777, cx: -1, cy: 0, cz: -1, digest: '6db8d5ad' },
+  { key: '777,0,0,-1', seed: 777, cx: 0, cy: 0, cz: -1, digest: 'a7126605' },
+  { key: '777,-1,0,0', seed: 777, cx: -1, cy: 0, cz: 0, digest: 'ef337f69' },
+  { key: '777,0,0,0', seed: 777, cx: 0, cy: 0, cz: 0, digest: 'cc61f2fd' },
+  { key: '777,-1,1,-1', seed: 777, cx: -1, cy: 1, cz: -1, digest: '84eb7052' },
+  { key: '777,0,1,-1', seed: 777, cx: 0, cy: 1, cz: -1, digest: '422a94de' },
+  { key: '777,-1,1,0', seed: 777, cx: -1, cy: 1, cz: 0, digest: '412fcd12' },
+  { key: '777,0,1,0', seed: 777, cx: 0, cy: 1, cz: 0, digest: 'b655e199' },
+])
+
+const HOTEL_GOLDEN_DIGEST = 'b17bd9eba5dc326ecdfee6a79c3a0601ae725abc51a7a6741ebdb7985a347a7a'
+
 const OFFICE_PAIR_DESCRIPTOR_GOLDEN = {
   id: 1394823709,
   kind: 'bridged',
@@ -903,7 +921,11 @@ describe('determinism', () => {
     expect(sha256(actual)).toBe(LATTICE_RELEASE_EVIDENCE.globalGoldenDigest)
     expect(sha256(maximumHeightPins))
       .toBe(LATTICE_RELEASE_EVIDENCE.maximumHeightGoldenDigest)
-    for (const release of [SEWER_RELEASE_EVIDENCE, TOWER_RELEASE_EVIDENCE]) {
+    for (const release of [
+      SEWER_RELEASE_EVIDENCE,
+      TOWER_RELEASE_EVIDENCE,
+      HOTEL_RELEASE_EVIDENCE,
+    ]) {
       expect(release.globalGoldenDigest)
         .toBe(LATTICE_RELEASE_EVIDENCE.globalGoldenDigest)
       expect(release.maximumHeightGoldenDigest)
@@ -1226,12 +1248,30 @@ describe('release Lattice pipeline', () => {
       sewer: true,
       tower: true,
       lattice: true,
+      hotel: true,
     })
     expect(WORLD_GEN_VERSION).toBe(LATTICE_RELEASE_EVIDENCE.generatorVersion)
     expect(actual).toEqual(expected)
     expect(sha256(actual)).toBe(LATTICE_GOLDEN_DIGEST)
     expect(LATTICE_GOLDEN_DIGEST)
       .toBe(LATTICE_RELEASE_EVIDENCE.familyRepresentativeDigest)
+  })
+})
+
+describe('hotel pipeline', () => {
+  it('pins the enabled Hotel byte stream independently', () => {
+    const config = worldConfigForFamily(MAP_FAMILY_HOTEL)
+    const actual = Object.fromEntries(HOTEL_GOLDEN.map((fixture) => [
+      fixture.key,
+      digest(buildChunk(fixture.seed, fixture.cx, fixture.cy, fixture.cz, config)),
+    ]))
+    const expected = Object.fromEntries(
+      HOTEL_GOLDEN.map(({ key, digest: pinned }) => [key, pinned])
+    )
+
+    expect(actual).toEqual(expected)
+    expect(sha256(actual)).toBe(HOTEL_GOLDEN_DIGEST)
+    expect(HOTEL_GOLDEN_DIGEST).toBe(HOTEL_RELEASE_EVIDENCE.familyRepresentativeDigest)
   })
 })
 

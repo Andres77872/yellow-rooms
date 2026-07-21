@@ -1,6 +1,5 @@
 import { IGN, LAMP_ATT, VIEW_RECON, glslFloat } from './common.js'
-import { LIGHT_MAX, SHADOW_MAX, SHADOW_BIAS, SHADOW_MAX_DARK } from '../../world/constants.js'
-import { QUALITY } from '../../core/device.js'
+import { LIGHT_MAX, SHADOW_STEPS_MAX, SHADOW_BIAS, SHADOW_MAX_DARK } from '../../world/constants.js'
 
 // --- Screen-space lamp shadows (half-res) ----------------------------------
 // Produces a single contribution-weighted VISIBILITY mask per fragment, then a
@@ -17,8 +16,7 @@ export const SHADOW_FRAG = /* glsl */ `
   precision highp float;
   precision highp int;
   #define LIGHT_MAX ${LIGHT_MAX}
-  #define SHADOW_STEPS ${QUALITY.shadowSteps}
-  #define SHADOW_MAX ${SHADOW_MAX}
+  #define STEPS_MAX ${SHADOW_STEPS_MAX}
   in vec2 vUv;
   out vec4 outColor;
   uniform sampler2D tNormal;
@@ -32,6 +30,8 @@ export const SHADOW_FRAG = /* glsl */ `
   uniform vec4 uLampChar[LIGHT_MAX];   // per-fixture flicker (a) — weights the mask like the lit pass
   uniform float uLampRange;
   uniform float uLampWrap;
+  uniform int uSteps;            // live march steps (quality tier), <= STEPS_MAX
+  uniform int uMaxLamps;         // most lamps marched per fragment (quality tier)
 
   ${IGN}
   ${LAMP_ATT}
@@ -44,9 +44,10 @@ export const SHADOW_FRAG = /* glsl */ `
   float march(vec3 P, vec3 Lv, float jitter){
     float maxd = distance(P, Lv);
     vec3 dir = (Lv - P) / max(maxd, 1e-4);
-    float step = maxd / float(SHADOW_STEPS);
+    float step = maxd / float(uSteps);
     float t = step * (0.5 + jitter);
-    for (int i = 0; i < SHADOW_STEPS; i++){
+    for (int i = 0; i < STEPS_MAX; i++){
+      if (i >= uSteps) break;
       vec3 S = P + dir * t;
       vec4 clip = uProj * vec4(S, 1.0);
       if (clip.w > 0.0){
@@ -72,7 +73,7 @@ export const SHADOW_FRAG = /* glsl */ `
     float jitter = ign(gl_FragCoord.xy);
 
     // Same lamp selection as the lit pass: array order (nearest-first), in-range,
-    // shadow-march only the meaningfully-lit nearest SHADOW_MAX. The per-fixture
+    // shadow-march only the meaningfully-lit nearest uMaxLamps. The per-fixture
     // flicker scales each lamp's weight so a strobing tube's shadow pulses with
     // its pool instead of staying frozen at full strength.
     float wsum = 0.0, vissum = 0.0;
@@ -86,7 +87,7 @@ export const SHADOW_FRAG = /* glsl */ `
       float ndl = wrapNL(dot(N, toL / max(d, 1e-4)));
       float contrib = uLampChar[i].a * band(ndl) * lampAtt(d, uLampRange);
       float vis = 1.0;
-      if (contrib > 0.08 && shadowed < SHADOW_MAX) { vis = march(P, Lv, jitter); shadowed++; }
+      if (contrib > 0.08 && shadowed < uMaxLamps) { vis = march(P, Lv, jitter); shadowed++; }
       wsum += contrib;
       vissum += contrib * vis;
     }

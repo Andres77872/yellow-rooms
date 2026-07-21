@@ -8,7 +8,7 @@ import {
 } from '../mapTypes.js'
 import { roomCatalogFor } from './catalog.js'
 
-// Room-role election (v22) — the planner half of the room catalog. Runs on
+// Room-role election (v23) — the planner half of the room catalog. Runs on
 // the finished office district plan AFTER circulation, doors, and every lobby
 // promotion settle, so a role can never go stale on a space that later
 // becomes circulation. Still a pure function of (seed, district, space ids).

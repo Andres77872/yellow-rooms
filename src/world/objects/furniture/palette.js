@@ -30,4 +30,23 @@ export const FURN_TINT = {
   bookBlue: [0.2, 0.3, 0.5],
   bookTan: [0.62, 0.52, 0.36],
   boardWhite: [0.92, 0.93, 0.94], // whiteboard enamel
+  // Residential set (hotel family) — warm domestic woods, porcelain,
+  // appliance enamel. Same flat-shape language as the office pieces.
+  bedFrame: [0.45, 0.34, 0.24], // bed frame + headboard wood
+  mattress: [0.88, 0.86, 0.78], // mattress + box spring
+  blanket: [0.5, 0.3, 0.3], // folded blanket band
+  pillow: [0.93, 0.92, 0.86], // pillows
+  shade: [0.9, 0.85, 0.7], // lamp shades (warm parchment)
+  woodDark: [0.38, 0.29, 0.2], // nightstand/wardrobe carcass
+  woodMid: [0.55, 0.43, 0.3], // drawer/door fronts
+  porcelain: [0.92, 0.93, 0.92], // toilet, tub, basin
+  chrome: [0.75, 0.78, 0.8], // taps, towel bars
+  mirror: [0.68, 0.78, 0.82], // vanity mirror glass
+  towel: [0.55, 0.68, 0.72], // hung towel accent
+  applianceWhite: [0.9, 0.91, 0.89], // fridge/washer/stove enamel
+  applianceSteel: [0.6, 0.62, 0.64], // range hob plate, washer trim
+  burner: [0.12, 0.12, 0.13], // stove burners, oven window
+  counterTop: [0.78, 0.76, 0.7], // kitchen worktop
+  tvBlack: [0.07, 0.08, 0.09], // TV panel
+  rug: [0.42, 0.28, 0.26], // armchair seat blanket accent
 }

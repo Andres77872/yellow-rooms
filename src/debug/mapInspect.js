@@ -17,9 +17,15 @@ import {
   MAP_FAMILY_SEWER,
   MAP_FAMILY_TOWER,
   SPACE_ROLE_ARCHIVE,
+  SPACE_ROLE_BATHROOM,
+  SPACE_ROLE_BEDROOM,
   SPACE_ROLE_BREAK,
   SPACE_ROLE_COPY,
+  SPACE_ROLE_DINING,
+  SPACE_ROLE_KITCHEN,
+  SPACE_ROLE_LAUNDRY,
   SPACE_ROLE_LIBRARY,
+  SPACE_ROLE_LIVING,
   SPACE_ROLE_LOUNGE,
   SPACE_ROLE_MEETING,
   SPACE_ROLE_NONE,
@@ -151,6 +157,12 @@ export const SPACE_ROLE_PALETTE = {
   [SPACE_ROLE_LIBRARY]: '#8fbf6f',
   [SPACE_ROLE_OFFICE]: '#9fb8d0',
   [SPACE_ROLE_LOUNGE]: '#e09fb8',
+  [SPACE_ROLE_BEDROOM]: '#f0a8a0',
+  [SPACE_ROLE_BATHROOM]: '#9fe0e8',
+  [SPACE_ROLE_KITCHEN]: '#f0d080',
+  [SPACE_ROLE_LIVING]: '#d0b088',
+  [SPACE_ROLE_DINING]: '#d88898',
+  [SPACE_ROLE_LAUNDRY]: '#a8c0f0',
 }
 
 // Deterministic hashed hue per spaceId (Knuth multiplicative hash) — stable
@@ -255,6 +267,12 @@ const SPACE_ROLE_LABEL = {
   [SPACE_ROLE_LIBRARY]: 'library',
   [SPACE_ROLE_OFFICE]: 'office',
   [SPACE_ROLE_LOUNGE]: 'lounge',
+  [SPACE_ROLE_BEDROOM]: 'bedroom',
+  [SPACE_ROLE_BATHROOM]: 'bathroom',
+  [SPACE_ROLE_KITCHEN]: 'kitchen',
+  [SPACE_ROLE_LIVING]: 'living',
+  [SPACE_ROLE_DINING]: 'dining',
+  [SPACE_ROLE_LAUNDRY]: 'laundry',
 }
 
 // Public accessor for the role vocabulary (label painters, tests).

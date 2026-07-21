@@ -15,6 +15,7 @@ import {
   STARE_RECOVER,
   STALKER_AMBIENT,
   PANEL_GLOW,
+  worldToCell,
 } from '../world/constants.js'
 import { applyFamilyMaterials, createGBufferMaterials, disposeGBufferMaterials } from '../render/gbufferMaterials.js'
 import { createGeometries, disposeGeometries } from '../render/geometries.js'
@@ -29,6 +30,7 @@ import { DeferredRenderer } from '../render/DeferredRenderer.js'
 import { LightField } from '../render/LightField.js'
 import { GameState, Phase } from './GameState.js'
 import { Settings } from './Settings.js'
+import { GRAPHICS_KEYS, GRAPHICS_PRESETS, resolveGraphics } from './graphics.js'
 import { IS_TOUCH, MAX_DPR, enterImmersive } from './device.js'
 import { DebugOverlay } from './DebugOverlay.js'
 import { DebugMode } from '../debug/DebugMode.js'
@@ -130,8 +132,6 @@ export class Engine {
         onFlashlight: () => this.controller.toggleFlashlight(),
         onPause: () => this.pause(),
       })
-      // Keep the flashlight button lit in sync (manual toggle + battery death).
-      this.controller.onToggleFlashlight = (on) => this.touchControls.setFlashlight(on)
       // Mobile app-switch / tab-hide: pointer lock never fires here, so pause
       // off visibility instead.
       document.addEventListener('visibilitychange', () => {
@@ -159,7 +159,17 @@ export class Engine {
 
     this.debugMode = new DebugMode(this) // inert until F2; visualizes gen/lighting/AI
 
-    this.controller.onStep = (spd) => this.audio.footstep(spd)
+    // Footsteps/landings sound like the floor they land on: family floor
+    // style refined by cell semantics (stairs, bridges, wet rooms — see
+    // ChunkManager.surfaceAt).
+    this.controller.onStep = (spd) => this.audio.footstep(spd, this._surfaceUnderPlayer())
+    this.controller.onLand = (impact) => this.audio.land(impact, this._surfaceUnderPlayer())
+    // One shared toggle slot: audible click always (incl. battery death),
+    // touch button state when touch controls exist.
+    this.controller.onToggleFlashlight = (on) => {
+      this.audio.flashlightClick(on)
+      this.touchControls?.setFlashlight(on)
+    }
     this.controller.onLockChange = (locked) => this._onLock(locked)
 
     this._last = performance.now()
@@ -174,6 +184,11 @@ export class Engine {
     addEventListener('resize', () => this._onResize())
     this.cm.prewarm(SPAWN, SPAWN) // full title backdrop on first paint
     this._animate = this._animate.bind(this)
+  }
+
+  _surfaceUnderPlayer() {
+    const c = this.controller
+    return this.cm.surfaceAt(worldToCell(c.pos.x), worldToCell(c.pos.z), c.floor)
   }
 
   _wireUI() {
@@ -197,6 +212,14 @@ export class Engine {
   // Persist, then apply what the store actually kept — Settings clamps/coerces,
   // so `v` is the request and the return value is the truth.
   _applySetting(k, v) {
+    // Hand-editing a preset-owned advanced control detaches the preset: the
+    // stored preset flips to 'custom' so a later boot can't silently stamp the
+    // preset's values back over the player's tuning. (Preset application goes
+    // through _runSetting('preset', ...) and never lands here, so it can't
+    // detach itself.)
+    if (GRAPHICS_KEYS.includes(k) && this.settings.get('preset') !== 'custom') {
+      this.settings.set('preset', 'custom')
+    }
     this._runSetting(k, this.settings.set(k, v))
   }
 
@@ -221,8 +244,30 @@ export class Engine {
     else if (k === 'invertX') this.controller.invertX = v
     else if (k === 'volume') this.audio.setVolume(v)
     else if (k === 'bob') this.controller.setBobEnabled(v)
+    else if (k === 'cameraFx') this.controller.setCameraFxEnabled(v)
+    else if (k === 'noise') this._noiseMode = v
     else if (k === 'outline') this.deferred.setOutline(v)
     else if (k === 'minimap') this.minimap.setVisible(v)
+    else if (k === 'preset') {
+      // A named preset pins every advanced graphics key; 'custom' pins nothing
+      // (the stored advanced values already ARE the truth).
+      if (v !== 'custom') {
+        for (const [gk, gv] of Object.entries(GRAPHICS_PRESETS[v])) this.settings.set(gk, gv)
+      }
+      this._applyGraphics()
+    } else if (GRAPHICS_KEYS.includes(k)) this._applyGraphics()
+  }
+
+  // Re-resolve the stored graphics settings and push them into the renderer:
+  // backing-store scale (render scale x DPR clamp) + the deferred pipeline's
+  // pass enables / loop trip counts. Cheap enough to run per changed key —
+  // same-size setSize calls early-return inside three.
+  _applyGraphics() {
+    const q = resolveGraphics(this.settings)
+    this._renderScale = q.renderScale
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, MAX_DPR) * q.renderScale)
+    this.deferred.setSize()
+    this.deferred.applyQuality(q)
   }
 
   start() {
@@ -286,7 +331,9 @@ export class Engine {
     const lvl = state.level
     state.mapFamily = cm.config.mapFamily?.selected ?? 'office'
     cm.setSeed(hashStr(`${state.seedText}#${lvl}`))
-    this.audio.resetLevel(cm.seed)
+    // Seed re-paces the ambient fake-outs; the family retargets the reverb
+    // space + texture one-shots (sewer drips, tower wind...).
+    this.audio.resetLevel(cm.seed, state.mapFamily)
 
     // Exit: reproducible XZ several chunks away, on a random non-zero floor
     // within five layers of the floor-0 spawn.
@@ -342,6 +389,9 @@ export class Engine {
     this.state.phase = Phase.TITLE
     this.audio.setTension(0)
     this.controller.unlock()
+    // The TITLE backdrop writes position/rotation each frame but never fov —
+    // quitting mid-sprint must not leave it rendering at the kicked FOV.
+    this.controller.resetCameraFx()
     this.touchControls?.reset()
     this.ui.showTitle()
     this._checkOrientation()
@@ -361,6 +411,7 @@ export class Engine {
     this.state.phase = Phase.DEAD
     this.state.deathReason = reason
     this.audio.setTension(0)
+    this.audio.deathStinger(reason)
     this.controller.unlock()
     this.touchControls?.reset()
     this.ui.showDeath(reason, this.state)
@@ -387,6 +438,7 @@ export class Engine {
     if (this.state.phase !== Phase.PLAYING) return
     this.state.phase = Phase.TRANSITION
     this.audio.setTension(0)
+    this.audio.exitStinger()
     this.touchControls?.reset()
     this.ui.showTransition(this.state.level + 1)
     this._transT = 2.6
@@ -496,7 +548,7 @@ export class Engine {
         floor: controller.floor,
       })
     }
-    this._applyFX()
+    this._applyFX(merged.tension)
 
     const inv = this.debugMode.active && this.debugMode.invincible
     if (merged.caught && !inv) this.die('caught')
@@ -574,14 +626,19 @@ export class Engine {
     if (reached) this._levelComplete()
   }
 
-  _applyFX() {
+  _applyFX(tension = 0) {
     const st = this.state
     const s = st.sanity
     // Stare charge (0..1): ramps the grade as the freeze nears failure.
     const e = Math.min(1, st.exposure / this._stareLimit())
     const g = this.deferred.grade
     g.vignette.value = 0.16 + (1 - s) * 0.5 + e * 0.12
-    g.grain.value = 0.022 + (1 - s) * 0.5 + e * 0.18
+    // NOISE setting: 'always' keeps the constant grain floor, 'danger' fades a
+    // slightly stronger floor in with enemy tension (a calm frame is clean),
+    // 'off' silences grain entirely — the sanity/stare terms included, so the
+    // toggle is a real accessibility escape, not just a floor removal.
+    const grainFloor = this._noiseMode === 'always' ? 0.022 : 0.03 * tension
+    g.grain.value = this._noiseMode === 'off' ? 0 : grainFloor + (1 - s) * 0.5 + e * 0.18
     g.aberration.value = 0.0012 + (1 - s) * 0.007 + e * 0.006
     g.dead.value = st.deadAmount
   }
@@ -589,10 +646,11 @@ export class Engine {
   _onResize() {
     this.camera.aspect = innerWidth / innerHeight
     this.camera.updateProjectionMatrix()
-    // Re-apply the clamped pixel ratio: browser zoom / moving the window between a
-    // HiDPI and a standard monitor changes devicePixelRatio, and a resize event
-    // fires for zoom. Without this the buffers stay at the construction-time ratio.
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, MAX_DPR))
+    // Re-apply the clamped pixel ratio (x the graphics render scale): browser
+    // zoom / moving the window between a HiDPI and a standard monitor changes
+    // devicePixelRatio, and a resize event fires for zoom. Without this the
+    // buffers stay at the construction-time ratio.
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, MAX_DPR) * (this._renderScale ?? 1))
     this.renderer.setSize(innerWidth, innerHeight)
     this.deferred.setSize()
     this.debugMode.resize(innerWidth, innerHeight)

@@ -1,4 +1,5 @@
 import {
+  MAP_FAMILY_HOTEL,
   MAP_FAMILY_LATTICE,
   MAP_FAMILY_OFFICE,
   MAP_FAMILY_SEWER,
@@ -6,9 +7,15 @@ import {
   SEWER_MODULE_CHAMBER_LARGE,
   SEWER_MODULE_CHAMBER_SMALL,
   SPACE_ROLE_ARCHIVE,
+  SPACE_ROLE_BATHROOM,
+  SPACE_ROLE_BEDROOM,
   SPACE_ROLE_BREAK,
   SPACE_ROLE_COPY,
+  SPACE_ROLE_DINING,
+  SPACE_ROLE_KITCHEN,
+  SPACE_ROLE_LAUNDRY,
   SPACE_ROLE_LIBRARY,
+  SPACE_ROLE_LIVING,
   SPACE_ROLE_LOUNGE,
   SPACE_ROLE_MEETING,
   SPACE_ROLE_OFFICE,
@@ -50,14 +57,38 @@ export const FURN_RACK = 8
 export const FURN_SOFA = 9
 export const FURN_BOOKSHELF = 10
 export const FURN_WHITEBOARD = 11
+// Residential vocabulary (hotel family).
+export const FURN_BED = 12
+export const FURN_NIGHTSTAND = 13
+export const FURN_WARDROBE = 14
+export const FURN_TOILET = 15
+export const FURN_SINK = 16
+export const FURN_TUB = 17
+export const FURN_COUNTER = 18
+export const FURN_STOVE = 19
+export const FURN_FRIDGE = 20
+export const FURN_TV = 21
+export const FURN_ARMCHAIR = 22
+export const FURN_WASHER = 23
 
 // Role-marker kinds read as landmarks: they appear ONLY inside rooms whose
-// role owns them, never in ordinary themed rooms.
+// role owns them, never in ordinary themed rooms. The residential fixtures
+// (bed, bathroom porcelain, kitchen appliances, the TV wall, washers) carry
+// the same landmark weight in the hotel family.
 export const ROLE_MARKER_KINDS = Object.freeze([
   FURN_COPIER,
   FURN_RACK,
   FURN_BOOKSHELF,
   FURN_COOLER,
+  FURN_BED,
+  FURN_TOILET,
+  FURN_SINK,
+  FURN_TUB,
+  FURN_COUNTER,
+  FURN_STOVE,
+  FURN_FRIDGE,
+  FURN_TV,
+  FURN_WASHER,
 ])
 
 // --- Room types (shared across families) -----------------------------------
@@ -158,6 +189,75 @@ export const ROOM_TYPES = Object.freeze({
       { op: 'row', kind: FURN_PLANT, min: 0, max: 2, chance: 0.5, salt: 0x10fb },
     ],
   }),
+  // Residential room types (hotel family). Same declarative contract:
+  // the anchor fixture always lands, everything else stays sparse — a made
+  // bed in an empty room is the hotel read, not a fully staged showroom.
+  [SPACE_ROLE_BEDROOM]: deepFreeze({
+    key: 'bedroom',
+    anchor: FURN_BED,
+    whitelist: [FURN_BED, FURN_NIGHTSTAND, FURN_WARDROBE, FURN_ARMCHAIR, FURN_PLANT],
+    grammar: [
+      // A second bed reads as the twin guest room; nightstands trail the beds.
+      { op: 'row', kind: FURN_BED, min: 1, max: 2, chance: 0.3, salt: 0xbe01 },
+      { op: 'row', kind: FURN_NIGHTSTAND, min: 0, max: 2, chance: 0.6, salt: 0xbe02 },
+      { op: 'row', kind: FURN_WARDROBE, min: 0, max: 1, chance: 0.5, salt: 0xbe03 },
+      { op: 'accent', kinds: [FURN_ARMCHAIR, FURN_PLANT], chance: 0.35, salt: 0xbe04 },
+    ],
+  }),
+  [SPACE_ROLE_BATHROOM]: deepFreeze({
+    key: 'bathroom',
+    anchor: FURN_TOILET,
+    whitelist: [FURN_TOILET, FURN_SINK, FURN_TUB, FURN_CABINET],
+    grammar: [
+      { op: 'row', kind: FURN_TOILET, min: 1, max: 1, chance: 1, salt: 0xba01 },
+      { op: 'row', kind: FURN_SINK, min: 1, max: 1, chance: 1, salt: 0xba02 },
+      { op: 'row', kind: FURN_TUB, min: 0, max: 1, chance: 0.55, salt: 0xba03 },
+      { op: 'row', kind: FURN_CABINET, min: 0, max: 1, chance: 0.25, salt: 0xba04 },
+    ],
+  }),
+  [SPACE_ROLE_KITCHEN]: deepFreeze({
+    key: 'kitchen',
+    anchor: FURN_COUNTER,
+    whitelist: [FURN_COUNTER, FURN_STOVE, FURN_FRIDGE, FURN_SINK, FURN_CABINET, FURN_TABLE, FURN_CHAIR],
+    grammar: [
+      // The counter run is the read; range and fridge complete the work line.
+      { op: 'row', kind: FURN_COUNTER, min: 1, max: 3, chance: 0.6, salt: 0xc101 },
+      { op: 'row', kind: FURN_STOVE, min: 1, max: 1, chance: 1, salt: 0xc102 },
+      { op: 'row', kind: FURN_FRIDGE, min: 1, max: 1, chance: 1, salt: 0xc103 },
+      { op: 'row', kind: FURN_SINK, min: 0, max: 1, chance: 0.4, salt: 0xc104 },
+      { op: 'conference', minArea: 16 },
+    ],
+  }),
+  [SPACE_ROLE_LIVING]: deepFreeze({
+    key: 'living',
+    anchor: FURN_SOFA,
+    whitelist: [FURN_SOFA, FURN_ARMCHAIR, FURN_TV, FURN_TABLE, FURN_CHAIR, FURN_PLANT],
+    grammar: [
+      { op: 'row', kind: FURN_SOFA, min: 1, max: 2, chance: 0.4, salt: 0x1101 },
+      { op: 'row', kind: FURN_TV, min: 1, max: 1, chance: 1, salt: 0x1102 },
+      { op: 'row', kind: FURN_ARMCHAIR, min: 0, max: 2, chance: 0.45, salt: 0x1103 },
+      { op: 'accent', kinds: [FURN_PLANT, FURN_ARMCHAIR], chance: 0.5, salt: 0x1104 },
+    ],
+  }),
+  [SPACE_ROLE_DINING]: deepFreeze({
+    key: 'dining',
+    anchor: FURN_TABLE,
+    whitelist: [FURN_TABLE, FURN_CHAIR, FURN_CABINET, FURN_PLANT],
+    grammar: [
+      { op: 'conference' },
+      { op: 'row', kind: FURN_CABINET, min: 0, max: 1, chance: 0.5, salt: 0xd101 }, // sideboard
+      { op: 'row', kind: FURN_PLANT, min: 0, max: 1, chance: 0.3, salt: 0xd102 },
+    ],
+  }),
+  [SPACE_ROLE_LAUNDRY]: deepFreeze({
+    key: 'laundry',
+    anchor: FURN_WASHER,
+    whitelist: [FURN_WASHER, FURN_CABINET],
+    grammar: [
+      { op: 'row', kind: FURN_WASHER, min: 1, max: 3, chance: 0.55, salt: 0x1a01 },
+      { op: 'row', kind: FURN_CABINET, min: 0, max: 1, chance: 0.4, salt: 0x1a02 },
+    ],
+  }),
 })
 
 // --- Ordinary-room themes (unnamed rooms) -----------------------------------
@@ -200,6 +300,52 @@ export const ORDINARY_THEMES = Object.freeze([
     ],
   }),
 ])
+
+// Hotel ordinary rooms furnish from a residential theme set — no desks or
+// whiteboards behind an unmarked hotel door. Same one-theme-per-room
+// contract, same bare share (an empty guest room IS the genre).
+export const HOTEL_ORDINARY_THEMES = Object.freeze([
+  deepFreeze({
+    key: 'sitting',
+    window: 0.35,
+    grammar: [
+      { op: 'row', kind: FURN_ARMCHAIR, min: 1, max: 2, chance: 0.55, salt: 0x9150 },
+    ],
+  }),
+  deepFreeze({
+    key: 'guest',
+    window: 0.65,
+    grammar: [
+      { op: 'row', kind: FURN_WARDROBE, min: 1, max: 1, chance: 1, salt: 0x9151 },
+      { op: 'row', kind: FURN_NIGHTSTAND, min: 0, max: 1, chance: 0.5, salt: 0x9152 },
+    ],
+  }),
+  deepFreeze({
+    key: 'parlor',
+    window: 0.85,
+    grammar: [
+      { op: 'row', kind: FURN_SOFA, min: 1, max: 1, chance: 1, salt: 0x9153 },
+      { op: 'row', kind: FURN_PLANT, min: 0, max: 1, chance: 0.6, salt: 0x9154 },
+    ],
+  }),
+  deepFreeze({
+    key: 'stash',
+    window: 1.01,
+    grammar: [
+      { op: 'row', kind: FURN_CABINET, min: 1, max: 2, chance: 0.4, salt: 0x9155 },
+    ],
+  }),
+])
+
+// Per-family ordinary theme sets. Families without an entry keep the office
+// set — byte-identical for every pre-hotel family.
+export const FAMILY_ORDINARY_THEMES = Object.freeze({
+  [MAP_FAMILY_HOTEL]: HOTEL_ORDINARY_THEMES,
+})
+
+export function ordinaryThemesFor(family) {
+  return FAMILY_ORDINARY_THEMES[family] ?? ORDINARY_THEMES
+}
 
 // --- Per-family catalogs -----------------------------------------------------
 // Election bands (rooms/election.js). A room is banded by its geometry and
@@ -288,6 +434,49 @@ export const FAMILY_ROOM_CATALOGS = Object.freeze({
   // archive — so off-band floors read as the building the lattice was cut
   // from, not as sterile leftovers.
   [MAP_FAMILY_SEWER]: deepFreeze({ quotas: {}, election: { large: [], mid: [], small: [] } }),
+  // The hotel floor: a residence, not an institution. Bedrooms are the
+  // dominant named room — most mid rooms behind most doors ARE guest rooms —
+  // with bathrooms threaded between them and exactly one of each communal
+  // room (kitchen, living room, dining room, laundry) per district, plus a
+  // lobby lounge and linen closets. The office-only vocabulary (copy, server,
+  // break, library...) never appears: nobody WORKED here, they stayed here.
+  [MAP_FAMILY_HOTEL]: deepFreeze({
+    quotas: {
+      [SPACE_ROLE_BEDROOM]: 5,
+      [SPACE_ROLE_BATHROOM]: 3,
+      [SPACE_ROLE_LIVING]: 1,
+      [SPACE_ROLE_DINING]: 1,
+      [SPACE_ROLE_KITCHEN]: 1,
+      [SPACE_ROLE_LAUNDRY]: 1,
+      [SPACE_ROLE_LOUNGE]: 1,
+      [SPACE_ROLE_STORAGE]: 2,
+    },
+    election: {
+      large: [
+        // wallFree mirrors the type's unconditional wall rows: a living room
+        // must host sofa AND TV, a kitchen counter+stove+fridge, a bathroom
+        // toilet+sink (break-room precedent: min:1 rows are unconditional).
+        { role: SPACE_ROLE_LIVING, window: 0.3, wallFree: 2 },
+        { role: SPACE_ROLE_DINING, window: 0.42, wallFree: 0 },
+        { role: SPACE_ROLE_BEDROOM, window: 0.62, wallFree: 1 },
+        { role: SPACE_ROLE_KITCHEN, window: 0.72, wallFree: 3 },
+        { role: SPACE_ROLE_LOUNGE, window: 0.8, wallFree: 1 },
+      ],
+      mid: [
+        { role: SPACE_ROLE_BEDROOM, window: 0.32, wallFree: 1 },
+        { role: SPACE_ROLE_BATHROOM, window: 0.44, wallFree: 2 },
+        { role: SPACE_ROLE_KITCHEN, window: 0.52, wallFree: 3 },
+        { role: SPACE_ROLE_LAUNDRY, window: 0.58, wallFree: 1 },
+        { role: SPACE_ROLE_STORAGE, window: 0.64, wallFree: 1 },
+        { role: SPACE_ROLE_DINING, window: 0.7, wallFree: 0 },
+      ],
+      small: [
+        { role: SPACE_ROLE_BATHROOM, window: 0.18, wallFree: 2 },
+        { role: SPACE_ROLE_STORAGE, window: 0.28, wallFree: 1 },
+        { role: SPACE_ROLE_BEDROOM, window: 0.38, wallFree: 1 },
+      ],
+    },
+  }),
   [MAP_FAMILY_LATTICE]: deepFreeze({
     quotas: {
       [SPACE_ROLE_SERVER]: 1,

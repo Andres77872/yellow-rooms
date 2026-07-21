@@ -9,9 +9,15 @@ import {
 } from './constants.js'
 import {
   SPACE_ROLE_ARCHIVE,
+  SPACE_ROLE_BATHROOM,
+  SPACE_ROLE_BEDROOM,
   SPACE_ROLE_BREAK,
   SPACE_ROLE_COPY,
+  SPACE_ROLE_DINING,
+  SPACE_ROLE_KITCHEN,
+  SPACE_ROLE_LAUNDRY,
   SPACE_ROLE_LIBRARY,
+  SPACE_ROLE_LIVING,
   SPACE_ROLE_LOUNGE,
   SPACE_ROLE_MEETING,
   SPACE_ROLE_OFFICE,
@@ -80,6 +86,15 @@ const ROLE_LIGHT = Object.freeze({
   [SPACE_ROLE_LIBRARY]: [0.98, 0.92, 0.8],
   [SPACE_ROLE_OFFICE]: [1.02, 1.01, 0.97],
   [SPACE_ROLE_LOUNGE]: [1.06, 0.96, 0.88],
+  // Residential roles (hotel family): bedrooms glow like bedside lamps,
+  // bathrooms go clinical cold porcelain, the kitchen keeps a bright task
+  // register, living/dining sit in warm evening light, laundry hums neutral.
+  [SPACE_ROLE_BEDROOM]: [1.06, 0.93, 0.8],
+  [SPACE_ROLE_BATHROOM]: [0.94, 1.02, 1.1],
+  [SPACE_ROLE_KITCHEN]: [1.08, 1.04, 0.94],
+  [SPACE_ROLE_LIVING]: [1.05, 0.97, 0.87],
+  [SPACE_ROLE_DINING]: [1.02, 0.93, 0.82],
+  [SPACE_ROLE_LAUNDRY]: [0.94, 0.97, 1.02],
 })
 
 // Colour-temperature drift as a per-channel multiplier around 1 (applied on

@@ -10,6 +10,18 @@ import {
   FURN_SOFA,
   FURN_BOOKSHELF,
   FURN_WHITEBOARD,
+  FURN_BED,
+  FURN_NIGHTSTAND,
+  FURN_WARDROBE,
+  FURN_TOILET,
+  FURN_SINK,
+  FURN_TUB,
+  FURN_COUNTER,
+  FURN_STOVE,
+  FURN_FRIDGE,
+  FURN_TV,
+  FURN_ARMCHAIR,
+  FURN_WASHER,
 } from '../../furniture.js'
 import { desk } from './desk.js'
 import { chair } from './chair.js'
@@ -22,6 +34,18 @@ import { rack } from './rack.js'
 import { sofa } from './sofa.js'
 import { bookshelf } from './bookshelf.js'
 import { whiteboard } from './whiteboard.js'
+import { bed } from './bed.js'
+import { nightstand } from './nightstand.js'
+import { wardrobe } from './wardrobe.js'
+import { toilet } from './toilet.js'
+import { sink } from './sink.js'
+import { tub } from './tub.js'
+import { counter } from './counter.js'
+import { stove } from './stove.js'
+import { fridge } from './fridge.js'
+import { tv } from './tv.js'
+import { armchair } from './armchair.js'
+import { washer } from './washer.js'
 
 // Furniture model registry — the object-definition half of the furniture
 // layer (placement lives in world/furniture.js). Each builder turns one
@@ -40,6 +64,18 @@ const BUILDERS = {
   [FURN_SOFA]: sofa,
   [FURN_BOOKSHELF]: bookshelf,
   [FURN_WHITEBOARD]: whiteboard,
+  [FURN_BED]: bed,
+  [FURN_NIGHTSTAND]: nightstand,
+  [FURN_WARDROBE]: wardrobe,
+  [FURN_TOILET]: toilet,
+  [FURN_SINK]: sink,
+  [FURN_TUB]: tub,
+  [FURN_COUNTER]: counter,
+  [FURN_STOVE]: stove,
+  [FURN_FRIDGE]: fridge,
+  [FURN_TV]: tv,
+  [FURN_ARMCHAIR]: armchair,
+  [FURN_WASHER]: washer,
 }
 
 export function pushFurnitureModel(out, f) {

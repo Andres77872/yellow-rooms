@@ -1,6 +1,7 @@
 import { Phase } from '../core/GameState.js'
 import { IS_TOUCH } from '../core/device.js'
-import { SENS_DEFAULT, SENS_MAX, SENS_MIN } from '../core/Settings.js'
+import { NOISE_MODES, SENS_DEFAULT, SENS_MAX, SENS_MIN } from '../core/Settings.js'
+import { PRESET_ORDER, TIER_ORDER } from '../core/graphics.js'
 import { MAP_FAMILY_ORDER } from '../world/mapFamily.js'
 import { MINIMAP_SIZE } from './Minimap.js'
 
@@ -142,6 +143,10 @@ const CSS = `
   font-size:12px; letter-spacing:.06em; font-variant-numeric:tabular-nums; }
 #ui input[type=range] { width:150px; accent-color:var(--gold); }
 #ui input[type=checkbox] { width:16px; height:16px; accent-color:var(--gold); }
+/* compact selects inside settings rows (the wide underline style above is for
+   the title card's family picker) */
+#ui .settings select { width:130px; flex:none; font-size:12px; padding:5px 2px;
+  text-align:right; letter-spacing:.1em; }
 
 /* ── death panel: red-shifted card ─────────────────────────────── */
 #p-dead .card { border-color:rgba(224,88,74,.4); }
@@ -306,6 +311,13 @@ const CONTROL_CHIPS = IS_TOUCH ? TOUCH_CHIPS : KEY_CHIPS
 const SENS_MULT_MIN = +(SENS_MIN / SENS_DEFAULT).toFixed(2)
 const SENS_MULT_MAX = +(SENS_MAX / SENS_DEFAULT).toFixed(2)
 
+// Graphics preset + per-feature tier pickers (labels shown uppercase).
+const presetOpts = [...PRESET_ORDER, 'custom']
+  .map((p) => `<option value="${p}">${p.toUpperCase()}</option>`)
+  .join('')
+const tierOpts = TIER_ORDER.map((t) => `<option value="${t}">${t.toUpperCase()}</option>`).join('')
+const noiseOpts = NOISE_MODES.map((n) => `<option value="${n}">${n.toUpperCase()}</option>`).join('')
+
 // The settings block lives on BOTH the title and pause cards, so it hooks into
 // each card via data-key attributes (ids must stay unique); _cache collects one
 // wired instance per card and refreshSettings() keeps them in lockstep.
@@ -322,8 +334,21 @@ const SETTINGS_HTML = `
     <input type="range" data-k="vol" min="0" max="1" step="0.02">
     <output class="val" data-k="volVal"></output>
   </span></label>
+  <div class="group">GRAPHICS</div>
+  <label>QUALITY PRESET <select data-k="preset">${presetOpts}</select></label>
+  <label>RENDER SCALE <span class="ctl">
+    <input type="range" data-k="rscale" min="0.5" max="1" step="0.05">
+    <output class="val" data-k="rscaleVal"></output>
+  </span></label>
+  <label>AMBIENT OCCLUSION <select data-k="ao">${tierOpts}</select></label>
+  <label>LAMP SHADOWS <select data-k="shadow">${tierOpts}</select></label>
+  <label>LIGHT SHAFTS <select data-k="volq">${tierOpts}</select></label>
+  <label>BLOOM <input type="checkbox" data-k="bloom"></label>
+  <label>ANTI-ALIASING (FXAA) <input type="checkbox" data-k="fxaa"></label>
   <div class="group">DISPLAY</div>
   <label>HEAD BOB <input type="checkbox" data-k="bob"></label>
+  <label>CAMERA FX <input type="checkbox" data-k="camfx"></label>
+  <label>NOISE <select data-k="noise">${noiseOpts}</select></label>
   <label>INK OUTLINE <input type="checkbox" data-k="out"></label>
   <label>MINIMAP <input type="checkbox" data-k="map"></label>`
 
@@ -481,7 +506,17 @@ export class UI {
         invX: q('invX'),
         vol: q('vol'),
         volVal: q('volVal'),
+        preset: q('preset'),
+        rscale: q('rscale'),
+        rscaleVal: q('rscaleVal'),
+        ao: q('ao'),
+        shadow: q('shadow'),
+        volq: q('volq'),
+        bloom: q('bloom'),
+        fxaa: q('fxaa'),
         bob: q('bob'),
+        camfx: q('camfx'),
+        noise: q('noise'),
         out: q('out'),
         map: q('map'),
       }
@@ -525,8 +560,47 @@ export class UI {
         this.onSetting?.('invertX', e.target.checked)
         changed()
       })
+      // Graphics: preset select + the advanced controls it pins. The Engine
+      // flips the stored preset to 'custom' on any advanced edit, and a preset
+      // pick rewrites the advanced keys — refreshSettings() re-syncs both.
+      b.preset.addEventListener('change', (e) => {
+        this.onSetting?.('preset', e.target.value)
+        changed()
+      })
+      b.rscale.addEventListener('input', (e) => {
+        this.onSetting?.('renderScale', parseFloat(e.target.value))
+        changed()
+      })
+      b.ao.addEventListener('change', (e) => {
+        this.onSetting?.('aoQuality', e.target.value)
+        changed()
+      })
+      b.shadow.addEventListener('change', (e) => {
+        this.onSetting?.('shadowQuality', e.target.value)
+        changed()
+      })
+      b.volq.addEventListener('change', (e) => {
+        this.onSetting?.('volQuality', e.target.value)
+        changed()
+      })
+      b.bloom.addEventListener('change', (e) => {
+        this.onSetting?.('bloom', e.target.checked)
+        changed()
+      })
+      b.fxaa.addEventListener('change', (e) => {
+        this.onSetting?.('fxaa', e.target.checked)
+        changed()
+      })
       b.bob.addEventListener('change', (e) => {
         this.onSetting?.('bob', e.target.checked)
+        changed()
+      })
+      b.camfx.addEventListener('change', (e) => {
+        this.onSetting?.('cameraFx', e.target.checked)
+        changed()
+      })
+      b.noise.addEventListener('change', (e) => {
+        this.onSetting?.('noise', e.target.value)
         changed()
       })
       b.out.addEventListener('change', (e) => {
@@ -552,7 +626,17 @@ export class UI {
       b.volVal.value = `${Math.round(s.get('volume') * 100)}%`
       b.invY.checked = s.get('invertY')
       b.invX.checked = s.get('invertX')
+      b.preset.value = s.get('preset')
+      b.rscale.value = s.get('renderScale')
+      b.rscaleVal.value = `${Math.round(s.get('renderScale') * 100)}%`
+      b.ao.value = s.get('aoQuality')
+      b.shadow.value = s.get('shadowQuality')
+      b.volq.value = s.get('volQuality')
+      b.bloom.checked = s.get('bloom')
+      b.fxaa.checked = s.get('fxaa')
       b.bob.checked = s.get('bob')
+      b.camfx.checked = s.get('cameraFx')
+      b.noise.value = s.get('noise')
       b.out.checked = s.get('outline')
       b.map.checked = s.get('minimap')
     }

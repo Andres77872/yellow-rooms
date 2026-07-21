@@ -14,13 +14,16 @@ import {
   FURN_RACK,
   FURN_SOFA,
   FURN_BOOKSHELF,
-  FURN_WHITEBOARD,
 } from '../furniture.js'
 import { DEFAULT_WORLD_CONFIG } from '../config.js'
+import { worldConfigForFamily } from '../mapFamily.js'
 import { CHUNK, FURN_MARGIN, ZONE_OFFICE } from '../constants.js'
+import { ROLE_MARKER_KINDS, ROOM_TYPES, ordinaryThemesFor } from '../rooms/catalog.js'
 import {
   CELL_ROOM,
   COLUMN_FURNITURE,
+  MAP_FAMILY_HOTEL,
+  MAP_FAMILY_OFFICE,
   SPACE_ROLE_NONE,
   SPACE_ROLE_MEETING,
   SPACE_ROLE_BREAK,
@@ -31,6 +34,12 @@ import {
   SPACE_ROLE_LIBRARY,
   SPACE_ROLE_OFFICE,
   SPACE_ROLE_LOUNGE,
+  SPACE_ROLE_BEDROOM,
+  SPACE_ROLE_BATHROOM,
+  SPACE_ROLE_KITCHEN,
+  SPACE_ROLE_LIVING,
+  SPACE_ROLE_DINING,
+  SPACE_ROLE_LAUNDRY,
   PASSAGE_DOOR,
   PASSAGE_WIDE,
 } from '../mapTypes.js'
@@ -195,37 +204,31 @@ describe('role-driven furnishing', () => {
 
 // Room/furniture coherence invariants (v21): a room's architectural claims —
 // its role band, its theme — must always be backed by the furniture in it.
+// Anchors, whitelists, marker kinds and theme piece sets all derive from the
+// room catalog (rooms/catalog.js), so the sweep covers every family that
+// elects rooms — office AND the hotel residential roles — and can never
+// drift from the catalog it checks.
 describe('room coherence', () => {
-  const ROLE_ANCHOR = {
-    [SPACE_ROLE_MEETING]: FURN_TABLE,
-    [SPACE_ROLE_BREAK]: FURN_COOLER,
-    [SPACE_ROLE_COPY]: FURN_COPIER,
-    [SPACE_ROLE_ARCHIVE]: FURN_BOOKSHELF,
-    [SPACE_ROLE_SERVER]: FURN_RACK,
-    [SPACE_ROLE_STORAGE]: FURN_CABINET,
-    [SPACE_ROLE_LIBRARY]: FURN_BOOKSHELF,
-    [SPACE_ROLE_OFFICE]: FURN_DESK,
-    [SPACE_ROLE_LOUNGE]: FURN_SOFA,
-  }
-  const ROLE_WHITELIST = {
-    [SPACE_ROLE_MEETING]: new Set([FURN_TABLE, FURN_CHAIR, FURN_WHITEBOARD]),
-    [SPACE_ROLE_BREAK]: new Set([FURN_COOLER, FURN_SOFA, FURN_TABLE, FURN_CHAIR, FURN_CABINET, FURN_PLANT]),
-    [SPACE_ROLE_COPY]: new Set([FURN_COPIER, FURN_CABINET]),
-    [SPACE_ROLE_ARCHIVE]: new Set([FURN_BOOKSHELF, FURN_CABINET]),
-    [SPACE_ROLE_SERVER]: new Set([FURN_RACK]),
-    [SPACE_ROLE_STORAGE]: new Set([FURN_CABINET]),
-    [SPACE_ROLE_LIBRARY]: new Set([FURN_BOOKSHELF, FURN_TABLE, FURN_CHAIR, FURN_PLANT]),
-    [SPACE_ROLE_OFFICE]: new Set([FURN_DESK, FURN_CHAIR, FURN_CABINET, FURN_PLANT]),
-    [SPACE_ROLE_LOUNGE]: new Set([FURN_SOFA, FURN_PLANT]),
-  }
-  // One theme per ordinary room: huddle, workroom, lounge, or stash.
-  const ORDINARY_THEMES = [
-    new Set([FURN_TABLE, FURN_CHAIR, FURN_WHITEBOARD]),
-    new Set([FURN_DESK, FURN_CHAIR, FURN_CABINET, FURN_PLANT]),
-    new Set([FURN_SOFA, FURN_PLANT]),
-    new Set([FURN_CABINET]),
-  ]
-  const ROLE_MARKERS = new Set([FURN_COPIER, FURN_RACK, FURN_BOOKSHELF, FURN_COOLER])
+  const ROLE_ANCHOR = Object.fromEntries(
+    Object.entries(ROOM_TYPES).map(([role, type]) => [role, type.anchor])
+  )
+  const ROLE_WHITELIST = Object.fromEntries(
+    Object.entries(ROOM_TYPES).map(([role, type]) => [role, new Set(type.whitelist)])
+  )
+  const ROLE_MARKERS = new Set(ROLE_MARKER_KINDS)
+  // One theme per ordinary room, elected per family (hotel furnishes from its
+  // residential set). Piece sets derive from the theme grammars: the row
+  // kinds plus the implicit conference/workstation pieces.
+  const themeSetsFor = (family) =>
+    ordinaryThemesFor(family).map((theme) => {
+      const kinds = new Set()
+      for (const op of theme.grammar) {
+        if (op.kind !== undefined) kinds.add(op.kind)
+        if (op.op === 'conference') kinds.add(FURN_TABLE).add(FURN_CHAIR)
+        if (op.op === 'workstations') kinds.add(FURN_DESK).add(FURN_CHAIR)
+      }
+      return kinds
+    })
 
   // Mirror of the furnishing candidate contract, with already-placed furniture
   // counted as free (the pre-placement view of the built chunk).
@@ -257,37 +260,43 @@ describe('room coherence', () => {
 
   it('always backs a role room with its anchor piece and only whitelisted kinds', () => {
     const districtChunks = cfg.office.districtChunks
-    // room key -> {role, kinds, capable}, aggregated across chunk slices
+    // room key -> {family, role, kinds, capable}, aggregated across chunk slices
     const rooms = new Map()
-    for (const seed of [777, 31337]) {
-      for (let cx = -4; cx <= 4; cx++) {
-        for (let cz = -4; cz <= 4; cz++) {
-          const data = buildChunk(seed, cx, 0, cz, cfg)
-          if (data.zone !== ZONE_OFFICE) continue
-          const seen = new Set()
-          const kindsBySpace = new Map()
-          for (const f of data.furniture) {
-            const id = data.spaceId[f.lz * CHUNK + f.lx]
-            if (!kindsBySpace.has(id)) kindsBySpace.set(id, new Set())
-            kindsBySpace.get(id).add(f.kind)
-          }
-          for (let i = 0; i < data.spaceId.length; i++) {
-            if (data.cellKind[i] !== CELL_ROOM) continue
-            const id = data.spaceId[i]
-            if (!id || seen.has(id)) continue
-            seen.add(id)
-            // Space ids are unique per district only — key by district too.
-            const key = `${seed}:${Math.floor(cx / districtChunks)},${Math.floor(cz / districtChunks)}:${id}`
-            if (!rooms.has(key)) {
-              rooms.set(key, { role: data.spaceRole[i], kinds: new Set(), candidates: 0, wallCandidates: 0 })
+    // Office and hotel share the district plan pipeline (same districtChunks),
+    // so the same sweep covers the institutional and the residential mix.
+    for (const family of [MAP_FAMILY_OFFICE, MAP_FAMILY_HOTEL]) {
+      const config = family === MAP_FAMILY_OFFICE ? cfg : worldConfigForFamily(family, cfg)
+      for (const seed of [777, 31337]) {
+        for (let cx = -4; cx <= 4; cx++) {
+          for (let cz = -4; cz <= 4; cz++) {
+            const data = buildChunk(seed, cx, 0, cz, config)
+            if (data.zone !== ZONE_OFFICE) continue
+            const seen = new Set()
+            const kindsBySpace = new Map()
+            for (const f of data.furniture) {
+              const id = data.spaceId[f.lz * CHUNK + f.lx]
+              if (!kindsBySpace.has(id)) kindsBySpace.set(id, new Set())
+              kindsBySpace.get(id).add(f.kind)
             }
-            const room = rooms.get(key)
-            const capability = sliceCapability(data, id)
-            if (capability.candidates >= 3) {
-              room.candidates = Math.max(room.candidates, capability.candidates)
-              room.wallCandidates = Math.max(room.wallCandidates, capability.wallCandidates)
+            for (let i = 0; i < data.spaceId.length; i++) {
+              if (data.cellKind[i] !== CELL_ROOM) continue
+              const id = data.spaceId[i]
+              if (!id || seen.has(id)) continue
+              seen.add(id)
+              // Space ids are unique per district only — key by family and
+              // district too.
+              const key = `${family}:${seed}:${Math.floor(cx / districtChunks)},${Math.floor(cz / districtChunks)}:${id}`
+              if (!rooms.has(key)) {
+                rooms.set(key, { family, role: data.spaceRole[i], kinds: new Set(), candidates: 0, wallCandidates: 0 })
+              }
+              const room = rooms.get(key)
+              const capability = sliceCapability(data, id)
+              if (capability.candidates >= 3) {
+                room.candidates = Math.max(room.candidates, capability.candidates)
+                room.wallCandidates = Math.max(room.wallCandidates, capability.wallCandidates)
+              }
+              for (const kind of kindsBySpace.get(id) ?? []) room.kinds.add(kind)
             }
-            for (const kind of kindsBySpace.get(id) ?? []) room.kinds.add(kind)
           }
         }
       }
@@ -295,6 +304,7 @@ describe('room coherence', () => {
 
     let roleRooms = 0
     let ordinaryFurnished = 0
+    const anchoredRoles = new Set()
     for (const [key, room] of rooms) {
       if (room.role !== SPACE_ROLE_NONE) {
         // Whitelist: nothing outside the role's grammar, ever.
@@ -308,23 +318,36 @@ describe('room coherence', () => {
         if (capable) {
           roleRooms++
           expect(room.kinds.has(anchor), `${key} role ${room.role} anchor`).toBe(true)
+          anchoredRoles.add(room.role)
         }
       } else if (room.kinds.size) {
         ordinaryFurnished++
-        // Theme coherence: the whole room fits ONE ordinary theme, and the
-        // role-marker kinds never leak into unmarked rooms.
+        // Theme coherence: the whole room fits ONE ordinary theme of its
+        // family, and the role-marker kinds (institutional AND residential)
+        // never leak into unmarked rooms.
         for (const kind of room.kinds) {
           expect(ROLE_MARKERS.has(kind), `${key} role marker ${kind} in ordinary room`).toBe(false)
         }
-        const fitsOneTheme = ORDINARY_THEMES.some((theme) =>
+        const fitsOneTheme = themeSetsFor(room.family).some((theme) =>
           [...room.kinds].every((kind) => theme.has(kind))
         )
         expect(fitsOneTheme, `${key} kinds ${[...room.kinds]}`).toBe(true)
       }
     }
-    // The corpus must actually exercise the invariants.
+    // The corpus must actually exercise the invariants — every residential
+    // role's anchor guarantee included.
     expect(roleRooms).toBeGreaterThan(30)
     expect(ordinaryFurnished).toBeGreaterThan(100)
+    for (const role of [
+      SPACE_ROLE_BEDROOM,
+      SPACE_ROLE_BATHROOM,
+      SPACE_ROLE_KITCHEN,
+      SPACE_ROLE_LIVING,
+      SPACE_ROLE_DINING,
+      SPACE_ROLE_LAUNDRY,
+    ]) {
+      expect(anchoredRoles.has(role), `residential role ${role} anchor exercised`).toBe(true)
+    }
   })
 
   it('never leaves a role band on promoted circulation', () => {

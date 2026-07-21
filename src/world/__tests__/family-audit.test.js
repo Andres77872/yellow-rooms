@@ -5,6 +5,7 @@ import { worldConfigForFamily } from '../mapFamily.js'
 import {
   CELL_BRIDGE,
   CELL_VOID,
+  MAP_FAMILY_HOTEL,
   MAP_FAMILY_LATTICE,
   PASSAGE_WALL,
   PASSAGE_WIDE,
@@ -17,7 +18,7 @@ import { structureAt } from '../structures/contract.js'
 const FAMILY_AUDIT_MODULE = '../familyAudit.js'
 const NEXT_VERSION = WORLD_GEN_VERSION + 1
 const OFFICE_SHARE_FLOOR = 0.75
-const REQUIRED_ROWS = ['office', 'sewer', 'tower', 'lattice']
+const REQUIRED_ROWS = ['office', 'sewer', 'tower', 'lattice', 'hotel']
 const SEWER_MODULE_KINDS = Object.freeze([
   't',
   'lBend',
@@ -730,6 +731,47 @@ function latticeProfiles() {
   }))
 }
 
+function hotelEmittedKinds() {
+  return [
+    {
+      family: 'office',
+      kind: 'officeMultilevel',
+      fixtures: [],
+    },
+    {
+      family: 'hotel',
+      kind: 'officeMultilevel',
+      fixtures: [],
+    },
+  ]
+}
+
+function hotelProfiles() {
+  return REQUIRED_ROWS.map((family) => ({
+    family,
+    enabled: family === 'office' || family === 'hotel',
+  }))
+}
+
+function hotelFamilyRows() {
+  const rows = familyRows()
+  const hotel = rows.find((row) => row.family === 'hotel')
+  Object.assign(hotel, {
+    enabled: true,
+    forcedProfile: true,
+    profileIdentity: 'hotel-forced-audit',
+    pins: { family: true, maximumHeight: null },
+    corpus: {
+      seeds: 4,
+      chunks: 108,
+      officeChunks: 0,
+      determinism: true,
+      layered: true,
+    },
+  })
+  return rows
+}
+
 function familyRows() {
   return [
     {
@@ -782,6 +824,16 @@ function familyRows() {
       generatorVersion: NEXT_VERSION,
       profileIdentity: 'lattice-disabled',
       seedDerivation: 'hashStr("audit-lattice-N#1")',
+      pins: { family: false, maximumHeight: null },
+      corpus: { seeds: 0, chunks: 0, determinism: true, layered: true },
+    },
+    {
+      family: 'hotel',
+      enabled: false,
+      forcedProfile: true,
+      generatorVersion: NEXT_VERSION,
+      profileIdentity: 'hotel-disabled',
+      seedDerivation: 'hashStr("audit-hotel-N#1")',
       pins: { family: false, maximumHeight: null },
       corpus: { seeds: 0, chunks: 0, determinism: true, layered: true },
     },
@@ -972,6 +1024,19 @@ async function runLatticeAudit({
     rows: canonicalRows,
     adapterOmission,
     adapterOverride,
+  })
+}
+
+async function runHotelAudit({
+  profiles = hotelProfiles(),
+  rows = hotelFamilyRows(),
+  adapterOmission = null,
+} = {}) {
+  return runAudit({
+    profiles,
+    emissions: hotelEmittedKinds(),
+    rows,
+    adapterOmission,
   })
 }
 
@@ -2344,6 +2409,88 @@ describe('independent all-floor Lattice row and Foundation safety consumption (t
       expectOfficeIndependent(report, office)
     }
   )
+})
+
+describe('hotel office-fabric registration and chunk evidence (D06/D10)', () => {
+  it('registers hotel through the office kind adapter without a parallel namespace', async () => {
+    const api = await plannedFamilyAudit()
+    const hotelFamily = api.FAMILY_AUDIT_ADAPTERS.families.hotel
+    const officeKind = api.FAMILY_AUDIT_ADAPTERS.kinds.officeMultilevel
+    const report = await runHotelAudit()
+
+    expect(hotelFamily).toMatchObject({
+      family: 'hotel',
+      kinds: ['officeMultilevel'],
+    })
+    expect(Object.isFrozen(hotelFamily)).toBe(true)
+    expect(officeKind.family).toBe('office')
+    expect(report.ok).toBe(true)
+    expect(rowFor(report, 'hotel').verdict).toEqual({ ok: true, reasons: [] })
+  })
+
+  it('isolates a missing hotel family adapter without damaging office evidence', async () => {
+    const rows = hotelFamilyRows()
+    const office = structuredClone(rows[0])
+    const report = await runHotelAudit({
+      rows,
+      adapterOmission: { scope: 'families', key: 'hotel' },
+    })
+
+    expectOnlyFamilyFailure(report, 'hotel', 'missing-family-adapter')
+    expectOfficeIndependent(report, office)
+  })
+
+  it('does not extend the office-fabric alias to any other family row', async () => {
+    const rows = sewerFamilyRows()
+    const office = structuredClone(rows[0])
+    const report = await runAudit({
+      profiles: sewerProfiles(),
+      emissions: [
+        { family: 'office', kind: 'officeMultilevel', fixtures: [] },
+        { family: 'sewer', kind: 'officeMultilevel', fixtures: [] },
+      ],
+      rows,
+    })
+
+    expectOnlyFamilyFailure(report, 'sewer', 'missing-kind-adapter')
+    expectOfficeIndependent(report, office)
+  })
+
+  it('audits generated hotel chunks through the office adapter registration', async () => {
+    const api = await plannedFamilyAudit()
+    const config = worldConfigForFamily(MAP_FAMILY_HOTEL)
+    const chunks = new Map()
+    for (const [cx, cy, cz] of [[-3, -15, -1], [-2, -15, -1], [0, 0, 0]]) {
+      chunks.set(`${cx},${cy},${cz}`, buildChunk(12345, cx, cy, cz, config))
+    }
+
+    const report = api.auditChunkFamilyRegistrations(chunks)
+    const structured = chunks.get('-3,-15,-1')
+
+    expect(structured.mapFamily).toBe('hotel')
+    expect(structured.structure).not.toHaveProperty('family')
+    expect(report).toMatchObject({
+      ok: true,
+      familyCounts: { hotel: 3 },
+      kindCounts: { officeMultilevel: 2 },
+      failures: [],
+    })
+  })
+
+  it('fails closed when another family claims a family-less office descriptor', async () => {
+    const api = await plannedFamilyAudit()
+    const config = worldConfigForFamily(MAP_FAMILY_HOTEL)
+    const hotelChunk = buildChunk(12345, -3, -15, -1, config)
+
+    const report = api.auditChunkFamilyRegistrations([
+      { mapFamily: 'tower', structure: hotelChunk.structure },
+    ])
+
+    expect(report.ok).toBe(false)
+    expect(report.failures).toEqual([
+      { family: 'tower', kind: 'officeMultilevel', reason: 'missing-kind-adapter' },
+    ])
+  })
 })
 
 describe('cross-family rollback evidence (task 6.1 RED)', () => {

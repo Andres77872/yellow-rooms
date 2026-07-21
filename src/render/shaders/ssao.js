@@ -1,11 +1,16 @@
 import { HASH, VIEW_RECON } from './common.js'
-import { QUALITY } from '../../core/device.js'
+import { AO_SAMPLES_MAX } from '../../world/constants.js'
 
 // --- SSAO (half-res): normal-oriented hemisphere kernel + range check -------
+// The kernel array is sized to the AO_SAMPLES_MAX ceiling; uSamples (runtime
+// quality tier) sets the live trip count. The kernel radii are stratified with
+// a radical-inverse sequence so ANY prefix of the array is a well-distributed
+// sub-kernel — a low tier reads the first 8 samples and still covers the
+// hemisphere instead of clustering at the origin.
 export const AO_FRAG = /* glsl */ `
   precision highp float;
   precision highp int;
-  #define AO_SAMPLES ${QUALITY.aoSamples}
+  #define AO_MAX ${AO_SAMPLES_MAX}
   in vec2 vUv;
   out vec4 outColor;
   uniform sampler2D tNormal;
@@ -13,7 +18,8 @@ export const AO_FRAG = /* glsl */ `
   uniform mat4 uProj;
   uniform mat4 uProjInverse;
   uniform vec2 uResolution;       // full-res, for noise rotation
-  uniform vec3 uKernel[AO_SAMPLES];
+  uniform vec3 uKernel[AO_MAX];
+  uniform int uSamples;           // live sample count (quality tier), <= AO_MAX
   uniform float uRadius;
   uniform float uBias;
   uniform float uIntensity;
@@ -37,7 +43,8 @@ export const AO_FRAG = /* glsl */ `
     mat3 TBN = mat3(T, B, N);
 
     float occ = 0.0;
-    for (int i = 0; i < AO_SAMPLES; i++){
+    for (int i = 0; i < AO_MAX; i++){
+      if (i >= uSamples) break;
       vec3 sp = P + (TBN * uKernel[i]) * uRadius;
       vec4 clip = uProj * vec4(sp, 1.0);
       if (clip.w <= 0.0) continue; // sample behind the eye: perspective divide flips xy -> false occlusion
@@ -47,7 +54,7 @@ export const AO_FRAG = /* glsl */ `
       float rangeCheck = smoothstep(0.0, 1.0, uRadius / max(abs(P.z - sceneZ), 1e-4));
       occ += (sceneZ >= sp.z + uBias ? 1.0 : 0.0) * rangeCheck;
     }
-    float ao = 1.0 - (occ / float(AO_SAMPLES)) * uIntensity;
+    float ao = 1.0 - (occ / float(uSamples)) * uIntensity;
     outColor = vec4(clamp(ao, 0.0, 1.0), 0.0, 0.0, 1.0);
   }
 `

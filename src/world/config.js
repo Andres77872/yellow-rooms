@@ -6,6 +6,7 @@ import {
   WORLD_GEN_VERSION,
 } from './constants.js'
 import {
+  MAP_FAMILY_HOTEL,
   MAP_FAMILY_LATTICE,
   MAP_FAMILY_OFFICE,
   MAP_FAMILY_SEWER,
@@ -63,6 +64,25 @@ export const LATTICE_RELEASE_EVIDENCE = Object.freeze({
   affectsMaximumHeight: true,
 })
 
+// Hotel first emits at 23, so its previous-namespace digests are zero
+// sentinels: there is no earlier hotel corpus to pin, only the fail-closed
+// previous/candidate inequality to preserve.
+export const HOTEL_RELEASE_EVIDENCE = Object.freeze({
+  family: MAP_FAMILY_HOTEL,
+  byteImpact: 'first-emission',
+  previousVersion: 22,
+  previousFamilyRepresentativeDigest: '0000000000000000000000000000000000000000000000000000000000000000',
+  previousFamilyCorpusDigest: '0000000000000000000000000000000000000000000000000000000000000000',
+  generatorVersion: 23,
+  globalGoldenDigest: 'd48bd356362db676ec09ff973ab5c7d37cd4ac8d29a58e2317d22ced43cffe14',
+  maximumHeightGoldenDigest: 'b2d74bc8f946b57963c229200170a39d94310679f5820a49ced8dcaed431c151',
+  familyRepresentativeDigest: 'b17bd9eba5dc326ecdfee6a79c3a0601ae725abc51a7a6741ebdb7985a347a7a',
+  familyCorpusDigest: 'a33e448b9d0a640423afd71c5e6951892f40888a5212f0d7c364480e2fb82d74',
+  profileIdentity: 'hotel-forced-audit',
+  seedDerivation: 'hashStr("audit-hotel-N#1")',
+  affectsMaximumHeight: false,
+})
+
 // Primary designer-facing tuning surface. Generators read these values through
 // the `config` passed in ctx; structural constants, deterministic salts, and
 // scoring weights remain beside their implementations.
@@ -100,6 +120,14 @@ export const DEFAULT_WORLD_CONFIG = {
         defaultExposureM: 5,
         maxExposureM: 20,
         minimumCueCells: 8,
+      },
+      // Hotel: the residential fabric family (additive at world-gen 23).
+      // Structurally it is the office pipeline (district plans, stairs,
+      // atria); identity comes from the hotel room catalog (rooms/catalog.js)
+      // and palette, so the profile carries no knobs beyond activation —
+      // same contract as Office.
+      [MAP_FAMILY_HOTEL]: {
+        enabled: true,
       },
     },
   },

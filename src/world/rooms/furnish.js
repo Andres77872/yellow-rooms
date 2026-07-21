@@ -22,6 +22,27 @@ import {
   BOOKSHELF_D,
   WHITEBOARD_W,
   WHITEBOARD_D,
+  BED_W,
+  BED_D,
+  NIGHTSTAND_W,
+  WARDROBE_W,
+  WARDROBE_D,
+  TOILET_W,
+  TOILET_D,
+  SINK_W,
+  SINK_D,
+  TUB_W,
+  TUB_D,
+  COUNTER_W,
+  COUNTER_D,
+  STOVE_W,
+  STOVE_D,
+  FRIDGE_W,
+  FRIDGE_D,
+  TV_W,
+  TV_D,
+  ARMCHAIR_W,
+  WASHER_W,
 } from '../constants.js'
 import { hash2i } from '../core/hash.js'
 import { COLUMN_FURNITURE } from '../mapTypes.js'
@@ -38,12 +59,24 @@ import {
   FURN_SOFA,
   FURN_BOOKSHELF,
   FURN_WHITEBOARD,
+  FURN_BED,
+  FURN_NIGHTSTAND,
+  FURN_WARDROBE,
+  FURN_TOILET,
+  FURN_SINK,
+  FURN_TUB,
+  FURN_COUNTER,
+  FURN_STOVE,
+  FURN_FRIDGE,
+  FURN_TV,
+  FURN_ARMCHAIR,
+  FURN_WASHER,
   ORDINARY_BARE_CHANCE,
-  ORDINARY_THEMES,
+  ordinaryThemesFor,
   roomTypeFor,
 } from './catalog.js'
 
-// Furnishing grammars (v22) — the interpreter half of the room catalog.
+// Furnishing grammars (v23) — the interpreter half of the room catalog.
 // rooms/catalog.js declares WHAT a room type contains (anchor, whitelist, op
 // program); this module knows HOW each op lands pieces: wall-hugging runs,
 // conference islands, desk workstations, per-room accents. Placement stays
@@ -52,8 +85,11 @@ import {
 // type's own grammar.
 //
 // Every roll keys on either global cell coordinates or the district-stable
-// space id, never on slice-local geometry, so two chunk slices of one
-// seam-crossing room always make the same calls.
+// space id, so two chunk slices of one seam-crossing room always make the
+// same dice calls. The SIZE gates are the exception: they read the chunk
+// slice (space.area is the slice's cell count), so a seam-crossing room
+// applies minArea/maxTables/maxDesks per slice — a big room may grow a
+// reading island in its large slice only.
 
 // facing: the direction the piece fronts toward, 0=+z 1=-z 2=+x 3=-x.
 const DIR = [
@@ -119,6 +155,8 @@ function furnishConference(ctx, space, candidates) {
     (a, b) =>
       Math.abs(a.gx - cx) + Math.abs(a.gz - cz) - (Math.abs(b.gx - cx) + Math.abs(b.gz - cz))
   )
+  // Slice-local size gate: space.area counts THIS chunk slice's cells, so a
+  // seam-crossing room may seat two tables in one slice and one in the other.
   const maxTables = space.area >= 26 && spaceRoll(FURN_SALT ^ 0x7a17, space) < 0.5 ? 2 : 1
   const used = new Set()
   let tables = 0
@@ -177,6 +215,7 @@ function furnishWorkstations(ctx, space, candidates) {
     }
   }
   wallCells.sort((a, b) => a.desk.gz - b.desk.gz || a.desk.gx - b.desk.gx)
+  // Slice-local size gate: the desk budget reads THIS chunk slice's area.
   const maxDesks = space.area >= 12 ? 2 : 1
   const used = new Set()
   const usedDesks = []
@@ -217,6 +256,18 @@ const PIECE_DIMS = {
   [FURN_SOFA]: [SOFA_W, SOFA_D],
   [FURN_BOOKSHELF]: [BOOKSHELF_W, BOOKSHELF_D],
   [FURN_WHITEBOARD]: [WHITEBOARD_W, WHITEBOARD_D],
+  [FURN_BED]: [BED_W, BED_D],
+  [FURN_NIGHTSTAND]: [NIGHTSTAND_W, NIGHTSTAND_W],
+  [FURN_WARDROBE]: [WARDROBE_W, WARDROBE_D],
+  [FURN_TOILET]: [TOILET_W, TOILET_D],
+  [FURN_SINK]: [SINK_W, SINK_D],
+  [FURN_TUB]: [TUB_W, TUB_D],
+  [FURN_COUNTER]: [COUNTER_W, COUNTER_D],
+  [FURN_STOVE]: [STOVE_W, STOVE_D],
+  [FURN_FRIDGE]: [FRIDGE_W, FRIDGE_D],
+  [FURN_TV]: [TV_W, TV_D],
+  [FURN_ARMCHAIR]: [ARMCHAIR_W, ARMCHAIR_W],
+  [FURN_WASHER]: [WASHER_W, WASHER_W],
 }
 
 // Wall-hugging run of one piece kind. The first `min` placements are the
@@ -267,6 +318,9 @@ function runGrammar(ctx, space, candidates, grammar) {
         })
         break
       case 'conference':
+        // Slice-local size gate: minArea compares against THIS chunk slice's
+        // area — a seam-crossing room grows its island only in slices that
+        // pass the gate themselves.
         if (!op.minArea || space.area >= op.minArea) {
           furnishConference(ctx, space, candidates)
         }
@@ -312,14 +366,17 @@ export function furnishRoleRoom(ctx, space, candidates, role) {
 // Ordinary rooms elect ONE coherent theme from their space id — a quarter stay
 // bare (emptiness is pacing), the rest read as a workroom, a huddle space, a
 // lounge corner, or an unlabelled stash. Each theme owns a strict piece set;
-// the role-marker kinds (copier, rack, bookshelf, cooler) never appear here.
-export function furnishOrdinaryRoom(ctx, space, candidates) {
+// the role-marker kinds (copier, rack, bookshelf, cooler...) never appear
+// here. The theme SET is a family decision (catalog FAMILY_ORDINARY_THEMES):
+// hotel ordinary rooms draw residential themes, everyone else keeps the
+// office set byte-for-byte.
+export function furnishOrdinaryRoom(ctx, space, candidates, family) {
   if (spaceRoll(FURN_SALT ^ 0xe3e7, space) < ORDINARY_BARE_CHANCE) return // bare
   // Theme election reads ONLY the space id — never slice-local size — so both
   // chunk slices of a seam-crossing room land in the same theme; the slice's
   // geometry then only scales how much of the theme fits.
   const t = spaceRoll(FURN_SALT ^ 0x7e3a, space)
-  for (const theme of ORDINARY_THEMES) {
+  for (const theme of ordinaryThemesFor(family)) {
     if (t < theme.window) {
       runGrammar(ctx, space, candidates, theme.grammar)
       return

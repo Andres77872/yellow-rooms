@@ -10,6 +10,7 @@ import { stampMultilevelRooms, stampTowerStructure } from './structures/multilev
 import { stampLatticeStructure } from './structures/latticeStamp.js'
 import { DEFAULT_WORLD_CONFIG } from './config.js'
 import {
+  MAP_FAMILY_HOTEL,
   MAP_FAMILY_OFFICE,
   MAP_FAMILY_LATTICE,
   MAP_FAMILY_SEWER,
@@ -135,7 +136,14 @@ export function buildChunk(seed, cx, cy, cz, config = DEFAULT_WORLD_CONFIG, exit
   // routed lobbies; open zones receive the same semantic label here. Run after
   // repair so nothing re-walls the halo, before lamps so fixtures see holes,
   // and before L6 so anomaly carves respect protected guard edges.
-  if (profile.family === MAP_FAMILY_OFFICE) {
+  if (
+    profile.family === MAP_FAMILY_OFFICE ||
+    profile.family === MAP_FAMILY_HOTEL
+  ) {
+    // Hotel is the second office-fabric family: same stair slabs, same
+    // canonical multilevel volumes (read as hotel atria/light wells). Its
+    // identity lives in the room catalog, palette and furnishing, not in a
+    // different structural grammar.
     stampStairs(data, seed, cx, cy, cz, config)
 
     // L4.6 — tall-structure stamp (v13). A root-seeded district/band contract is

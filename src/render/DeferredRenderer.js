@@ -1,8 +1,8 @@
 import * as THREE from 'three'
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js'
-import { QUALITY } from '../core/device.js'
 import { makeToonGradient } from './gradientRamp.js'
 import { makeLampUniforms } from './LightField.js'
+import { PassTimer } from './PassTimer.js'
 import { FS_VERT } from './shaders/common.js'
 import { LIGHTING_FRAG } from './shaders/lighting.js'
 import { SHADOW_FRAG, SHADOW_BLUR_FRAG } from './shaders/shadow.js'
@@ -21,6 +21,18 @@ import {
   PANEL_COLOR,
   LIGHT_RANGE,
   LIGHT_INTENSITY,
+  LAMP_QUERY_R,
+  LAMP_FADE_BAND,
+  AO_SAMPLES,
+  AO_SAMPLES_MAX,
+  SHADOW_STEPS,
+  SHADOW_STEPS_MAX,
+  SHADOW_MAX,
+  SHADOW_LAMPS_MAX,
+  VOL_STEPS,
+  VOL_STEPS_MAX,
+  VOL_LIGHT_MAX,
+  VOL_LIGHTS_MAX,
   AMBIENT_SKY,
   AMBIENT_GROUND,
   LAMP_WRAP,
@@ -78,14 +90,27 @@ const HALF_RT_OPTS = { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter,
 // over-saturated every solid color).
 const linVec = (hex) => new THREE.Color(hex)
 
+// Radical inverse base 2 (van der Corput): any PREFIX of the sequence covers
+// [0,1) uniformly, which is what lets one max-size kernel serve every quality
+// tier — the low tier reads the first 8 samples and still gets stratified
+// radii instead of the tight near-origin cluster a sorted ramp would give it.
+function radicalInverse(i) {
+  let r = 0
+  let f = 0.5
+  for (let v = i; v > 0; v >>= 1) {
+    if (v & 1) r += f
+    f *= 0.5
+  }
+  return r
+}
+
 function aoKernel(n) {
   const k = []
   for (let i = 0; i < n; i++) {
     const v = new THREE.Vector3(Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random())
     v.normalize()
-    let s = i / n
-    s = 0.1 + 0.9 * s * s // cluster samples near the origin
-    v.multiplyScalar(s)
+    const s = radicalInverse(i + 1)
+    v.multiplyScalar(0.1 + 0.9 * s * s) // cluster samples near the origin
     k.push(v)
   }
   return k
@@ -133,6 +158,55 @@ export class DeferredRenderer {
     this._initDebug()
 
     this.outlineEnabled = true
+    // Pass enables (runtime quality; see applyQuality). A disabled pass is
+    // skipped and its output cleared to the identity value each frame, so the
+    // downstream shaders never special-case it.
+    this.aoEnabled = true
+    this.shadowEnabled = true
+    this.volEnabled = true
+    this.bloomEnabled = true
+    this.fxaaEnabled = true
+
+    // Optional per-pass GPU timing (debug; see setTiming / PassTimer).
+    this.timer = null
+    this.timingEnabled = false
+  }
+
+  // Push a resolved quality object (core/graphics.js resolveGraphics) into the
+  // pipeline: pass enables + uniform loop trip counts. Clamped to the shader
+  // compile-time ceilings so a bad settings blob can't overrun a uniform array.
+  applyQuality(q) {
+    this.aoEnabled = !!q.ao.enabled
+    this.aoUniforms.uSamples.value = Math.min(q.ao.samples | 0, AO_SAMPLES_MAX)
+    this.shadowEnabled = !!q.shadow.enabled
+    this.shadowUniforms.uSteps.value = Math.min(q.shadow.steps | 0, SHADOW_STEPS_MAX)
+    this.shadowUniforms.uMaxLamps.value = Math.min(q.shadow.lamps | 0, SHADOW_LAMPS_MAX)
+    this.volEnabled = !!q.vol.enabled
+    this.volUniforms.uSteps.value = Math.min(q.vol.steps | 0, VOL_STEPS_MAX)
+    this.volUniforms.uMaxLights.value = Math.min(q.vol.lights | 0, VOL_LIGHTS_MAX)
+    this.bloomEnabled = !!q.bloom
+    this.fxaaEnabled = !!q.fxaa
+  }
+
+  // Toggle per-pass GPU timing (LightTool). Returns whether timing is actually
+  // running — false when EXT_disjoint_timer_query_webgl2 is unavailable.
+  setTiming(on) {
+    if (on && !this.timer) this.timer = new PassTimer(this.renderer.getContext())
+    this.timingEnabled = !!on && !!this.timer?.supported
+    if (!on && this.timer) {
+      this.timer.dispose()
+      this.timer = null
+    }
+    return this.timingEnabled
+  }
+
+  // Run one pass inside a GPU timer query when timing is on.
+  _pass(name, fn) {
+    if (!this.timingEnabled) return fn()
+    this.timer.begin(name)
+    const out = fn()
+    this.timer.end()
+    return out
   }
 
   // Retarget the lighting environment to a map-family palette
@@ -184,8 +258,10 @@ export class DeferredRenderer {
       uProj: { value: new THREE.Matrix4() },
       uProjInverse: { value: new THREE.Matrix4() },
       uResolution: { value: new THREE.Vector2(dw, dh) },
-      // Kernel size must match the AO_SAMPLES #define in ssao.js (uniform array).
-      uKernel: { value: aoKernel(QUALITY.aoSamples) },
+      // Kernel array is sized to the AO_MAX ceiling baked into ssao.js; the
+      // live tier reads the first uSamples entries (prefix-stratified kernel).
+      uKernel: { value: aoKernel(AO_SAMPLES_MAX) },
+      uSamples: { value: AO_SAMPLES },
       uRadius: { value: AO_RADIUS },
       uBias: { value: AO_BIAS },
       uIntensity: { value: AO_INTENSITY },
@@ -218,6 +294,8 @@ export class DeferredRenderer {
       uLampChar: this.lamps.uLampChar,
       uLampRange: { value: LIGHT_RANGE },
       uLampWrap: { value: LAMP_WRAP },
+      uSteps: { value: SHADOW_STEPS },
+      uMaxLamps: { value: SHADOW_MAX },
     }
     this.shadowQuad = new FullScreenQuad(fsMaterial(SHADOW_FRAG, this.shadowUniforms))
     this.shadowBlurUniforms = {
@@ -286,6 +364,8 @@ export class DeferredRenderer {
       uLampIntensity: this.lightUniforms.uLampIntensity,
       uLampFlicker: this.lightUniforms.uLampFlicker,
       uLampRange: { value: LIGHT_RANGE },
+      uSteps: { value: VOL_STEPS },
+      uMaxLights: { value: VOL_LIGHT_MAX },
       uDensity: { value: VOL_DENSITY },
       uMaxDist: { value: VOL_MAXDIST },
       uPhaseG: { value: VOL_PHASE_G },
@@ -399,13 +479,14 @@ export class DeferredRenderer {
       tVol: { value: this.volRT.texture },
       tBloom: { value: this.bloomRT.texture },
       tScene: { value: this.sceneRT.texture },
+      tShadow: { value: this.shadowBlurRT.texture },
       uProjInverse: { value: new THREE.Matrix4() },
       uDepthScale: { value: 1 / FAR },
     }
     this.debugQuad = new FullScreenQuad(fsMaterial(DEBUG_VIEW_FRAG, this.debugViewUniforms))
   }
 
-  // 0 disables; 1..9 blit a pipeline channel to screen (see DEBUG_VIEW_FRAG).
+  // 0 disables; 1..10 blit a pipeline channel to screen (see DEBUG_VIEW_FRAG).
   setDebugView(mode) {
     this.debugView = mode | 0
   }
@@ -454,15 +535,31 @@ export class DeferredRenderer {
   // Per-frame shared work done once, before the passes: invert the projection
   // (each pass then copies it) and transform the active lamps to view space on the
   // CPU (so the lighting / shadow / volumetric shaders skip a mat4*vec4 per lamp
-  // per pixel). Must run every frame — the view matrix changes as the camera moves.
+  // per pixel). Each lamp's uLampChar.w is also recombined here as raw flicker x
+  // query-edge set fade — the fade depends only on the lamp's camera distance,
+  // so computing it per lamp per FRAME (instead of per pixel in the lighting
+  // shader, as before) is free and gives the shadow + volumetric passes the
+  // same faded weight the lit pass uses. Must run every frame — the view matrix
+  // changes as the camera moves.
   _updateFrame() {
     const cam = this.camera
     this._projInv.copy(cam.projectionMatrix).invert()
     const view = cam.matrixWorldInverse
     const world = this.lamps.uLampPos.value
     const viewPos = this.lamps.uLampViewPos.value
+    const char = this.lamps.uLampChar.value
+    const raw = this.lamps.lampFlickerRaw
     const n = this.lamps.uLampCount.value
-    for (let i = 0; i < n; i++) viewPos[i].copy(world[i]).applyMatrix4(view)
+    const fade0 = LAMP_QUERY_R - LAMP_FADE_BAND
+    for (let i = 0; i < n; i++) {
+      const v = viewPos[i].copy(world[i]).applyMatrix4(view)
+      // 1 - smoothstep(fade0, LAMP_QUERY_R, cameraDist): lamps ramp to zero over
+      // the last LAMP_FADE_BAND units of the query radius, so LightField set
+      // churn is invisible (see render-coupling.test.js).
+      let t = (v.length() - fade0) / LAMP_FADE_BAND
+      t = t < 0 ? 0 : t > 1 ? 1 : t
+      char[i].w = raw[i] * (1 - t * t * (3 - 2 * t))
+    }
   }
 
   _renderGBuffer() {
@@ -564,10 +661,12 @@ export class DeferredRenderer {
     return this.outlineRT.texture
   }
 
-  _renderGrade(time, graded) {
+  // Grade to `target` — gradeRT when FXAA follows, or straight to screen
+  // (null) when FXAA is off and grade is the last pass.
+  _renderGrade(time, graded, target) {
     this.gradeUniforms.tDiffuse.value = graded
     this.gradeUniforms.time.value = time
-    this.renderer.setRenderTarget(this.gradeRT)
+    this.renderer.setRenderTarget(target)
     this.gradeQuad.render(this.renderer)
   }
 
@@ -590,35 +689,48 @@ export class DeferredRenderer {
 
   render(time) {
     // 1. G-buffer  2. SSAO  3. shadow mask  4. lighting  5. volumetrics  6. bloom  7. composite
-    this._updateFrame() // proj-inverse (once) + CPU lamp world->view
-    this._renderGBuffer()
-    this._renderSSAO()
-    // Skip raymarch passes whose result is provably constant: with no lamps
-    // loaded the shadow mask is 1 everywhere and (flashlight off) the shafts
-    // are black — dark zones get both passes for the price of a clear.
+    if (this.timingEnabled) this.timer.frameStart()
+    this._updateFrame() // proj-inverse (once) + CPU lamp world->view + char.w fold
+    this._pass('gbuffer', () => this._renderGBuffer())
+    // A pass can be skipped for two reasons: its quality tier disables it, or
+    // its result is provably constant this frame (no lamps loaded -> shadow
+    // mask is 1 everywhere; no lamps and no flashlight -> shafts are black).
+    // Either way the output RT is cleared to the pass's identity value, so
+    // downstream shaders read a neutral mask instead of stale frames.
     const lampsLoaded = this.lamps.uLampCount.value > 0
     const flashOn = this.lightUniforms.uFlashOn.value > 0.5
-    if (lampsLoaded) this._renderShadow()
+    if (this.aoEnabled) this._pass('ssao', () => this._renderSSAO())
+    else this._clearRT(this.aoBlurRT, 0xffffff)
+    if (this.shadowEnabled && lampsLoaded) this._pass('shadow', () => this._renderShadow())
     else this._clearRT(this.shadowBlurRT, 0xffffff)
-    this._renderLighting()
-    if (lampsLoaded || flashOn) this._renderVolumetrics()
+    this._pass('lighting', () => this._renderLighting())
+    if (this.volEnabled && (lampsLoaded || flashOn)) this._pass('volumetric', () => this._renderVolumetrics())
     else this._clearRT(this.volRT, 0x000000)
-    this._renderBloom()
-    this._composite()
+    if (this.bloomEnabled) this._pass('bloom', () => this._renderBloom())
+    else this._clearRT(this.bloomRT, 0x000000)
+    this._pass('composite', () => this._composite())
 
     // Debug: blit a single pipeline channel to screen, skip grade/FXAA.
     if (this.debugView) {
       this._renderDebug()
+      if (this.timingEnabled) this.timer.frameEnd()
       return
     }
 
-    // 7. outline (optional)  8. grade -> sRGB  9. FXAA -> screen
-    const graded = this._renderOutline()
-    this._renderGrade(time, graded)
-    this._renderFXAA()
+    // 7. outline (optional)  8. grade -> sRGB  9. FXAA -> screen (or grade
+    // straight to screen when FXAA is off).
+    const graded = this._pass('outline', () => this._renderOutline())
+    if (this.fxaaEnabled) {
+      this._pass('grade', () => this._renderGrade(time, graded, this.gradeRT))
+      this._pass('fxaa', () => this._renderFXAA())
+    } else {
+      this._pass('grade', () => this._renderGrade(time, graded, null))
+    }
+    if (this.timingEnabled) this.timer.frameEnd()
   }
 
   dispose() {
+    if (this.timer) this.timer.dispose()
     this.gBuffer.dispose()
     this.litRT.dispose()
     this.aoRT.dispose()

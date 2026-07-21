@@ -12,6 +12,18 @@ import {
   FURN_SOFA,
   FURN_BOOKSHELF,
   FURN_WHITEBOARD,
+  FURN_BED,
+  FURN_NIGHTSTAND,
+  FURN_WARDROBE,
+  FURN_TOILET,
+  FURN_SINK,
+  FURN_TUB,
+  FURN_COUNTER,
+  FURN_STOVE,
+  FURN_FRIDGE,
+  FURN_TV,
+  FURN_ARMCHAIR,
+  FURN_WASHER,
 } from '../furniture.js'
 import { pushFurnitureModel, FURN_TINT } from '../objects/furniture/index.js'
 import { buildChunk } from '../pipeline.js'
@@ -29,7 +41,11 @@ import {
 } from '../constants.js'
 import { CELL_ROOM, COLUMN_FURNITURE, COLUMN_MONUMENTAL, PASSAGE_DOOR } from '../mapTypes.js'
 
-const ALL_KINDS = [FURN_DESK, FURN_CHAIR, FURN_TABLE, FURN_CABINET, FURN_COPIER, FURN_COOLER, FURN_PLANT, FURN_SOFA, FURN_BOOKSHELF, FURN_WHITEBOARD]
+const ALL_KINDS = [
+  FURN_DESK, FURN_CHAIR, FURN_TABLE, FURN_CABINET, FURN_COPIER, FURN_COOLER, FURN_PLANT, FURN_SOFA, FURN_BOOKSHELF, FURN_WHITEBOARD,
+  // Residential set (hotel family).
+  FURN_BED, FURN_NIGHTSTAND, FURN_WARDROBE, FURN_TOILET, FURN_SINK, FURN_TUB, FURN_COUNTER, FURN_STOVE, FURN_FRIDGE, FURN_TV, FURN_ARMCHAIR, FURN_WASHER,
+]
 
 // A walled 8x8 room with a west door, cells typed CELL_ROOM under space id 7.
 function roomChunk(x0 = 3, z0 = 3, x1 = 10, z1 = 10) {
@@ -140,11 +156,23 @@ describe('pushFurnitureModel', () => {
       case FURN_SOFA: return alongX ? [0.75, 1.6] : [1.6, 0.75]
       case FURN_BOOKSHELF: return alongX ? [0.35, 1.15] : [1.15, 0.35]
       case FURN_WHITEBOARD: return alongX ? [0.1, 1.8] : [1.8, 0.1]
+      case FURN_BED: return alongX ? [2.1, 1.5] : [1.5, 2.1]
+      case FURN_NIGHTSTAND: return [0.5, 0.5]
+      case FURN_WARDROBE: return alongX ? [0.62, 1.25] : [1.25, 0.62]
+      case FURN_TOILET: return alongX ? [0.72, 0.45] : [0.45, 0.72]
+      case FURN_SINK: return alongX ? [0.5, 0.75] : [0.75, 0.5]
+      case FURN_TUB: return alongX ? [0.75, 1.65] : [1.65, 0.75]
+      case FURN_COUNTER: return alongX ? [0.65, 1.25] : [1.25, 0.65]
+      case FURN_STOVE: return [0.65, 0.65]
+      case FURN_FRIDGE: return alongX ? [0.72, 0.75] : [0.75, 0.72]
+      case FURN_TV: return alongX ? [0.45, 1.45] : [1.45, 0.45]
+      case FURN_ARMCHAIR: return [0.85, 0.85]
+      case FURN_WASHER: return [0.62, 0.62]
       default: return [0.5, 0.5]
     }
   }
 
-  it('builds every kind inside its collision AABB (plus hardware overhang) and under eye height', () => {
+  it('builds every kind inside its collision AABB (plus hardware overhang) and within the height contract', () => {
     for (const kind of ALL_KINDS) {
       for (const facing of [0, 1, 2, 3]) {
         const [w, d] = dims(kind, facing)
@@ -156,7 +184,10 @@ describe('pushFurnitureModel', () => {
           expect(Math.abs(p.px - f.x) + p.sx / 2).toBeLessThanOrEqual(f.w / 2 + 0.12)
           expect(Math.abs(p.pz - f.z) + p.sz / 2).toBeLessThanOrEqual(f.d / 2 + 0.12)
           expect(p.py - p.sy / 2).toBeGreaterThanOrEqual(-1e-9)
-          expect(p.py + p.sy / 2).toBeLessThanOrEqual(1.9)
+          // Wall-hugged storage may exceed eye height (rack 1.9, vanity
+          // mirror 1.98) — furniture columns never occlude the sight DDA.
+          // 2.05 fits the wardrobe, the tallest piece.
+          expect(p.py + p.sy / 2).toBeLessThanOrEqual(2.05)
           expect(Object.values(FURN_TINT)).toContainEqual(p.tint)
         }
       }

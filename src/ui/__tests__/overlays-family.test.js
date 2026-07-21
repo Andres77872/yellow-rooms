@@ -76,7 +76,7 @@ describe('showDeath / showPause run summaries', () => {
 describe('setFamilyInput', () => {
   it('round-trips known families and lands unknown values on office', () => {
     const ui = bareUI()
-    ui.el = { familySelect: fakeSelect(['office', 'sewer', 'tower', 'lattice']) }
+    ui.el = { familySelect: fakeSelect(['office', 'sewer', 'tower', 'lattice', 'hotel']) }
     ui.setFamilyInput('tower')
     expect(ui.el.familySelect.value).toBe('tower')
     ui.setFamilyInput('bogus')

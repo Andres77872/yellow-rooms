@@ -1,5 +1,6 @@
 import { DEFAULT_WORLD_CONFIG } from './config.js'
 import {
+  MAP_FAMILY_HOTEL,
   MAP_FAMILY_LATTICE,
   MAP_FAMILY_OFFICE,
   MAP_FAMILY_SEWER,
@@ -8,11 +9,13 @@ import {
 
 // Keep one canonical family order. Codes, audit rows, and deterministic family
 // projections derive from this order instead of maintaining parallel lists.
+// New families append at the end so established codes never re-number.
 export const MAP_FAMILY_ORDER = Object.freeze([
   MAP_FAMILY_OFFICE,
   MAP_FAMILY_SEWER,
   MAP_FAMILY_TOWER,
   MAP_FAMILY_LATTICE,
+  MAP_FAMILY_HOTEL,
 ])
 
 export const MAP_FAMILY_CODES = Object.freeze(Object.fromEntries(
@@ -91,6 +94,11 @@ function normalizeProfile(family, profile, requireEnabled) {
 
   let normalized
   if (family === MAP_FAMILY_OFFICE) {
+    normalized = { family, enabled: profile.enabled }
+  } else if (family === MAP_FAMILY_HOTEL) {
+    // Hotel rides the office fabric (district plans, stairs, multilevel
+    // atria) with its own room catalog and palette; like Office, the profile
+    // carries no structural knobs to validate.
     normalized = { family, enabled: profile.enabled }
   } else if (family === MAP_FAMILY_SEWER) {
     requireConstraint(
@@ -229,7 +237,8 @@ function applySewerSettings(config, profile) {
 function isRollbackFamily(kind) {
   return kind === MAP_FAMILY_SEWER ||
     kind === MAP_FAMILY_TOWER ||
-    kind === MAP_FAMILY_LATTICE
+    kind === MAP_FAMILY_LATTICE ||
+    kind === MAP_FAMILY_HOTEL
 }
 
 function restoreOfficeSettingsAfterSewerRollback(config, profile) {

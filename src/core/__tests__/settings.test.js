@@ -66,12 +66,21 @@ describe('Settings', () => {
   // A stale/hand-edited blob must never be able to strand the player with dead
   // look, a NaN in the audio gain graph, or a truthy-but-not-boolean toggle.
   it('coerces out-of-range and wrong-typed stored values', () => {
-    stubStorage({ sensitivity: 0, volume: 99, invertY: 'yes', bob: null })
+    stubStorage({
+      sensitivity: 0,
+      volume: 99,
+      invertY: 'yes',
+      bob: null,
+      cameraFx: 'yes',
+      noise: 'sometimes',
+    })
     const s = new Settings()
     expect(s.get('sensitivity')).toBe(SENS_MIN)
     expect(s.get('volume')).toBe(1)
     expect(s.get('invertY')).toBe(DEFAULTS.invertY)
     expect(s.get('bob')).toBe(DEFAULTS.bob)
+    expect(s.get('cameraFx')).toBe(DEFAULTS.cameraFx)
+    expect(s.get('noise')).toBe(DEFAULTS.noise)
   })
 
   it('coerces on set and returns the value actually kept', () => {

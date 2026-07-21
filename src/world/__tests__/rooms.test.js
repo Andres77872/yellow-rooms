@@ -6,6 +6,7 @@ import { worldConfigForFamily } from '../mapFamily.js'
 import { ZONE_OFFICE, CHUNK } from '../constants.js'
 import { countChunkComponents } from '../topology.js'
 import {
+  MAP_FAMILY_HOTEL,
   MAP_FAMILY_LATTICE,
   MAP_FAMILY_OFFICE,
   MAP_FAMILY_SEWER,
@@ -13,22 +14,31 @@ import {
   CELL_ROOM,
   SPACE_ROLE_NONE,
   SPACE_ROLE_ARCHIVE,
+  SPACE_ROLE_BEDROOM,
   SPACE_ROLE_BREAK,
   SPACE_ROLE_COPY,
   SPACE_ROLE_LIBRARY,
+  SPACE_ROLE_MEETING,
+  SPACE_ROLE_OFFICE,
   SPACE_ROLE_SERVER,
   SPACE_ROLE_STORAGE,
 } from '../mapTypes.js'
 import {
+  FAMILY_ORDINARY_THEMES,
   FAMILY_ROOM_CATALOGS,
+  FURN_BED,
   FURN_CABINET,
   FURN_CHAIR,
+  FURN_COOLER,
+  FURN_COPIER,
   FURN_DESK,
   FURN_RACK,
   FURN_TABLE,
+  FURN_WHITEBOARD,
   ORDINARY_THEMES,
   ROLE_MARKER_KINDS,
   ROOM_TYPES,
+  ordinaryThemesFor,
 } from '../rooms/catalog.js'
 
 const cfg = structuredClone(DEFAULT_WORLD_CONFIG)
@@ -60,12 +70,15 @@ describe('room catalog integrity', () => {
     }
   })
 
-  it('keeps role-marker kinds out of every ordinary theme', () => {
+  it('keeps role-marker kinds out of every ordinary theme, in every family set', () => {
     const markers = new Set(ROLE_MARKER_KINDS)
-    for (const theme of ORDINARY_THEMES) {
-      for (const op of theme.grammar) {
-        if (op.kind !== undefined) {
-          expect(markers.has(op.kind), `theme ${theme.key} kind ${op.kind}`).toBe(false)
+    const themeSets = [ORDINARY_THEMES, ...Object.values(FAMILY_ORDINARY_THEMES)]
+    for (const themes of themeSets) {
+      for (const theme of themes) {
+        for (const op of theme.grammar) {
+          if (op.kind !== undefined) {
+            expect(markers.has(op.kind), `theme ${theme.key} kind ${op.kind}`).toBe(false)
+          }
         }
       }
     }
@@ -113,7 +126,7 @@ describe('per-family room election', () => {
     // after the backstop are genuinely geometry-gated (a district with no
     // large room cannot host its meeting quota) — across an 81-district
     // corpus those stay vanishingly rare.
-    for (const family of [MAP_FAMILY_OFFICE, MAP_FAMILY_TOWER, MAP_FAMILY_LATTICE]) {
+    for (const family of [MAP_FAMILY_OFFICE, MAP_FAMILY_TOWER, MAP_FAMILY_LATTICE, MAP_FAMILY_HOTEL]) {
       const config = family === MAP_FAMILY_OFFICE ? cfg : worldConfigForFamily(family, cfg)
       const quotas = FAMILY_ROOM_CATALOGS[family].quotas
       const misses = new Map()
@@ -288,6 +301,7 @@ describe('room roles stay on real rooms (all families)', () => {
       MAP_FAMILY_SEWER,
       MAP_FAMILY_TOWER,
       MAP_FAMILY_LATTICE,
+      MAP_FAMILY_HOTEL,
     ]) {
       const config = family === MAP_FAMILY_OFFICE ? cfg : worldConfigForFamily(family, cfg)
       for (let cx = -2; cx <= 2; cx++) {
@@ -431,5 +445,97 @@ describe('lattice shell rooms', () => {
     }
     expect(structureChunks).toBeGreaterThan(0)
     expect(shellPieces).toBeGreaterThan(50)
+  })
+})
+
+// The hotel family: residential fabric on the office pipeline. Its
+// districts read as a residence — bedrooms dominate the named mix, the
+// communal rooms (kitchen, living, dining, laundry) each appear, and the
+// institutional office vocabulary never does.
+describe('hotel rooms', () => {
+  const hotelConfig = worldConfigForFamily(MAP_FAMILY_HOTEL, cfg)
+
+  it('elects only hotel-catalog roles, with bedrooms as the dominant named room', () => {
+    const allowed = new Set(
+      Object.values(FAMILY_ROOM_CATALOGS[MAP_FAMILY_HOTEL].election)
+        .flat().map((e) => e.role)
+    )
+    const counts = new Map()
+    for (let dx = -4; dx <= 4; dx++) {
+      for (let dz = -4; dz <= 4; dz++) {
+        const plan = buildOfficeDistrictPlan(777, dx, dz, hotelConfig)
+        for (const s of plan.spaces) {
+          if (s.type !== 'room' || !s.role) continue
+          expect(allowed.has(s.role), `hotel role ${s.role}`).toBe(true)
+          counts.set(s.role, (counts.get(s.role) ?? 0) + 1)
+        }
+      }
+    }
+    // Every catalog role appears somewhere in a 9x9-district corpus.
+    for (const role of allowed) expect(counts.get(role) ?? 0, `hotel elects ${role}`).toBeGreaterThan(0)
+    // Bedrooms are the residence's dominant named room.
+    const max = Math.max(...counts.values())
+    expect(counts.get(SPACE_ROLE_BEDROOM)).toBe(max)
+    // The institutional identity roles never appear behind a hotel door.
+    for (const banned of [
+      SPACE_ROLE_MEETING,
+      SPACE_ROLE_BREAK,
+      SPACE_ROLE_COPY,
+      SPACE_ROLE_SERVER,
+      SPACE_ROLE_ARCHIVE,
+      SPACE_ROLE_LIBRARY,
+      SPACE_ROLE_OFFICE,
+    ]) {
+      expect(counts.has(banned), `hotel banned role ${banned}`).toBe(false)
+    }
+  })
+
+  it('furnishes hotel floors residentially — role whitelists plus hotel themes, never office kit', () => {
+    const allowedKinds = new Set([
+      ...Object.keys(FAMILY_ROOM_CATALOGS[MAP_FAMILY_HOTEL].quotas)
+        .flatMap((role) => ROOM_TYPES[role].whitelist),
+      ...ordinaryThemesFor(MAP_FAMILY_HOTEL).flatMap((theme) =>
+        theme.grammar.map((op) => op.kind).filter((kind) => kind !== undefined)
+      ),
+      FURN_TABLE, // conference op (dining/kitchen islands)
+      FURN_CHAIR, // conference op seating
+    ])
+    const officeKit = new Set([FURN_DESK, FURN_COPIER, FURN_COOLER, FURN_RACK, FURN_WHITEBOARD])
+    let pieces = 0
+    let beds = 0
+    for (let cx = -3; cx <= 3; cx++) {
+      for (let cz = -3; cz <= 3; cz++) {
+        const a = buildChunk(777, cx, 0, cz, hotelConfig)
+        const b = buildChunk(777, cx, 0, cz, hotelConfig)
+        expect(a.furniture).toEqual(b.furniture)
+        if (a.zone !== ZONE_OFFICE) continue
+        pieces += a.furniture.length
+        for (const f of a.furniture) {
+          expect(allowedKinds.has(f.kind), `hotel kind ${f.kind}`).toBe(true)
+          expect(officeKit.has(f.kind), `office kit ${f.kind} in hotel`).toBe(false)
+          if (f.kind === FURN_BED) beds++
+        }
+        // Role bytes on hotel floors come from the hotel catalog.
+        for (let i = 0; i < a.spaceRole.length; i++) {
+          const role = a.spaceRole[i]
+          if (role === SPACE_ROLE_NONE) continue
+          expect(
+            FAMILY_ROOM_CATALOGS[MAP_FAMILY_HOTEL].quotas[role],
+            `hotel spaceRole ${role}`
+          ).toBeGreaterThan(0)
+        }
+      }
+    }
+    expect(pieces).toBeGreaterThan(50)
+    expect(beds).toBeGreaterThan(5)
+  })
+
+  it('keeps hotel plans out of the office plan cache', () => {
+    const officeBefore = buildOfficeDistrictPlan(777, 0, 0, cfg)
+    const hotel = buildOfficeDistrictPlan(777, 0, 0, hotelConfig)
+    const officeAfter = buildOfficeDistrictPlan(777, 0, 0, cfg)
+    expect(officeAfter.cellKind).toEqual(officeBefore.cellKind)
+    expect(officeAfter.roleGrid).toEqual(officeBefore.roleGrid)
+    expect(hotel.roleGrid).not.toEqual(officeBefore.roleGrid)
   })
 })

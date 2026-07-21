@@ -15,12 +15,17 @@ import { MAP_FAMILY_LATTICE, MAP_FAMILY_TOWER } from '../world/mapTypes.js'
 import { moveAndCollide } from './collision.js'
 import { groundHeightAt } from './ground.js'
 import { HeadBob } from './headbob.js'
+import { CameraFx } from './cameraFx.js'
 
 const MAX_PITCH = Math.PI / 2 - 0.05
 // Thumb travel on a phone is far shorter than mouse travel, so touch look runs
 // hotter than the shared sensitivity setting (which still scales it).
 const TOUCH_LOOK_MULT = 2.2
 const STAMINA_DRAIN = 1 / 6 // empty after ~6s of sprint
+// Minimum fall speed (u/s) that counts as a landing worth a sound. Grounded
+// stair walking is glue-to-ground (never airborne), and GROUND_SNAP hides
+// sub-snap pops, so only real drops through slab holes reach this.
+const LAND_CUE_MIN = 3
 const STAMINA_REGEN = 1 / 9
 const BATTERY_DRAIN = 1 / 90 // ~90s of light
 const UINT32_MAX = 0xffffffff
@@ -87,10 +92,16 @@ export class Controller {
     this.move = { x: 0, z: 0 } // analog stick input, unit-clamped by the caller
     this.sprintTouch = false
     this.headbob = new HeadBob()
+    this.camFx = new CameraFx()
+    this.sprinting = false
+    // Captured, not the FOV constant: the camera is the single source of truth,
+    // and test cameras built with other fovs keep working.
+    this._baseFov = camera.fov
     this.flashlight = null // SpotLight, set by Engine
     this._prevPhase = 0
 
     this.onStep = null // footstep callback
+    this.onLand = null // (fallSpeed:number) => void, after a real airborne drop
     this.onLockChange = null // (locked:boolean) => void
     this.onToggleFlashlight = null
 
@@ -178,12 +189,31 @@ export class Controller {
     this.pitch = 0
     this.speed = 0
     this.speedMul = 1
+    this.sprinting = false
+    this.resetCameraFx()
     this._hardVoidPlane = null
     this._hardVoidDeathFired = false
   }
 
   setBobEnabled(on) {
     this.headbob.enabled = on
+  }
+
+  setCameraFxEnabled(on) {
+    this.camFx.enabled = on
+    this.headbob.fx = on
+    if (!on) this.resetCameraFx()
+  }
+
+  // Snap the camera fx home NOW. applyFrame only runs while PLAYING, so a
+  // pause-menu toggle (or quit to title) must not leave a kicked FOV frozen
+  // behind the overlay.
+  resetCameraFx() {
+    this.camFx.reset()
+    if (this.camera.fov !== this._baseFov) {
+      this.camera.fov = this._baseFov
+      this.camera.updateProjectionMatrix()
+    }
   }
 
   // Physics sub-step (called several times per frame).
@@ -215,6 +245,7 @@ export class Controller {
       (k.has('ShiftLeft') || k.has('ShiftRight') || this.sprintTouch) &&
       this.state.stamina > 0.02 &&
       moving
+    this.sprinting = wantSprint
     // speedMul (<=1) is the enemy-proximity drag set by the Engine each frame.
     const speed = (wantSprint ? SPRINT_SPEED : WALK_SPEED) * this.speedMul
 
@@ -256,6 +287,8 @@ export class Controller {
       }
     }
 
+    const wasAirborne = !this.grounded
+    const fallSpeed = -this.vy
     if (this._hardVoidPlane) {
       this.vy = Math.max(this.vy - GRAVITY * dt, -MAX_FALL_SPEED)
       this.pos.y += this.vy * dt
@@ -285,6 +318,13 @@ export class Controller {
     const yRel = this.pos.y - layerY(this.floor)
     if (yRel >= FLOOR_SWITCH_Y) this._setFloor(this.floor + 1)
     else if (yRel <= -FLOOR_SWITCH_Y) this._setFloor(this.floor - 1)
+
+    // Landing cue: fired after the floor handoff so the listener reads the
+    // settled floor when it asks what surface the player just hit.
+    if (wasAirborne && this.grounded && fallSpeed > LAND_CUE_MIN) {
+      this.onLand?.(fallSpeed)
+      this.camFx.notifyLand(fallSpeed)
+    }
 
     if (
       this._hardVoidPlane &&
@@ -319,14 +359,24 @@ export class Controller {
     }
     if (this.flashlight) this.flashlight.intensity = this.state.flashlightOn ? 6 : 0
 
-    // Head-bob + camera
+    // Head-bob + camera fx + camera
     const moving = this.speed > 0.4
     this.headbob.update(dt, this.speed, moving)
     const cam = this.camera
+    const right = _right.set(1, 0, 0).applyEuler(_euler.set(0, this.yaw, 0))
+    // Lean follows VELOCITY projected on right, not raw input: ACCEL gives free
+    // ease-in/out and a blocking wall zeroes the lean with the motion.
+    const strafe = clamp((this.vel.x * right.x + this.vel.z * right.z) / SPRINT_SPEED, -1, 1)
+    this.camFx.update(dt, this.sprinting, strafe)
     cam.position.set(this.pos.x, this.pos.y + EYE_H, this.pos.z)
-    cam.position.y += this.headbob.bobY
-    cam.position.addScaledVector(_right.set(1, 0, 0).applyEuler(_euler.set(0, this.yaw, 0)), this.headbob.bobX)
-    cam.rotation.set(this.pitch, this.yaw, 0, 'YXZ')
+    cam.position.y += this.headbob.bobY + this.camFx.dipY
+    cam.position.addScaledVector(right, this.headbob.bobX)
+    cam.rotation.set(this.pitch, this.yaw, this.camFx.roll + this.headbob.bobRoll, 'YXZ')
+    const fov = this._baseFov + this.camFx.fovOffset
+    if (cam.fov !== fov) {
+      cam.fov = fov
+      cam.updateProjectionMatrix()
+    }
 
     // Footstep on each downward bob crossing
     const phase = this.headbob.phase

@@ -1,4 +1,5 @@
 import {
+  MAP_FAMILY_HOTEL,
   MAP_FAMILY_LATTICE,
   MAP_FAMILY_OFFICE,
   MAP_FAMILY_SEWER,
@@ -18,6 +19,7 @@ import { deepFreeze } from './mapFamily.js'
 //   sewer   — damp green-grey masonry under cold tubes
 //   tower   — cool dusk glass-and-tile, blue void light
 //   lattice — dark riveted steel under sodium cage lamps
+//   hotel   — faded burgundy-and-rose residence under tired tungsten
 
 export const FAMILY_PALETTES = deepFreeze({
   [MAP_FAMILY_OFFICE]: {
@@ -118,6 +120,39 @@ export const FAMILY_PALETTES = deepFreeze({
     rim: 0xccd6ee,
     gradeTint: [0.97, 1.0, 1.08],
     gradeSat: 1.06,
+  },
+
+  [MAP_FAMILY_HOTEL]: {
+    floor: {
+      style: 'carpet',
+      base: '#6e3038',
+      flecks: ['#632a32', '#7a3a42', '#582630'],
+      stains: ['#4e2229', '#5c2a31'],
+    },
+    wall: {
+      style: 'wallpaper',
+      base: '#d9c4ae',
+      seam: '#7d5a4a',
+      flecks: ['#a3806a', '#c4a98e'],
+      topLight: 'rgba(255,236,200,0.14)',
+      floorShade: 'rgba(90,52,44,0.26)',
+    },
+    ceiling: {
+      style: 'tile',
+      base: '#d8cdb8',
+      line: '#8a7c66',
+      flecks: ['#cec3ac', '#e2d7c2'],
+    },
+    trim: 0xc9b598,
+    leaf: 0x6b4034,
+    panel: 0xffd490,
+    panelDead: 0x4c3a30,
+    fog: 0x3c2028,
+    ambientSky: 0x362a34,
+    ambientGround: 0x241c22,
+    rim: 0xe0cfc4,
+    gradeTint: [1.06, 0.97, 0.9],
+    gradeSat: 1.1,
   },
 
   [MAP_FAMILY_LATTICE]: {

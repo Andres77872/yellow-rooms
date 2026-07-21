@@ -7,8 +7,6 @@ import {
   LAMP_AO_MIX,
   SKY_ZENITH_MULT,
   SKY_NADIR_MULT,
-  LAMP_QUERY_R,
-  LAMP_FADE_BAND,
 } from '../../world/constants.js'
 
 // --- Deferred lighting: hemispheric ambient + MANY cel-banded lamps +
@@ -110,13 +108,15 @@ export const LIGHTING_FRAG = /* glsl */ `
     float hemi = 0.5 + 0.5 * dot(N, uUpView);
     vec3 ambient = mix(uAmbGround, uAmbSky, hemi) * ao;
 
-    // Many lamps, cel-banded by N·L, attenuated to 0 at range. Each lamp also
-    // fades over the last LAMP_FADE_BAND units of the query radius (lamp
-    // distance from the CAMERA, i.e. length of its view-space position), so
+    // Many lamps, cel-banded by N·L, attenuated to 0 at range. Each lamp's
+    // uLampChar.a already folds the query-edge set fade into its flicker
+    // (DeferredRenderer._updateFrame computes it per lamp per frame on the CPU
+    // — it only depends on the lamp's camera distance, never on the pixel), so
     // lamps entering/leaving the LightField candidate set ramp in smoothly
-    // instead of snapping their whole floor pool on/off mid-walk. Every lamp
-    // carries its own tint + flicker identity, so neighbouring fixtures never
-    // pulse in lockstep (and a bad tube strobes on its own).
+    // instead of snapping their whole floor pool on/off mid-walk — and the
+    // shadow + volumetric passes see the exact same fade. Every lamp carries
+    // its own tint + flicker identity, so neighbouring fixtures never pulse in
+    // lockstep (and a bad tube strobes on its own).
     vec3 lamps = vec3(0.0);
     for (int i = 0; i < LIGHT_MAX; i++) {
       if (i >= uLampCount) break;
@@ -125,10 +125,8 @@ export const LIGHTING_FRAG = /* glsl */ `
       float d = length(toL);
       if (d > uLampRange) continue;
       float ndl = wrapNL(dot(N, toL / max(d, 1e-4)));
-      float setFade = 1.0 - smoothstep(
-        ${glslFloat(LAMP_QUERY_R - LAMP_FADE_BAND)}, ${glslFloat(LAMP_QUERY_R)}, length(Lv));
       lamps += uLampChar[i].rgb *
-        (uLampChar[i].a * band(ndl + celDither) * lampAtt(d, uLampRange) * setFade);
+        (uLampChar[i].a * band(ndl + celDither) * lampAtt(d, uLampRange));
     }
     // Screen-space lamp shadows (half-res, blurred) modulate the whole lamp term.
     // tShadow is the contribution-weighted visibility, so this equals per-lamp

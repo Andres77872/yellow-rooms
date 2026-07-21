@@ -11,8 +11,8 @@ import { cellEdges, furnishOrdinaryRoom, furnishRoleRoom } from './rooms/furnish
 //
 // Placement contract:
 //   - rooms only (CELL_ROOM cells of a real space): office-fabric rooms in
-//     the office/tower/lattice families, and the prescribed chambers of the
-//     sewer family (zones/sewer.js graduates them to CELL_ROOM);
+//     the office/tower/lattice/hotel families, and the prescribed chambers
+//     of the sewer family (zones/sewer.js graduates them to CELL_ROOM);
 //   - a 2-cell margin off chunk borders, so two chunks can never stamp
 //     overlapping pieces of the same cross-seam room;
 //   - never on doorway/mouth approach cells, lamps, columns, or slab holes;
@@ -44,6 +44,18 @@ export {
   FURN_SOFA,
   FURN_BOOKSHELF,
   FURN_WHITEBOARD,
+  FURN_BED,
+  FURN_NIGHTSTAND,
+  FURN_WARDROBE,
+  FURN_TOILET,
+  FURN_SINK,
+  FURN_TUB,
+  FURN_COUNTER,
+  FURN_STOVE,
+  FURN_FRIDGE,
+  FURN_TV,
+  FURN_ARMCHAIR,
+  FURN_WASHER,
 } from './rooms/catalog.js'
 
 function isFreeCandidate(data, lampCells, x, z) {
@@ -62,9 +74,9 @@ function isFreeCandidate(data, lampCells, x, z) {
 export function placeFurniture(data, ctx) {
   const { zone, config } = ctx
   if (config.furniture?.enabled === false) return 0
-  // Two furnishable fabrics: office-family rooms (office/tower/lattice all
-  // plan office districts) and the sewer family's prescribed chambers. Every
-  // other zone (pillars, warehouse halls) stays empty by design.
+  // Two furnishable fabrics: office-family rooms (office/tower/lattice/hotel
+  // all plan office districts) and the sewer family's prescribed chambers.
+  // Every other zone (pillars, warehouse halls) stays empty by design.
   if (zone !== ZONE_OFFICE && zone !== ZONE_SEWER) return 0
   const baseline = countChunkComponents(data, true)
   const lampCells = new Set(data.lamps.map((l) => `${l.lx},${l.lz}`))
@@ -97,8 +109,9 @@ export function placeFurniture(data, ctx) {
       furnishRoleRoom(ctx2, space, candidates, role)
     } else if (data.mapFamily !== MAP_FAMILY_SEWER) {
       // Ordinary rooms elect one coherent theme — except in the sewer, where
-      // an unelected chamber stays bare (no office props underground).
-      furnishOrdinaryRoom(ctx2, space, candidates)
+      // an unelected chamber stays bare (no office props underground). The
+      // family picks the theme set: hotel rooms furnish residentially.
+      furnishOrdinaryRoom(ctx2, space, candidates, data.mapFamily)
     }
   }
   return ctx2.added.length

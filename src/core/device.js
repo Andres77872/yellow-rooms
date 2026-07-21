@@ -12,12 +12,9 @@ export const IS_TOUCH = override != null
 // Phones ship DPR 3; clamping to 1.5 cuts fill-rate ~4x vs native there.
 export const MAX_DPR = IS_TOUCH ? 1.5 : 2
 
-// Per-tier shader loop sizes, baked into GLSL as #defines at import time.
-// Desktop values MUST mirror world/constants.js so desktop shaders compile to
-// the exact same source as before this tier existed.
-export const QUALITY = IS_TOUCH
-  ? { aoSamples: 8, shadowSteps: 12, volSteps: 16 }
-  : { aoSamples: 16, shadowSteps: 20, volSteps: 32 }
+// Shader step/sample counts are no longer a compile-time device tier: they are
+// runtime uniforms driven by the graphics settings (core/graphics.js), which
+// picks its DEFAULT_PRESET off IS_TOUCH instead.
 
 // Best-effort fullscreen + landscape lock. Must be called synchronously inside
 // a user gesture (alongside the WebAudio unlock — neither may be awaited

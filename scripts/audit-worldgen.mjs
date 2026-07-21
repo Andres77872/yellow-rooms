@@ -6,6 +6,7 @@ import { isDeepStrictEqual } from 'node:util'
 import { buildChunk } from '../src/world/pipeline.js'
 import {
   DEFAULT_WORLD_CONFIG as CONFIG,
+  HOTEL_RELEASE_EVIDENCE,
   LATTICE_RELEASE_EVIDENCE,
   SEWER_RELEASE_EVIDENCE,
   TOWER_RELEASE_EVIDENCE,
@@ -36,6 +37,7 @@ import { LATTICE_STRUCTURE_KIND } from '../src/world/structures/lattice.js'
 import { TOWER_LANDMARK_SOCKET_KINDS } from '../src/world/structures/tower.js'
 import {
   COLUMN_FURNITURE,
+  MAP_FAMILY_HOTEL,
   MAP_FAMILY_LATTICE,
   MAP_FAMILY_OFFICE,
   MAP_FAMILY_SEWER,
@@ -69,13 +71,13 @@ const readFamilySelection = () => {
   if (index < 0) return []
   const family = process.argv[index + 1]
   if (family === 'all') {
-    return [MAP_FAMILY_SEWER, MAP_FAMILY_TOWER, MAP_FAMILY_LATTICE]
+    return [MAP_FAMILY_SEWER, MAP_FAMILY_TOWER, MAP_FAMILY_LATTICE, MAP_FAMILY_HOTEL]
   }
-  if ([MAP_FAMILY_SEWER, MAP_FAMILY_TOWER, MAP_FAMILY_LATTICE].includes(family)) {
+  if ([MAP_FAMILY_SEWER, MAP_FAMILY_TOWER, MAP_FAMILY_LATTICE, MAP_FAMILY_HOTEL].includes(family)) {
     return [family]
   }
   if (family === MAP_FAMILY_OFFICE) return []
-  throw new Error('--family requires office, sewer, tower, lattice, or all')
+  throw new Error('--family requires office, sewer, tower, lattice, hotel, or all')
 }
 
 const seedCount = readPositiveInt('--seeds', 10000)
@@ -88,6 +90,7 @@ const requestedFamilies = [
   MAP_FAMILY_SEWER,
   MAP_FAMILY_TOWER,
   MAP_FAMILY_LATTICE,
+  MAP_FAMILY_HOTEL,
 ].filter((family) =>
   explicitlyRequestedFamilies.includes(family) ||
   CONFIG.mapFamily.profiles[family].enabled === true
@@ -111,9 +114,15 @@ if (process.argv.includes('--render')) {
     return value
   }
   const family = readString('--family', MAP_FAMILY_OFFICE)
-  const renderable = [MAP_FAMILY_OFFICE, MAP_FAMILY_SEWER, MAP_FAMILY_TOWER, MAP_FAMILY_LATTICE]
+  const renderable = [
+    MAP_FAMILY_OFFICE,
+    MAP_FAMILY_SEWER,
+    MAP_FAMILY_TOWER,
+    MAP_FAMILY_LATTICE,
+    MAP_FAMILY_HOTEL,
+  ]
   if (!renderable.includes(family)) {
-    throw new Error('--render requires a single family: office, sewer, tower, or lattice')
+    throw new Error('--render requires a single family: office, sewer, tower, lattice, or hotel')
   }
   const config = family === MAP_FAMILY_OFFICE ? CONFIG : worldConfigForFamily(family, CONFIG)
   const seedText = readString('--render-seed', 'lobby')
@@ -289,6 +298,49 @@ function latticePinSnapshot(data) {
 const latticeCorpusDigest = (snapshots) => createHash('sha256')
   .update(JSON.stringify(snapshots))
   .digest('hex')
+
+const hotelWorldSeed = (index) => hashStr(`audit-hotel-${index}#${level}`)
+const HOTEL_PIN_FIELDS = TOWER_PIN_FIELDS
+
+// Hotel authors no lethal planes (requiresVoidSafety stays tower/lattice),
+// so its pin snapshot is the tower shape minus the lethal-void halves.
+function hotelPinSnapshot(data) {
+  return {
+    version: data.version,
+    cx: data.cx,
+    cy: data.cy,
+    cz: data.cz,
+    mapFamily: data.mapFamily,
+    zone: data.zone,
+    ...Object.fromEntries(
+      HOTEL_PIN_FIELDS.map((field) => [field, Array.from(data[field])])
+    ),
+    lamps: data.lamps,
+    stairUp: data.stairUp,
+    stairDown: data.stairDown,
+    // Snapshot keys keep their historical names: these digests are pinned
+    // release evidence, and the carrier-field rename must not rewrite them.
+    multilevelStructure: data.structure,
+    multilevelUp: data.structureUp,
+    multilevelDown: data.structureDown,
+  }
+}
+
+const hotelCorpusDigest = (snapshots) => createHash('sha256')
+  .update(JSON.stringify(snapshots))
+  .digest('hex')
+
+function forcedHotelAuditConfig() {
+  const base = structuredClone(CONFIG)
+  const releaseProfileEnabled = base.mapFamily.profiles.hotel.enabled === true
+  // The audit row remains forced-profile isolated after release activation;
+  // this assignment also keeps rollback audits able to inspect disabled bytes.
+  base.mapFamily.profiles.hotel.enabled = true
+  return {
+    config: worldConfigForFamily(MAP_FAMILY_HOTEL, base),
+    releaseProfileEnabled,
+  }
+}
 
 function forcedSewerAuditConfig() {
   const config = worldConfigForFamily(MAP_FAMILY_SEWER, CONFIG)
@@ -1166,6 +1218,119 @@ function runForcedLatticeCorpus() {
   }
 }
 
+function runForcedHotelCorpus() {
+  const { config, releaseProfileEnabled } = forcedHotelAuditConfig()
+  const corpusSeeds = Math.min(seedCount, 32)
+  const fixtures = []
+  const pinSnapshots = []
+  let deterministic = true
+  let layered = true
+
+  for (let index = 0; index < corpusSeeds; index++) {
+    const seed = hotelWorldSeed(index)
+    const cx = (index % 7) - 3
+    const cz = ((index * 5) % 9) - 4
+    // A lone office-fabric chunk is not internally connected (rooms route
+    // through neighbours), so the layered evidence audits a 3x3x3 block —
+    // the same discipline as the main office patch, plus slab coverage.
+    const chunks = new Map()
+    for (let cy = -1; cy <= 1; cy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dz = -1; dz <= 1; dz++) {
+          chunks.set(
+            `${cx + dx},${cy},${cz + dz}`,
+            buildChunk(seed, cx + dx, cy, cz + dz, config)
+          )
+        }
+      }
+    }
+    for (const data of chunks.values()) {
+      const repeated = buildChunk(seed, data.cx, data.cy, data.cz, config)
+      deterministic &&= isDeepStrictEqual(data, repeated)
+      pinSnapshots.push(hotelPinSnapshot(data))
+    }
+    layered &&= auditLayeredPatch(
+      (x, y, z) => chunks.get(`${x},${y},${z}`) ?? null,
+      cx - 1,
+      -1,
+      cz - 1,
+      3,
+      3,
+      3
+    ).ok
+  }
+
+  const profileIdentity = 'hotel-forced-audit'
+  const seedDerivation = `hashStr("audit-hotel-N#${level}")`
+  const familyPin = hotelCorpusDigest(pinSnapshots)
+  const activationVerdict = validateActivationEvidence({
+    family: MAP_FAMILY_HOTEL,
+    enabled: releaseProfileEnabled,
+    byteImpact: HOTEL_RELEASE_EVIDENCE.byteImpact,
+    affectsMaximumHeight: HOTEL_RELEASE_EVIDENCE.affectsMaximumHeight,
+    previous: {
+      version: HOTEL_RELEASE_EVIDENCE.previousVersion,
+      digest: HOTEL_RELEASE_EVIDENCE.previousFamilyCorpusDigest,
+    },
+    candidate: {
+      version: WORLD_GEN_VERSION,
+      digest: familyPin,
+    },
+    pins: {
+      global: {
+        version: HOTEL_RELEASE_EVIDENCE.generatorVersion,
+        digest: HOTEL_RELEASE_EVIDENCE.globalGoldenDigest,
+      },
+      family: {
+        family: MAP_FAMILY_HOTEL,
+        version: HOTEL_RELEASE_EVIDENCE.generatorVersion,
+        digest: HOTEL_RELEASE_EVIDENCE.familyCorpusDigest,
+      },
+      maximumHeight: null,
+    },
+    corpus: {
+      version: HOTEL_RELEASE_EVIDENCE.generatorVersion,
+      profileIdentity,
+      seedDerivation,
+    },
+  })
+  const releaseEvidenceFresh = releaseProfileEnabled &&
+    WORLD_GEN_VERSION === HOTEL_RELEASE_EVIDENCE.generatorVersion &&
+    HOTEL_RELEASE_EVIDENCE.generatorVersion ===
+      HOTEL_RELEASE_EVIDENCE.previousVersion + 1 &&
+    HOTEL_RELEASE_EVIDENCE.affectsMaximumHeight === false &&
+    profileIdentity === HOTEL_RELEASE_EVIDENCE.profileIdentity &&
+    seedDerivation === HOTEL_RELEASE_EVIDENCE.seedDerivation &&
+    activationVerdict.ok
+
+  return {
+    releaseProfileEnabled,
+    fixtures,
+    row: {
+      family: MAP_FAMILY_HOTEL,
+      enabled: releaseProfileEnabled,
+      forcedProfile: true,
+      generatorVersion: WORLD_GEN_VERSION,
+      profileIdentity,
+      seedDerivation,
+      pins: { family: releaseEvidenceFresh, maximumHeight: null },
+      corpus: {
+        seeds: corpusSeeds,
+        chunks: pinSnapshots.length,
+        officeChunks: 0,
+        determinism: deterministic,
+        layered,
+        pin: { algorithm: 'sha256', digest: familyPin },
+        status: releaseEvidenceFresh
+          ? 'release-profile-enabled'
+          : releaseProfileEnabled
+            ? 'release-evidence-stale'
+            : 'forced-audit-release-profile-disabled',
+      },
+    },
+  }
+}
+
 function scanZones(seed, sampleRadius) {
   const size = sampleRadius * 2 + 1
   const zones = new Uint8Array(size * size)
@@ -1361,6 +1526,7 @@ const enabledProfiles = [
   MAP_FAMILY_SEWER,
   MAP_FAMILY_TOWER,
   MAP_FAMILY_LATTICE,
+  MAP_FAMILY_HOTEL,
 ].map((family) => ({
   family,
   enabled: CONFIG.mapFamily.profiles[family].enabled,
@@ -1374,6 +1540,9 @@ const towerEvidence = requestedFamilies.includes(MAP_FAMILY_TOWER)
   : null
 const latticeEvidence = requestedFamilies.includes(MAP_FAMILY_LATTICE)
   ? runForcedLatticeCorpus()
+  : null
+const hotelEvidence = requestedFamilies.includes(MAP_FAMILY_HOTEL)
+  ? runForcedHotelCorpus()
   : null
 const disabledFamilyRow = (family) => ({
   family,
@@ -1417,7 +1586,9 @@ const familyRows = [
         ? towerEvidence.row
         : family === MAP_FAMILY_LATTICE && latticeEvidence
           ? latticeEvidence.row
-      : disabledFamilyRow(family)
+          : family === MAP_FAMILY_HOTEL && hotelEvidence
+            ? hotelEvidence.row
+            : disabledFamilyRow(family)
   ),
 ]
 const emittedKinds = [
@@ -1444,6 +1615,15 @@ if (latticeEvidence) {
     kind: LATTICE_STRUCTURE_KIND,
     auditDimensions: [...LATTICE_AUDIT_DIMENSIONS],
     fixtures: latticeEvidence.fixtures,
+  })
+}
+if (hotelEvidence) {
+  // Hotel rides the office pipeline, so its emission mirrors the office
+  // shape: registration evidence only, no separate fixture taxonomy.
+  emittedKinds.push({
+    family: MAP_FAMILY_HOTEL,
+    kind: 'officeMultilevel',
+    fixtures: hotelEvidence.fixtures,
   })
 }
 const familyReport = auditFamilyCompleteness(
