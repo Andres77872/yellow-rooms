@@ -19,15 +19,23 @@ npm run lint
 npm run build
 ```
 
+The map-family benchmark is report-only unless explicit `--budget-*` options
+are supplied:
+
+```bash
+npm run benchmark:map-families
+```
+
 ## Debug tools
 
 - `F2` — debug panel with four tabs (`1`-`4` to switch): **world** (top-down
   live/explore map with connectivity + seam validators, full-height multilevel
   structure/audit readouts, and the `map click` control to place the stalker or
   teleport the player), **light** (buffer channel viewer,
-  live uniform tuning with one-click `copy values`, and an isolated light room),
-  **ai** (Stalker + Pursuer inspectors, live params, 3D gizmos), and **perf**
-  (fps, frame-time sparkline, draw calls, memory).
+  live uniform tuning, pass isolation/timing, one-click `copy values`, and an
+  isolated light room), **ai** (Stalker, Pursuer, and Husk inspectors, live
+  params, 3D gizmos), and **perf** (fps, frame-time sparkline, draw calls,
+  memory).
 - `F3` — freeze/unfreeze the sim while the panel is open.
 - `` ` `` (backtick) — lightweight fps / draw-call overlay, no panel needed.
 - `?touch=1` / `?touch=0` — force the touch or desktop UI tier.
@@ -38,8 +46,30 @@ The world is generated reproducibly from a text seed. The headless generation
 pipeline produces thin-wall `ChunkData`; rendering, collision, AI, minimap, and
 debug tools all consume that same topology.
 
-World-gen version 14 makes the room network the dominant world fabric while
-retaining the tall architectural landmarks:
+### Current architecture (world-gen version 24)
+
+Office remains the default. All five shipped profiles are enabled and can be
+selected on the title screen or with `?family=<name>`:
+
+| Family | Current spatial identity |
+| --- | --- |
+| `office` | Portal-first districts, institutional rooms, bounded landmark halls, and 4–15-storey atria |
+| `sewer` | Dry, bounded utility networks with chambers and canonical manhole stairs |
+| `tower` | Three-floor, two-chunk towers with a skybridge and lethal exposed voids |
+| `lattice` | 4×4-chunk, five-floor terraced catwalk districts with an 8×8 anchor grid |
+| `hotel` | The office structural pipeline with residential room catalogs, furniture, lighting, and palette |
+
+Version 24 expands and reconnects the lattice family. The current generator
+also has per-family room catalogs and palettes, catalog-driven furnishing,
+family acoustics, shared structure contracts, hard-void death/reset rules, and
+release evidence for every family. See
+[World Generation Architecture](docs/worldgen-architecture.md) for the current
+module and runtime contract.
+
+### Historical milestones (world-gen versions 14–15)
+
+Version 14 made the room network the dominant world fabric while retaining the
+tall architectural landmarks:
 
 - under the shipped profile, elected special pockets are usually 1-2 chunks on
   each axis; a rare hero subset expands to 3-4 chunks, and only hero pockets
@@ -122,7 +152,7 @@ The interior architecture layer dresses the generated topology for rendering
   lobbies, slatted ceiling vents, wall clocks with hands, framed notice
   boards with pinned papers, and glazed corridor extinguisher cabinets.
 
-World-gen version 15 adds collision-real furniture and semantic room roles:
+Version 15 added collision-real furniture and semantic room roles:
 
 - desks, chairs, conference tables, cabinets, copiers, water coolers, plants,
   and server racks occupy cells as `COLUMN_FURNITURE` navigation blockers;
@@ -135,14 +165,14 @@ World-gen version 15 adds collision-real furniture and semantic room roles:
   rooms get rack rows and caution plates — while a quarter of ordinary rooms
   stay deliberately bare.
 
-### Map-family profiles (world-gen version 18)
+### Map-family profiles
 
-Version 18 keeps **office** as the selected default and release-enables the
-bounded **sewer**, **tower**, and **lattice** profiles behind explicit opt-in.
-Selection and activation are separate: selecting one profile does not enable,
-disable, or otherwise change another profile. Missing selection uses office;
-unknown, disabled, or incomplete explicit selections fail before family
-geometry or descriptors are emitted.
+Version 18 introduced the bounded **sewer**, **tower**, and **lattice** profiles.
+Version 23 added **hotel**, and version 24 expanded **lattice**. Selection and
+activation remain separate: selecting one profile does not enable, disable, or
+otherwise change another profile. Missing selection uses office; unknown,
+disabled, or incomplete explicit selections fail before family geometry or
+descriptors are emitted.
 
 Use the canonical config helper instead of hand-assembling a profile. It
 returns a mutable clone, selects only the requested family, and preserves every
@@ -154,6 +184,7 @@ import { worldConfigForFamily } from './src/world/mapFamily.js'
 const sewerConfig = worldConfigForFamily('sewer')
 const towerConfig = worldConfigForFamily('tower')
 const latticeConfig = worldConfigForFamily('lattice')
+const hotelConfig = worldConfigForFamily('hotel')
 ```
 
 Pass the selected config to the headless generator or assign it as the runtime
@@ -162,22 +193,23 @@ profile or its release gate.
 
 #### Family audit commands
 
-The office row is mandatory in every invocation and alone owns the unchanged
-`0.75` office-share floor. A forced non-office row evaluates its own geometry,
-descriptors, pins, corpus, and verdict without entering the office denominator.
-Currently enabled emitters are always audited; `--family` additionally forces
-the named row even when its release profile is disabled.
+The office row is mandatory in every invocation and alone owns the `0.75`
+office-share floor. Every enabled emitter is also audited. `--family`
+additionally forces a named row when its release profile is disabled; it does
+not filter out other enabled families.
 
 ```bash
 npm run audit:world -- --family sewer
 npm run audit:world -- --family tower
 npm run audit:world -- --family lattice
+npm run audit:world -- --family hotel
 npm run audit:world -- --family all
 ```
 
 Use the final command for the complete release view. The JSON output must keep
-independent `office`, `sewer`, `tower`, and `lattice` entries in `familyRows`,
-and both `familyVerdict.ok` and the top-level `verdict.ok` must be `true`.
+independent `office`, `sewer`, `tower`, `lattice`, and `hotel` entries in
+`familyRows`, and both `familyVerdict.ok` and the top-level `verdict.ok` must be
+`true`.
 
 #### Versioning and atomic activation
 
@@ -241,33 +273,42 @@ memory, rendering, or unrestricted pathfinding performance. No performance
 guarantee is implied without a separately supplied measurable budget and
 matching evidence.
 
-Canonical contract trace: specification `R05-R07`, `R14`, `R20`, and
-`R33-R34` in [Version and Pin Policy](.dev/sdd/changes/liminal-map-families-core/spec.md#version-and-pin-policy),
-[Audit and Corpus Contracts](.dev/sdd/changes/liminal-map-families-core/spec.md#audit-and-corpus-contracts),
-[Hard Void Death and Deterministic Reset](.dev/sdd/changes/liminal-map-families-core/spec.md#hard-void-death-and-deterministic-reset),
-and [Family-independent Activation, Rollout, and Rollback](.dev/sdd/changes/liminal-map-families-core/spec.md#family-independent-activation-rollout-and-rollback);
-design decisions `D01`, `D10`, and `D11` in the
-[technical design](.dev/sdd/changes/liminal-map-families-core/design.md#architecture-decisions).
+The [documentation index](docs/README.md) separates current reference material
+from the versioned design history. Generation rationale and history live in
+[Map-generation research](docs/map-generation-research.md); the research-backed
+horror design review is in
+[Liminal-horror spatial and systems review](docs/liminal-horror-design.md); and
+the v14–v15 dressing review is in
+[Interior architecture and dressing](docs/design-review.md).
 
-The generation rationale and history are documented in
-[docs/map-generation-research.md](docs/map-generation-research.md). The deeper
-liminal-horror research review, structure roadmap, dynamics, and validation
-gates are in [docs/liminal-horror-design.md](docs/liminal-horror-design.md),
-and the interior-architecture review for the dressing layer is in
-[docs/design-review.md](docs/design-review.md).
+## Map editor
+
+Run the standalone editor at `/editor` during Vite development or preview. A
+static host must rewrite `/editor` to `/editor.html`, or expose
+`/editor.html` directly. The editor can bake any map family, author finite
+thin-wall maps, preview shared chunk meshes, and import/export `.yrmap` files.
+See [Map Editor](docs/map-editor.md) for its exact document and file-format
+contracts.
 
 ## Main generation modules
 
-- `src/world/regions.js` — room-dominant macro fabric and bounded landmark election
+- `src/world/zones/regions.js` — room-dominant macro fabric and bounded landmark election
 - `src/world/zones/officePlan.js` — district contracts, circulation, rooms,
   scoring, validation, and chunk compilation
 - `src/world/border.js` — canonical shared-edge ownership
 - `src/world/topology.js` — wall and column-aware safety repair for open zones
-- `src/world/slab.js` — canonical vertical contracts and fallback stair election
-- `src/world/stairStamp.js` — lobby, aperture, guard-wall, and stair realization
-- `src/world/multilevel.js` — canonical two-chunk, 4–15-storey structure planning
-- `src/world/multilevelStamp.js` — halls, stacked voids, galleries, windows, rails, and bridges
+- `src/world/rooms/` — room catalogs, election, procedural shapes, and furnishing grammars
+- `src/world/structures/slab.js` — canonical vertical contracts and fallback stair election
+- `src/world/structures/stairStamp.js` — lobby, aperture, guard-wall, and stair realization
+- `src/world/structures/contract.js` — family-neutral structure dispatch, validation, and runtime ownership
+- `src/world/structures/multilevel.js` — canonical two-chunk, 4–15-storey office/hotel structure planning
+- `src/world/structures/tower.js` — bounded tower/skybridge planning
+- `src/world/structures/lattice.js` — terraced lattice planning and descriptor analysis
+- `src/world/structures/multilevelStamp.js` and
+  `src/world/structures/latticeStamp.js` — structure projection into chunk rasters
 - `src/world/audit.js` — 2D seam and canonical layered-connectivity validation
+- `src/world/familyAudit.js` — family completeness, activation, evidence, and rollback contracts
+- `src/world/mapFamily.js` — family selection, normalization, and rollback helpers
 - `src/world/mapTypes.js` — semantic cell and passage vocabulary
 - `src/world/pipeline.js` — pure public generation pipeline
 - `src/world/objects/` — organized section for all object definitions:

@@ -1,5 +1,12 @@
 # Map-generation research and implementation direction
 
+Document status: this is the historical v7–v14 implementation record and
+research direction, verified against the world-gen v24 tree on 2026-07-21.
+Present-tense statements inside versioned sections describe those releases;
+later-status notes identify what subsequently shipped. See
+[World Generation Architecture](worldgen-architecture.md) for the current
+layout and contracts.
+
 ## World-gen v14: room-dominant fabric and bounded landmark courts
 
 v14 fixes the principal expressive-range failure left by the earlier coherent
@@ -342,19 +349,25 @@ direction:
   coverage. Patch audits also expose openness, mouth/portal coverage, internal
   plan variety, and a combined continuity score.
 
-## Staged follow-ups (not included in v7)
+## Historical v7 follow-ups and their current status
 
-- **Semantic room roles:** extend generic rooms into a program graph with service,
-  storage, office-cluster, open-hall, landmark, and privacy roles, then use those
-  requirements to drive constrained room growth and adjacency scoring.
+- **Semantic room roles:** named roles shipped in v15 and were generalized into
+  family catalogs, quotas, furnishing grammars, and procedural room shapes in
+  v21–v23. A full program graph with required adjacency, privacy, and landmark
+  roles remains open.
 - **Cross-zone portal-first integration:** make office-to-open transition mouths
-  inputs to the office macro-plan. v7 represents them explicitly as wide,
-  lobby-marked boundary adapters, but incorporates them after plan slicing.
+  inputs to the office macro-plan. They remain explicit wide, lobby-marked
+  boundary adapters incorporated after plan slicing; landmark entrance
+  alignment remains open.
 - **Finer spatial scale:** evaluate a finer planning raster or smaller room bounds
   after profiling the collision, meshing, navigation, and instance-count impact.
+  The current generator retains the existing cell scale.
 - **Expressive-range and visibility tooling:** automate large-seed histograms,
   diversity plots, sightline distributions, and visibility-graph measures so
-  perceptual variety and enclosure are measured alongside topology.
+  perceptual variety and enclosure are measured alongside topology. Current
+  audits added family corpora, office/special-space share, open-run/component
+  bounds, layered connectivity, and family-specific evidence; sightline and
+  visibility-graph distributions remain future work.
 
 ## Pre-v7 diagnosis (historical baseline)
 
@@ -383,10 +396,14 @@ hierarchy:
 
 ## Research target: richer plan representation
 
-v7 keeps its current planning implementation in `zones/officePlan.js`, with
-shared contracts in `border.js`, region selection in `regions.js`, and semantic
-types in `mapTypes.js`. The package split below is a future extraction sketch
-for richer program-grammar work; it is not the current source tree.
+In v7, planning lived in `zones/officePlan.js`, with shared contracts in
+`border.js`, region selection then in `regions.js`, and semantic types in
+`mapTypes.js`. In the current tree those files are
+`src/world/zones/officePlan.js`, `src/world/border.js`,
+`src/world/zones/regions.js`, and `src/world/mapTypes.js`; room catalogs,
+election, furnishing, and shapes were later extracted under `src/world/rooms/`.
+The package split below remains an unimplemented extraction sketch, not the
+current source tree.
 
 Add a pure planning layer, separate from `ChunkData` compilation:
 
@@ -422,10 +439,11 @@ explicit passage kinds rather than guessing doors from one-cell gaps.
 
 ## Generation details and future extensions
 
-v7 implements shared edge contracts, circulation-before-rooms, BSP-backed
-bounded candidates, and feature-keyed random streams. The program grammar,
-seeded constrained room growth, and richer visibility optimization below remain
-research targets.
+v7 implemented shared edge contracts, circulation-before-rooms, BSP-backed
+bounded candidates, and feature-keyed random streams. Current v24 also has
+catalog-driven role election, procedural room-shape mutation, and declarative
+furnishing grammars. It does not have the standalone semantic program graph or
+visibility optimizer sketched below.
 
 ### 1. Shared portal contracts
 
@@ -440,10 +458,11 @@ entire layout from a finite tile set.
 
 ### 2. Semantic program graph
 
-v7 labels rooms, corridors, and lobbies before chunk compilation. A future
-program graph can add office clusters, service rooms, storage bays, open halls,
-column halls, transition lobbies, and landmark/anomaly rooms. Graph edges must
-distinguish required doors, wide openings, and desired proximity.
+v7 labels rooms, corridors, and lobbies before chunk compilation. Later
+releases added named room roles and family catalogs, but not a general program
+graph. Such a graph could add office clusters, service rooms, storage bays,
+open halls, column halls, transition lobbies, and landmark/anomaly rooms. Graph
+edges would distinguish required doors, wide openings, and desired proximity.
 
 Weighted grammar rules should vary graph shape while retaining a recognizable
 circulation hierarchy. District profiles can change grammar weights and scoring
@@ -458,11 +477,13 @@ spanning tree as a final connectivity repair, not as the architecture itself.
 
 ### 4. Constrained room growth and bounded search
 
-Future program-aware generation can place room seeds using target size and
-adjacency weights. Grow rectangular areas first, allow compact L-shapes only for
-remaining gaps, and reject deep concavity, thin necks, and extreme aspect ratios.
-Generate a small deterministic candidate set (for example 8-16 plans) and keep
-the lowest-cost valid plan.
+Current procedural room shapes can promote adjacent BSP leaves into compact
+non-rectangular rooms, but they are not seeded from a general program graph or
+required adjacency weights. A future program-aware generator could grow
+rectangular areas first, allow compact L-shapes only for remaining gaps, and
+reject deep concavity, thin necks, and extreme aspect ratios. It could generate
+a small deterministic candidate set (for example 8–16 plans) and keep the
+lowest-cost valid plan.
 
 Hard constraints should include portal realization, required graph adjacency,
 reachability, corridor width, and doors that fit a shared wall. Useful soft costs
@@ -506,8 +527,12 @@ details. Portals, circulation, and connectivity must be fixed first.
 
 ## Validation and expressive-range metrics
 
-The validation checklist combines implemented invariants with the expressive
-range measurements that should be added next:
+Current automated coverage includes request-order determinism, shared portal
+contracts, explicit passage semantics, connectivity, room geometry,
+family-release evidence, and architecture share/open-run/component bounds.
+Sightline and visibility-graph distributions and a universal generation-time
+budget remain proposals. The checklist therefore intentionally combines
+implemented invariants with future expressive-range measurements:
 
 - macro-plan and chunk bytes are identical regardless of request order;
 - adjacent macro-plans realize identical portal contracts;

@@ -1,5 +1,12 @@
 # Liminal-horror spatial and systems review
 
+Document status: the evidence review remains design context, while the
+implementation sections record the v14 and v18 decisions that followed it.
+They were checked against the world-gen v24 tree on 2026-07-21; current status
+annotations distinguish shipped follow-ups from work that is still open. See
+[World Generation Architecture](worldgen-architecture.md) for the current
+module and runtime contracts.
+
 This review separates published evidence and developer postmortems from project
 design inference. Research does not prescribe a single frightening floor plan;
 it gives constraints that make the procedural choices more legible, navigable,
@@ -123,12 +130,11 @@ World-gen v14 changes the macro contract:
    axial gallery. They create a deliberate downward overlook while leaving slab
    masks, circulation, collision safety, and full-height streaming unchanged.
 
-The v14 landmark descriptor currently reserves a zone-level footprint and
-records its kind, intensity role, axis, and pier signature. It does not yet
-author entrance alignment, circulation, or graph adjacency inside the office
-semantic plan; that integration remains roadmap work. In particular, a
-processional axis is visually framed but is not yet promised to line up with an
-office threshold.
+At v14, the landmark descriptor reserved a zone-level footprint and recorded
+its kind, intensity role, axis, and pier signature. It did not author entrance
+alignment, circulation, or graph adjacency inside the office semantic plan.
+That integration remains open in v24: a processional axis is visually framed
+but is not promised to line up with an office threshold.
 
 These limits are project tuning decisions, not findings from the cited papers.
 The shipped audit treats 75% office share as a catastrophic floor on sufficiently
@@ -137,7 +143,10 @@ operating distribution and retains worst seed IDs; hard shipped-profile
 invariants remain 2x2 ordinary footprints, 4x4 hero footprints, and no
 cardinally adjacent elected districts.
 
-## Core map-family MVP boundary (world-gen v18)
+## Historical core map-family MVP boundary (world-gen v18)
+
+This section records the acceptance boundary used to introduce sewer,
+tower/skybridge, and bridge-lattice in v18. It is not a current feature list.
 
 For the sewer, tower/skybridge, and bridge-lattice MVPs, **infinite** means only
 perceptual and progression continuity across bounded streamed geometry. A route
@@ -154,6 +163,10 @@ existing horizontal pathfinding leash and `PATH_VLEASH`; lattice keeps
 band. Structure retention may keep the participants of one bounded structure
 available, but it does not extend either pathfinding leash.
 
+Current status: v24 expands lattice to a bounded 4x4-chunk, five-floor district
+on an 8x8 anchor grid. Hotel shipped in v23, and office, sewer, tower, lattice,
+and hotel are all enabled in the default v24 configuration.
+
 Functional loading or retention evidence proves only that those bounded
 participants remain available during the tested traversal. It is not evidence
 of resident-memory, frame-time, rendering, or unrestricted pathfinding
@@ -168,28 +181,28 @@ profile, and initial generated state. Missing or regressed hard-death/reset
 evidence blocks both exposed families. Sewer remains independently eligible
 because its dry MVP does not expose lethal-void traversal.
 
-The following remain optional and are not MVP prerequisites: flood or wading
+The following were optional rather than v18 MVP prerequisites: flood or wading
 simulation, water depth, inventory or carried flame, absolute darkness,
 per-family lighting or fog, positional audio propagation, per-source audio
 occlusion, rich sewer props, procedural tower facades, weather variants, and
-comparable sensory or content enhancements. Each requires a separate
-specification and family-independent activation criteria; any performance claim
-also requires a measured runtime budget. Their absence cannot implicitly block
-an otherwise passing family.
+comparable sensory or content enhancements. Per-family palettes/fog and
+family-wide acoustic profiles shipped later; the rest of this list is not
+implied by passing the current family audit. Any quantified performance claim
+still requires a measured runtime budget.
 
-Core non-goals remain excluded: hospital, hotel, or any other researched map
-family; raised multilevel top or floor caps; physically unbounded geometry or
-residency; long-span AI pursuit; cross-district tower or lattice networks;
+The v18 non-goals excluded hospital, hotel, and other researched families;
+raised multilevel top or floor caps; physically unbounded geometry or residency;
+long-span AI pursuit; cross-district tower or lattice networks;
 cross-canonical-id visibility; inter-family bridge networks; save-game or
-progression persistence; and production schedule estimates. The MVP also does
-not require a new third-party library, and an estimate is never a substitute for
-passing behavioral evidence.
+progression persistence; and production schedule estimates. Hotel later shipped
+as its own v23 profile. That later addition does not change what the v18 MVP
+accepted or make the remaining exclusions implicit requirements.
 
-## Structure roadmap
+## Structure roadmap and current status
 
-Future structures should become reserved semantic nodes, not late decorative
-stamps. The following are implementation-ready contracts, not claims about what
-the current macro archetypes already author:
+The original roadmap proposed that future structures become reserved semantic
+nodes rather than late decorative stamps. The following are design contracts,
+not claims that the current generator authors each one:
 
 | Structure | Spatial contract | Horror function | Required cue |
 | --- | --- | --- | --- |
@@ -202,8 +215,10 @@ the current macro archetypes already author:
 | Service pocket | Utility/storage branch off the main route | Optional suspense without deleting room density | Strongly distinct sound/material role |
 
 The bounded hypostyle footprint, coherent pier patterns, and broken-bay variant
-are implemented. Entrance alignment, a deliberately unlit/damaged decision bay,
-and the other structure families remain roadmap work.
+are implemented. Tower and lattice later added separate canonical structure
+contracts, but they do not implement the specific service-mezzanine,
+compression-release, twin-void, or repetition-anomaly concepts above. Entrance
+alignment and a deliberately unlit/damaged decision bay also remain open.
 
 Each future descriptor should retain at least:
 
@@ -250,12 +265,19 @@ recipes back-to-back.
 
 ### 2. Semantic room roles
 
-Extend generic office rooms into service, storage, meeting, transition,
-recovery, junction-landmark, and anomaly-candidate roles. Roles should affect
-adjacency, doors, lighting rhythm, acoustics, event sockets, and clutter, while
-collision continues to consume the same thin-wall raster.
+Current status: office, tower, and hotel use family catalogs with role quotas,
+anchor/whitelist furnishing grammars, and procedural room shapes; sewer
+chambers use a separate module catalog, while lattice intentionally has no room
+catalog. Role-aware clutter, lamp tint, and wall bands are shipped. Role-driven
+adjacency and door types, room-local acoustics, transition/recovery/anomaly
+roles, and descriptor event sockets remain open. Collision continues to
+consume the same thin-wall raster.
 
 ### 3. Repetition with controlled mutation
+
+Procedural room shapes and ordinary-room furnishing themes now provide local
+variation, but v24 does not elect and mutate a repeated motif at district
+scope. The original direction remains:
 
 Select a room motif at district scope and repeat it two to four times. Mutate one
 high-salience property using a separate stable random stream: ceiling/slab,
@@ -264,15 +286,21 @@ Critical progress must never depend on noticing a subtle mutation.
 
 ### 4. Vertical acoustic cues
 
-Tall atria already stream their full height. Attach positional hums, impacts,
-footsteps, and reverb profiles to canonical floors/void lobes so an unseen level
-becomes perceptible before an enemy appears. Sound sources need the same
-structure-aware floor gating as sight and lamps.
+Tall atria stream their full height, entity sensing can produce cross-floor
+footsteps, and `AudioBus` applies family-wide acoustic profiles. Structure-owned
+positional hums, impacts, and reverb lobes are not implemented. Those future
+sources would need the same structure-aware floor gating as sight and lamps.
 
 ## Validation gates
 
-Run thousands of seeds and retain median, 95th percentile, maximum, and the
-worst seed IDs for:
+Current automated evidence covers determinism, family registration and release
+pins, office/special-space share, longest open run, largest open component,
+seam/layered connectivity, and family-specific structure invariants; lattice
+also has a physical-reachability suite. The broader perceptual and runtime
+targets below are not all emitted by `npm run audit:world`.
+
+For future corpus work, run enough seeds to characterize the distribution and
+retain median, 95th percentile, maximum, and worst seed IDs for:
 
 - room/corridor/lobby versus special-space share;
 - largest connected open component and longest axial open run;

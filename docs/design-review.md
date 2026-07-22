@@ -1,9 +1,15 @@
 # Design review — interior architecture and dressing layer
 
+Document status: this is the historical v14–v15 implementation review, verified
+against the v24 tree on 2026-07-21. It records what changed in those releases;
+current source locations and later feature status are called out where the
+original modules were subsequently split or removed. For the current generator
+layout, see [World Generation Architecture](worldgen-architecture.md).
+
 Scope: a review of the shipped v14 world against the spatial principles in
-`liminal-horror-design.md`, plus the improvement set implemented in this pass
-(trimwork v2, interior dressing, wayfinding props). This document records what
-changed, why, and what remains open; it does not revisit the macro planner.
+[Liminal-horror spatial and systems review](liminal-horror-design.md), plus the
+improvement set implemented in that pass (trimwork v2, interior dressing,
+wayfinding props). It does not revisit the macro planner.
 
 ## Review of the current state
 
@@ -50,7 +56,7 @@ collision-free by construction: the collision raster and navigation graph
 never learn about the dressing layer. Trim batches into the existing casing
 InstancedMesh; props and signs each add one instanced draw per chunk.
 
-### Doors, frames, windows — redesigned (`trimwork.js`)
+### Doors, frames, windows — redesigned (`src/world/objects/joinery/`)
 
 - **Door casing v2**: jamb + lintel casing now dressed with a wider, shallower
   back-band per jamb, proud corner blocks at the head corners, the existing
@@ -67,7 +73,7 @@ InstancedMesh; props and signs each add one instanced draw per chunk.
   slatted occlusion against the atrium void is the genre's signature gallery
   detail.
 
-### Interior dressing (`props.js`, new)
+### Interior dressing (`src/world/objects/dressing/`)
 
 - **Baseboards + crown molding** on every full-height wall edge (never on low
   bridge rails). One box straddles the wall plane, dressing both faces.
@@ -101,14 +107,15 @@ InstancedMesh; props and signs each add one instanced draw per chunk.
   signs sparser (12% of circulation cells): beacons are meaningful because
   they are rare, and they never light the room (no light-field entries).
 
-## Still open (unchanged roadmap)
+## Status at the end of the first pass
 
-- Semantic room roles, repetition-with-mutation at room scope, the intensity
-  director, and vertical acoustic cues remain as roadmaped in
-  `liminal-horror-design.md`.
-- The structure families (service mezzanine, compression-release suite,
-  twin-void atrium, repetition-anomaly wing) remain reserved-semantic-node
-  work; the dressing layer is intentionally *not* that integration.
+- Semantic room roles and room-scope mutation were still roadmap work at this
+  point. Roles shipped in the v15 second pass below and were generalized into
+  catalogs/grammars in v21–v23. District-level repetition anomalies remain
+  open.
+- Service mezzanine, compression-release, twin-void, and repetition-anomaly
+  structures were still future reserved-semantic-node work. Tower and lattice
+  structure families shipped later; those four specific concepts remain open.
 - Props currently have no acoustic or event-socket role; signage could later
   feed the director's cue sockets (a flickering exit sign as a fake-out).
 
@@ -119,7 +126,7 @@ trace at floor level, because anything the player can bump into must exist in
 the collision model, not just the renderer. This pass makes furniture real
 and gives office rooms semantic identities.
 
-### Collision-real furniture (`furniture.js`, `furnitureModels.js`)
+### Collision-real furniture (`src/world/furniture.js`, `src/world/objects/furniture/`)
 
 - **Two-representation contract.** Every piece occupies one cell in the cols
   raster as `COLUMN_FURNITURE`, so enemy pathfinding, minimaps, audits,
@@ -143,7 +150,7 @@ and gives office rooms semantic identities.
   crossed leaf slabs; server racks with vent slots and status LEDs. All parts
   batch into one instanced draw per chunk with per-part tints.
 
-### Semantic room roles (`officePlan.js` + dressing)
+### Semantic room roles (now `src/world/rooms/` + dressing)
 
 - Roles are assigned at district-plan time from each space's stable id and
   size (large rooms: meeting / server / break; mid rooms: copy / archive /
@@ -160,25 +167,31 @@ and gives office rooms semantic identities.
   landmarks at decisions (per the wayfinding research) rather than as uniform
   wallpaper: a rack row or a cooler is a memory anchor in a sea of offices.
 
-### Still open
+### Current status after the v15 pass
 
-- Roles do not yet affect lighting rhythm, acoustics, adjacency, or door
-  types (the design doc's full semantic-rooms contract); lamp character per
-  role is the natural next slice.
-- Special-role adjacency damping (no two server rooms sharing a wall) is
-  unimplemented; rarity comes from the hash distribution alone.
-- Director event sockets, and structure families beyond the macro archetypes,
-  remain roadmap.
+- Role-driven lamp tint and wall bands shipped in v20. Catalog-driven election,
+  anchor/whitelist grammars, procedural room shapes, quota backstops, and
+  family-specific room vocabularies shipped in v21–v23. Room-local acoustics,
+  role-driven door types, and event sockets remain open.
+- Special-role adjacency damping (for example, preventing two server rooms
+  from sharing a wall) is still unimplemented; composition is controlled by
+  family quotas and election windows instead.
+- The ambient cue director has a deterministic calm-gated first slice, and the
+  audio bus has family-wide acoustics. Descriptor-authored director sockets
+  and room-local acoustic propagation remain roadmap work.
 
-## Validation
+## Validation recorded for v15
 
-- `npm test` — 351 passing, including new `props.test.js` (placement rules,
+- At the time, `npm test` reported 351 passing, including `props.test.js` (placement rules,
   determinism, collision-safety invariants), `furniture.test.js` (placement
   contract, precise-AABB collision, model bounds), `roomRoles.test.js`
   (role determinism, distribution, composition), and the rewritten
   `trimwork.test.js` (architrave profile, leaf styles, glazing variants,
   opening-clearance contract).
-- `npm run lint`, `npm run build`, `npm run audit:world` — clean. Generation
+- `npm run lint`, `npm run build`, and `npm run audit:world` were clean for that
+  release. Generation
   moved to `WORLD_GEN_VERSION` 15 (furniture blockers + role grid); golden
   digests re-pinned with furniture records and roles folded in.
 
+Those numbers are a release record, not the current test count. Use the
+commands in the repository README for current verification.
