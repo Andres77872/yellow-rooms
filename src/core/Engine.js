@@ -169,6 +169,10 @@ export class Engine {
       // keyup — without it that same press would instantly re-resume.
       addEventListener('keyup', (e) => {
         if (e.code !== 'Escape' || this.state.phase !== Phase.PAUSED) return
+        // Esc pressed to dismiss a focused pause-menu control (a settings
+        // <select> dropdown, a slider blur) must not also resume the game —
+        // the M key gate at the top of this constructor follows the same rule.
+        if (/^(INPUT|TEXTAREA|SELECT)$/.test(globalThis.document?.activeElement?.tagName)) return
         if (this.debugMode?.active) return
         if (performance.now() - (this._pauseT ?? 0) < 400) return
         this.resume()
@@ -198,6 +202,7 @@ export class Engine {
       this.touchControls?.setFlashlight(on)
     }
     this.controller.onLockChange = (locked) => this._onLock(locked)
+    this.controller.onLockError = () => this._onLockError()
 
     this._last = performance.now()
     this._time = 0
@@ -234,6 +239,7 @@ export class Engine {
       this._applyAllSettings()
       this.ui.refreshSettings()
     }
+    this.ui.onHudHide = () => this._onHudHide()
   }
 
   // Persist, then apply what the store actually kept — Settings clamps/coerces,
@@ -347,8 +353,15 @@ export class Engine {
 
   resume() {
     if (this.touch) enterImmersive()
-    this.state.phase = Phase.PLAYING
-    this.ui.showHud()
+    // The pause may have interrupted a level TRANSITION (Esc mid-fade): resume
+    // back INTO it so _transT keeps counting down and _advance() still runs —
+    // forcing PLAYING here would strand the player at the old level's exit.
+    const intoTransition = this._pausedFrom === Phase.TRANSITION
+    this._pausedFrom = null
+    this._setRelock(false) // a fresh lock attempt replaces the stale error state
+    this.state.phase = intoTransition ? Phase.TRANSITION : Phase.PLAYING
+    if (intoTransition) this.ui.showTransition(this.state.level + 1)
+    else this.ui.showHud()
     if (!this.touch) this.controller.lock()
     this._checkOrientation()
   }
@@ -392,19 +405,48 @@ export class Engine {
   _onLock(locked) {
     if (this.touch) return // touch mode never locks; pause is the on-screen button
     if (this.debugMode?.active) return // debug owns the cursor; don't auto-pause
+    if (locked) {
+      // A successful (re-)lock cancels any pending recovery hint.
+      this._setRelock(false)
+      return
+    }
     // Pause on pointer-lock loss during PLAYING *or* TRANSITION. Without the
     // TRANSITION case, losing the lock mid-transition (Esc / alt-tab) leaves the
     // next level in PLAYING with the pointer unlocked and mouse-look dead, with no
     // in-game way to re-lock. Pausing lets the Resume button re-lock via a gesture.
-    if (!locked && (this.state.phase === Phase.PLAYING || this.state.phase === Phase.TRANSITION)) {
+    if (this.state.phase === Phase.PLAYING || this.state.phase === Phase.TRANSITION) {
+      this._pausedFrom = this.state.phase // resume() must restore TRANSITION, not force PLAYING
       this._pauseT = performance.now()
       this.state.phase = Phase.PAUSED
       this.ui.showPause(this.state)
     }
   }
 
+  // A rejected requestPointerLock (Chrome refuses re-locks for ~1.3s after an
+  // Esc-initiated unlock) fires pointerlockerror — previously swallowed, which
+  // left the game PLAYING with the cursor free and no hint. Flag the state so
+  // the HUD tells the player to click (the click fallback below re-locks).
+  _onLockError() {
+    if (this.touch || this.debugMode?.active) return
+    if (this.state.phase !== Phase.PLAYING) return
+    this._setRelock(true)
+  }
+
+  _setRelock(on) {
+    if (this._awaitingRelock === on) return
+    this._awaitingRelock = on
+    this.ui.setRelockVisible(on)
+  }
+
+  // The UI hides the hint DOM on any phase exit (_showOnly); re-sync the
+  // engine flag so the next lock error isn't swallowed as "already on".
+  _onHudHide() {
+    this._awaitingRelock = false
+  }
+
   pause() {
     if (this.state.phase !== Phase.PLAYING && this.state.phase !== Phase.TRANSITION) return
+    this._pausedFrom = this.state.phase // resume() must restore TRANSITION, not force PLAYING
     this._pauseT = performance.now()
     this.state.phase = Phase.PAUSED
     this.ui.showPause(this.state)

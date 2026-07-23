@@ -224,6 +224,14 @@ export const UI_CSS = `
 #hud .fl.on { opacity:1; background:var(--gold); color:var(--ink);
   border-color:var(--gold); box-shadow:0 0 12px var(--amber-glow); }
 
+/* pointer-lock recovery hint (browser refused the re-lock after an Esc-resume):
+   centered near the bottom so it reads over the world, pulsing like the
+   low-resource bars so it can't be mistaken for static chrome. */
+#hud .relock { position:absolute; left:50%; bottom:96px; transform:translateX(-50%);
+  color:var(--gold); border-color:var(--gold); background:var(--ink-90);
+  animation:bar-pulse .8s ease-in-out infinite; }
+#ui.touch #hud .relock { display:none; } /* touch mode never locks */
+
 /* minimap: hairline gold ring + inner vignette (no heavy bezel) */
 #hud .mapwrap { position:absolute; right:18px; top:40px;
   width:${MINIMAP_SIZE}px; height:${MINIMAP_SIZE}px; border-radius:50%;

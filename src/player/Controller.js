@@ -103,6 +103,11 @@ export class Controller {
     this.onStep = null // footstep callback
     this.onLand = null // (fallSpeed:number) => void, after a real airborne drop
     this.onLockChange = null // (locked:boolean) => void
+    // Fired by pointerlockerror / a rejected requestPointerLock: Chrome refuses
+    // re-locks for ~1.3s after an Esc-initiated unlock, and without this signal
+    // a rejected resume would leave the game PLAYING with the cursor free and
+    // no way to know the mouse is dead.
+    this.onLockError = null
     this.onToggleFlashlight = null
 
     this._bind()
@@ -128,9 +133,14 @@ export class Controller {
       this.isLocked = document.pointerLockElement === this.dom
       this.onLockChange?.(this.isLocked)
     })
+    // Rejected/failed lock attempts surface here (see onLockError). Without a
+    // listener the rejection is invisible to the engine.
+    document.addEventListener('pointerlockerror', () => this.onLockError?.())
   }
 
   lock() {
+    // The promise form lets the failure callback fire even in engines that
+    // deliver a rejected promise without dispatching pointerlockerror.
     try {
       const p = this.dom.requestPointerLock({ unadjustedMovement: true })
       if (p && p.catch) p.catch(() => safeLock(this.dom))
@@ -388,7 +398,12 @@ export class Controller {
 function safeLock(dom) {
   try {
     const p = dom.requestPointerLock()
-    if (p && p.catch) p.catch(() => {})
+    // The spec fires pointerlockerror on rejection; synthesize it only for
+    // engines that reject the promise without dispatching the event, so
+    // Controller.onLockError reliably fires either way.
+    if (p && p.catch) {
+      p.catch(() => dom.dispatchEvent?.(new Event('pointerlockerror')))
+    }
   } catch {
     /* ignore (e.g. called outside a user gesture) */
   }

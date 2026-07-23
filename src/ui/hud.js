@@ -45,5 +45,6 @@ export const HUD_HTML = `
       ${bar('hud-expo', 'EXPOSURE', '曝')}
     </div>
     <div class="fl chip" id="hud-fl">[F] LIGHT</div>
+    <div class="chip relock hidden" id="hud-relock">CLICK TO CAPTURE THE MOUSE</div>
     <div class="mapwrap" id="hud-mapwrap"><canvas id="minimap" width="${MINIMAP_SIZE}" height="${MINIMAP_SIZE}"></canvas></div>
   </div>`

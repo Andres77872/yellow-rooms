@@ -121,4 +121,31 @@ describe('exit guidance and completion', () => {
     })
     expect(tooFar.reached).toBe(false)
   })
+
+  // The HUD compass negates relAngle for CSS rotate() (clockwise-positive), so
+  // the world-space sign convention matters: left of the view must come out
+  // positive, right negative.
+  it('reports relAngle positive to the left and negative to the right', () => {
+    // yaw 0 faces -Z, so left is -X and right is +X.
+    const left = evaluateExit({ x: 8, z: -4 }, -3, {
+      pos: { x: 12, z: -4 },
+      floor: -3,
+      yaw: 0,
+    })
+    expect(left.info.relAngle).toBeCloseTo(Math.PI / 2)
+
+    const right = evaluateExit({ x: 16, z: -4 }, -3, {
+      pos: { x: 12, z: -4 },
+      floor: -3,
+      yaw: 0,
+    })
+    expect(right.info.relAngle).toBeCloseTo(-Math.PI / 2)
+
+    const ahead = evaluateExit({ x: 12, z: -8 }, -3, {
+      pos: { x: 12, z: -4 },
+      floor: -3,
+      yaw: 0,
+    })
+    expect(ahead.info.relAngle).toBeCloseTo(0)
+  })
 })

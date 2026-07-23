@@ -227,6 +227,7 @@ vi.mock('../../ui/overlays.js', () => ({
       this.setSeedInput = vi.fn()
       this.setFamilyInput = vi.fn()
       this.setRotateVisible = vi.fn()
+      this.setRelockVisible = vi.fn()
       this.refreshSettings = vi.fn()
       this.updateHud = vi.fn()
     }
@@ -297,6 +298,8 @@ beforeEach(() => {
   vi.stubGlobal('addEventListener', vi.fn())
   vi.stubGlobal('location', { search: '' })
   vi.stubGlobal('history', { replaceState: vi.fn() })
+  // No DOM in this env; the Engine's focus guard reads it optionally.
+  vi.stubGlobal('document', { activeElement: null })
 })
 
 afterEach(() => {
@@ -382,5 +385,68 @@ describe('desktop pause Esc flow', () => {
     engine.controller.isLocked = false
     fire('click', {})
     expect(engine.controller.lock).not.toHaveBeenCalled()
+  })
+
+  it('does not resume when Esc keyup lands on a focused menu control (select, input)', () => {
+    const engine = pausedEngine()
+    engine._pauseT = performance.now() - 1000
+
+    for (const tagName of ['SELECT', 'INPUT', 'TEXTAREA']) {
+      document.activeElement = { tagName }
+      fire('keyup', { code: 'Escape' })
+      expect(engine.state.phase).toBe(Phase.PAUSED)
+    }
+
+    // Focus back on the page body: the same keyup resumes.
+    document.activeElement = { tagName: 'BODY' }
+    fire('keyup', { code: 'Escape' })
+    expect(engine.state.phase).toBe(Phase.PLAYING)
+    expect(engine.controller.lock).toHaveBeenCalled()
+  })
+
+  it('surfaces a rejected re-lock: PLAYING + pointerlockerror shows the hint, keeps the phase', () => {
+    const engine = createEngine()
+    engine.state.phase = Phase.PLAYING
+
+    engine._onLockError()
+
+    expect(engine.state.phase).toBe(Phase.PLAYING)
+    expect(engine._awaitingRelock).toBe(true)
+    expect(engine.ui.setRelockVisible).toHaveBeenCalledWith(true)
+  })
+
+  it('clears the relock hint once the pointer locks again', () => {
+    const engine = createEngine()
+    engine.state.phase = Phase.PLAYING
+    engine._onLockError()
+    engine.ui.setRelockVisible.mockClear()
+
+    engine._onLock(true)
+
+    expect(engine._awaitingRelock).toBe(false)
+    expect(engine.ui.setRelockVisible).toHaveBeenCalledWith(false)
+  })
+
+  it('ignores lock errors outside live play (pause menu owns the cursor)', () => {
+    const engine = pausedEngine()
+
+    engine._onLockError()
+
+    expect(engine._awaitingRelock).toBeFalsy()
+    expect(engine.ui.setRelockVisible).not.toHaveBeenCalled()
+  })
+
+  it('resuming a pause taken during TRANSITION returns to TRANSITION, not PLAYING', () => {
+    const engine = createEngine()
+    engine.state.phase = Phase.TRANSITION
+    engine.state.level = 2
+    engine.pause()
+    expect(engine.state.phase).toBe(Phase.PAUSED)
+
+    engine.resume()
+
+    expect(engine.state.phase).toBe(Phase.TRANSITION)
+    expect(engine.ui.showTransition).toHaveBeenCalledWith(3)
+    expect(engine.ui.showHud).not.toHaveBeenCalled()
   })
 })

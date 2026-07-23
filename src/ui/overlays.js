@@ -21,6 +21,7 @@ export class UI {
     this.onQuit = null
     this.onSetting = null
     this.onResetSettings = null
+    this.onHudHide = null // engine: phase exits clear its _awaitingRelock flag
     this._hudCache = {} // last-written HUD values; skips redundant DOM writes
 
     const style = document.createElement('style')
@@ -131,6 +132,7 @@ export class UI {
       familySelect: $('#family-select'),
       pauseRun: $('#pause-run'),
       titleSettings: $('#title-settings'),
+      relock: $('#hud-relock'),
       btnStart: $('#btn-start'),
       btnSettings: $('#btn-settings'),
       btnResume: $('#btn-resume'),
@@ -190,6 +192,13 @@ export class UI {
     if (this.el.familySelect.value !== v) this.el.familySelect.value = 'office'
   }
 
+  // Pointer-lock recovery hint (desktop only): shown when the browser refused
+  // a re-lock after an Esc-resume — the player must click to re-capture the
+  // mouse. Driven by the Engine, not by phase.
+  setRelockVisible(v) {
+    this.el.relock.classList.toggle('hidden', !v)
+  }
+
   // `LEVEL n · SEED s[ · FAMILY]` — the shareable run identity, used by the
   // death card and the pause card. Office is implicit and adds no suffix.
   _runSummary(state) {
@@ -206,6 +215,13 @@ export class UI {
     this.el.dead.classList.toggle('hidden', phase !== Phase.DEAD)
     this.el.trans.classList.toggle('hidden', phase !== Phase.TRANSITION)
     this.el.hud.classList.toggle('hidden', phase !== Phase.PLAYING)
+    // The relock hint only makes sense over live gameplay (pointer unlocked,
+    // phase PLAYING, hint visible). Any other phase exit drops it, and the
+    // engine's _awaitingRelock flag must follow or a later error no-ops.
+    if (phase !== Phase.PLAYING) {
+      this.setRelockVisible(false)
+      this.onHudHide?.()
+    }
     // Move focus to the panel's primary action so Enter works without a mouse
     // (and drop it when the HUD takes over, else Space would re-click a button).
     const primary =
@@ -316,7 +332,10 @@ export class UI {
       // count tell the player to find stairs.
       const df = exit.floorDelta ?? 0
       this.el.compass.style.opacity = df === 0 ? '0.85' : '0.45'
-      this.el.compassArrow.style.transform = `rotate(${exit.relAngle}rad)`
+      // relAngle is CCW-positive in world space (left of the view is +), but
+      // CSS rotate() is clockwise-positive — negate or left/right come out
+      // mirrored.
+      this.el.compassArrow.style.transform = `rotate(${-exit.relAngle}rad)`
       setText(
         'dist',
         this.el.dist,
