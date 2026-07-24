@@ -1,6 +1,6 @@
 # Documentation
 
-Last verified on 2026-07-21 against `WORLD_GEN_VERSION = 24` and the current
+Last verified on 2026-07-23 against `WORLD_GEN_VERSION = 24` and the current
 editor/rendering sources.
 
 ## Current reference
@@ -9,7 +9,8 @@ editor/rendering sources.
   room and structure layers, cache/runtime behavior, audits, and current
   follow-ups.
 - [Lighting & Rendering Pipeline](lighting-pipeline.md) — deferred passes,
-  lamp-field behavior, graphics tiers, and light debugging.
+  render-target lifetimes, lamp-field behavior, graphics/detail tiers,
+  frame-wide instrumentation, and render-scene benchmark scope.
 - [Map Editor](map-editor.md) — editor routes, document semantics, tools, and
   the version-1 `.yrmap` binary layout.
 

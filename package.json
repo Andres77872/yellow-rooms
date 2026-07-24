@@ -8,6 +8,7 @@
     "build": "vite build",
     "audit:world": "node scripts/audit-worldgen.mjs",
     "benchmark:map-families": "node scripts/benchmark-map-families.mjs",
+    "benchmark:render-scene": "node scripts/benchmark-render-scene.mjs",
     "lint": "oxlint",
     "preview": "vite preview",
     "test": "vitest run",

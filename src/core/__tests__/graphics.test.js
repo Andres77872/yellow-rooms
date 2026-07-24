@@ -7,6 +7,7 @@ import {
   AO_TIERS,
   SHADOW_TIERS,
   VOL_TIERS,
+  WORLD_DETAIL_ORDER,
   DEFAULT_PRESET,
   resolveGraphics,
 } from '../graphics.js'
@@ -43,6 +44,7 @@ describe('graphics presets / tiers', () => {
       expect(SHADOW_TIERS[p.shadowQuality], `${name}.shadowQuality`).toBeDefined()
       expect(VOL_TIERS[p.volQuality], `${name}.volQuality`).toBeDefined()
       expect(TIER_ORDER).toContain(p.aoQuality)
+      expect(WORLD_DETAIL_ORDER).toContain(p.worldDetail)
       expect(p.renderScale).toBeGreaterThanOrEqual(0.5)
       expect(p.renderScale).toBeLessThanOrEqual(1)
     }
@@ -83,6 +85,7 @@ describe('resolveGraphics', () => {
     const q = resolveGraphics(
       fakeSettings({
         renderScale: 0.75,
+        worldDetail: 'low',
         aoQuality: 'off',
         shadowQuality: 'ultra',
         volQuality: 'low',
@@ -91,6 +94,7 @@ describe('resolveGraphics', () => {
       })
     )
     expect(q.renderScale).toBe(0.75)
+    expect(q.worldDetail).toBe('low')
     expect(q.ao.enabled).toBe(false)
     expect(q.shadow).toEqual(SHADOW_TIERS.ultra)
     expect(q.vol).toEqual(VOL_TIERS.low)
@@ -101,6 +105,7 @@ describe('resolveGraphics', () => {
   it('falls back to the high tier / sane defaults on a gutted store', () => {
     const q = resolveGraphics(fakeSettings({}))
     expect(q.renderScale).toBe(1)
+    expect(q.worldDetail).toBe('high')
     expect(q.ao).toEqual(AO_TIERS.high)
     expect(q.shadow).toEqual(SHADOW_TIERS.high)
     expect(q.vol).toEqual(VOL_TIERS.high)
@@ -127,6 +132,7 @@ describe('Settings graphics coercion', () => {
     expect(s.set('renderScale', 99)).toBe(1)
     expect(s.set('renderScale', 0.01)).toBe(0.5)
     expect(s.set('renderScale', NaN)).toBe(DEFAULTS.renderScale)
+    expect(s.set('worldDetail', 'cinematic')).toBe(DEFAULTS.worldDetail)
     expect(s.set('bloom', 'yes')).toBe(DEFAULTS.bloom)
     expect(s.set('fxaa', false)).toBe(false)
   })

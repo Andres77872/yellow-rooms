@@ -17,6 +17,7 @@ import {
   LIGHT_RANGE,
   FLOOR_SWITCH_Y,
 } from '../constants.js'
+import { RENDER_DETAIL_PROFILES } from '../renderDetail.js'
 
 // The draw-distance contract. FOG_DENSITY, FAR, LOAD_RADIUS and LAMP_QUERY_R
 // are one coupled system: fog must be effectively opaque before geometry
@@ -40,6 +41,26 @@ describe('fog / streaming / far-plane coupling', () => {
 
   it('far plane covers everything guaranteed loaded', () => {
     expect(FAR).toBeGreaterThan(guaranteedLoaded)
+  })
+
+  it('default geometry-detail reduction begins only after fog dominates', () => {
+    // Moving across a chunk boundary can promote the nearest chunk in the next
+    // ring. Its worst-case surface distance is fullRing * CHUNK_WORLD: for
+    // High/Medium this is 84u and already ~75% fogged.
+    for (const name of ['medium', 'high']) {
+      const firstReducedDistance =
+        RENDER_DETAIL_PROFILES[name].fullRing * CHUNK_WORLD
+      expect(fogAt(firstReducedDistance), name).toBeGreaterThanOrEqual(0.74)
+    }
+  })
+
+  it('silhouette removal begins only where fog is effectively opaque', () => {
+    for (const name of ['low', 'medium', 'high']) {
+      const { shellRing } = RENDER_DETAIL_PROFILES[name]
+      const firstShellDistance = (shellRing - 1) * CHUNK_WORLD
+      expect(fogAt(firstShellDistance), name).toBeGreaterThanOrEqual(0.95)
+    }
+    expect(RENDER_DETAIL_PROFILES.ultra.shellRing).toBe(Number.POSITIVE_INFINITY)
   })
 
   it('lamp set-membership changes happen where fog already dominates (>= 50%)', () => {

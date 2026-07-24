@@ -3,9 +3,10 @@ import { LIGHT_MAX, EYE_H, layerY } from '../world/constants.js'
 import { lampFlicker, lampTint } from '../world/lampCharacter.js'
 
 // Feeds the deferred lighting pass: each refresh it gathers the nearest lit
-// lamps to the player and writes their world positions into the shared uniform
-// array the lighting shader loops over. Unlike the old forward LightPool (capped
-// at 8 real PointLights), this shades up to LIGHT_MAX lamps in one pass.
+// lamps to the player and writes their world positions into the source lamp
+// array. DeferredRenderer derives a compact, frustum-visible uniform set from
+// this source every frame. Unlike the old forward LightPool (capped at 8 real
+// PointLights), this shades up to LIGHT_MAX lamps in one pass.
 //
 // Candidates are FLOOR-FILTERED by ChunkManager (same-floor lamps, cy±1 lamps
 // near stairs, and physically reachable lamps inside one tall structure), and the
@@ -56,10 +57,11 @@ export class LightField {
     }
 
     // Per-frame flicker: <= LIGHT_MAX hash+sin evaluations, no allocations.
-    // Written to the RAW side-array, not uLampChar.w: DeferredRenderer's
-    // _updateFrame recombines raw * query-edge fade into .w every frame (it
-    // owns the fade because only it knows the view transform), and doing the
-    // combine from a pristine base keeps it idempotent while the sim is frozen.
+    // Written to the RAW side-array, not source uLampChar.w:
+    // DeferredRenderer._updateFrame recombines raw * query-edge fade into the
+    // derived visible character array every frame (it owns the fade and
+    // frustum because only it knows the camera). Keeping the source pristine
+    // makes the fold idempotent while the sim is frozen.
     const n = this.u.uLampCount.value
     const pos = this.u.uLampPos.value
     const raw = this.u.lampFlickerRaw
@@ -71,32 +73,40 @@ export class LightField {
 }
 
 export function makeLampUniforms() {
-  // uLampPos = world-space (written by LightField); uLampViewPos = view-space,
-  // filled on the CPU once per frame by DeferredRenderer so the lighting / shadow
-  // / volumetric shaders read view-space lamps directly instead of doing a
-  // mat4*vec4 per lamp per pixel in each pass. uLampChar packs the per-fixture
-  // identity (rgb tint, a flicker) sharing the position arrays' indexing.
+  // Source set, written only by LightField / LightRoom. DeferredRenderer never
+  // compacts or folds per-frame state back into it, because an off-screen lamp
+  // must remain available to reappear immediately when the camera turns.
   const pos = new Array(LIGHT_MAX)
-  const viewPos = new Array(LIGHT_MAX)
   const char = new Array(LIGHT_MAX)
+  // Derived renderer-local set. Positions are view-space and character alpha
+  // contains raw flicker × query-edge fade. Stable compaction preserves the
+  // source nearest-first order used by shadow and volumetric budgets.
+  const visibleViewPos = new Array(LIGHT_MAX)
+  const visibleChar = new Array(LIGHT_MAX)
   for (let i = 0; i < LIGHT_MAX; i++) {
     pos[i] = new THREE.Vector3()
-    viewPos[i] = new THREE.Vector3()
     char[i] = new THREE.Vector4(1, 1, 1, 1)
+    visibleViewPos[i] = new THREE.Vector3()
+    visibleChar[i] = new THREE.Vector4(1, 1, 1, 1)
   }
   return {
     uLampPos: { value: pos },
-    uLampViewPos: { value: viewPos },
     uLampCount: { value: 0 },
-    // Per-fixture identity packed as vec4(rgb = colour-temperature tint,
-    // a = flicker) — one array, not two, keeps every pass well under the 224
-    // vec4 fragment-uniform floor WebGL2 guarantees on weak GPUs.
+    // Per-fixture source identity. RGB is colour-temperature tint; alpha is
+    // kept intact as source metadata while the derived set receives the live
+    // flicker/fade weight.
     uLampChar: { value: char },
     // Raw per-fixture flicker written by LightField (or LightRoom). NOT a
     // uniform: DeferredRenderer._updateFrame multiplies it by the query-edge
-    // set fade (a per-lamp camera-distance term) into uLampChar.w each frame,
-    // so the lighting / shadow / volumetric passes all see one consistent
-    // faded weight and no pass recomputes the fade per pixel.
+    // set fade (a per-lamp camera-distance term) into visible.uLampChar.w each
+    // frame, so all three passes see one consistent weight.
     lampFlickerRaw: new Float32Array(LIGHT_MAX).fill(1),
+    visible: {
+      uLampViewPos: { value: visibleViewPos },
+      uLampCount: { value: 0 },
+      // One vec4 array instead of separate tint/weight arrays keeps every pass
+      // below the 224 fragment-uniform-vector floor guaranteed by WebGL2.
+      uLampChar: { value: visibleChar },
+    },
   }
 }

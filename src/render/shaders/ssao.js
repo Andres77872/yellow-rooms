@@ -50,7 +50,10 @@ export const AO_FRAG = /* glsl */ `
       if (clip.w <= 0.0) continue; // sample behind the eye: perspective divide flips xy -> false occlusion
       vec2 uv = (clip.xy / clip.w) * 0.5 + 0.5;
       if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) continue;
-      float sceneZ = viewPosFromDepth(uv).z;
+      // Only Z participates below. The symmetric-perspective helper is exact
+      // for this camera and avoids a full inverse-projection mat4 multiply for
+      // every kernel tap.
+      float sceneZ = viewZAt(uv);
       float rangeCheck = smoothstep(0.0, 1.0, uRadius / max(abs(P.z - sceneZ), 1e-4));
       occ += (sceneZ >= sp.z + uBias ? 1.0 : 0.0) * rangeCheck;
     }

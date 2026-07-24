@@ -1,4 +1,10 @@
-import { DEFAULT_PRESET, GRAPHICS_PRESETS, PRESET_ORDER, TIER_ORDER } from './graphics.js'
+import {
+  DEFAULT_PRESET,
+  GRAPHICS_PRESETS,
+  PRESET_ORDER,
+  TIER_ORDER,
+  WORLD_DETAIL_ORDER,
+} from './graphics.js'
 
 const KEY = 'yellowrooms.settings'
 
@@ -51,6 +57,7 @@ const COERCE = {
   minimap: bool,
   preset: oneOf([...PRESET_ORDER, 'custom']),
   renderScale: num(0.5, 1),
+  worldDetail: oneOf(WORLD_DETAIL_ORDER),
   aoQuality: oneOf(TIER_ORDER),
   shadowQuality: oneOf(TIER_ORDER),
   volQuality: oneOf(TIER_ORDER),

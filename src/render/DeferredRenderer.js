@@ -80,9 +80,34 @@ import {
 // The per-pass GLSL lives in ./shaders/*; this module owns the render targets,
 // uniforms and per-frame orchestration only.
 
-// Shared render-target option preset for the half-res HDR effect buffers
-// (SSAO / volumetrics / bloom) — bilinear so they upsample smoothly.
-const HALF_RT_OPTS = { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter }
+// Fullscreen passes never depth-test, so only the G-buffer owns a depth
+// attachment. Keeping the option in shared presets prevents newly-added post
+// targets from silently allocating/clearing an unused depth renderbuffer.
+const HDR_RT_OPTS = { type: THREE.HalfFloatType, depthBuffer: false }
+// Shared preset for scaled HDR effect buffers (volumetrics / bloom) — bilinear
+// so they upsample smoothly.
+const HALF_RT_OPTS = {
+  ...HDR_RT_OPTS,
+  minFilter: THREE.LinearFilter,
+  magFilter: THREE.LinearFilter,
+}
+// AO and shadow are scalar visibility masks. R8 preserves their [0,1] contract
+// while using one byte/texel instead of RGBA16F's eight; WebGL2 supports linear
+// filtering and color rendering for this format.
+const MASK_RT_OPTS = {
+  format: THREE.RedFormat,
+  type: THREE.UnsignedByteType,
+  depthBuffer: false,
+  minFilter: THREE.LinearFilter,
+  magFilter: THREE.LinearFilter,
+}
+const SCRATCH_RT_OPTS = { hdr: HALF_RT_OPTS, mask: MASK_RT_OPTS }
+const LDR_RT_OPTS = { depthBuffer: false }
+// Keep influence spheres touching a frustum plane despite floating-point
+// normalization/projection noise. This is deliberately tiny relative to the
+// game's 11u lamp range: it prevents edge shimmer without retaining a useful
+// off-screen band.
+const LAMP_FRUSTUM_EPSILON = 0.05
 
 // Linear THREE.Color from an sRGB hex. With THREE.ColorManagement.enabled (set in
 // Engine), the Color constructor already decodes sRGB -> linear working space, so
@@ -138,13 +163,21 @@ export class DeferredRenderer {
     // every pass instead of re-inverted) and lamp positions in view space.
     this._projInv = new THREE.Matrix4()
     this._clearScratch = new THREE.Color()
+    this._lampFrustum = new THREE.Frustum()
+    this._lampSphere = new THREE.Sphere()
+    this._lampViewScratch = new THREE.Vector3()
+    // Raw AO, raw shadow, and bloom's horizontal-blur output have disjoint
+    // lifetimes. Pool compatible intermediates first by storage class, then by
+    // resolution scale: scalar masks can alias each other, but never HDR bloom.
+    this._effectScratchRTs = new Map()
 
     const { dw, dh } = this._dims()
     // Cel ramp + lamp field are shared by the shadow and lighting passes, so
     // build them before either. CEL_BANDS bands + a tiny warm floor so grazing
     // walls keep a dim step instead of snapping to black; ambient fills the rest.
     this.ramp = makeToonGradient(CEL_BANDS, CEL_FLOOR)
-    this.lamps = makeLampUniforms() // { uLampPos[LIGHT_MAX], uLampCount }, driven by LightField
+    this.lamps = makeLampUniforms() // source world-space set, driven by LightField / LightRoom
+    this.visibleLamps = this.lamps.visible // compact renderer-local view-space uniforms
     this._initGBuffer(dw, dh)
     this._initSSAO(dw, dh)
     this._initShadow(dw, dh)
@@ -230,10 +263,29 @@ export class DeferredRenderer {
     return { w: Math.max(1, Math.floor(dw * scale)), h: Math.max(1, Math.floor(dh * scale)) }
   }
 
+  _effectScratch(dw, dh, scale, storage) {
+    let scaledPool = this._effectScratchRTs.get(storage)
+    if (!scaledPool) {
+      scaledPool = new Map()
+      this._effectScratchRTs.set(storage, scaledPool)
+    }
+    let rt = scaledPool.get(scale)
+    if (!rt) {
+      const { w, h } = this._halfRes(dw, dh, scale)
+      rt = new THREE.WebGLRenderTarget(w, h, SCRATCH_RT_OPTS[storage])
+      scaledPool.set(scale, rt)
+    }
+    return rt
+  }
+
   // --- stage init ----------------------------------------------------------
 
   _initGBuffer(dw, dh) {
-    // G-buffer: 2 color targets (albedo+matID, viewNormal) + depth texture.
+    // G-buffer: HDR albedo+matID, compact view normal, and depth. gColor must
+    // remain RGBA16F: emissive panels intentionally exceed 1.0 and matID uses
+    // values 0/1/2 (RGBA8 would clamp entities to the emissive class). Normals
+    // are normalized after sampling, so RGBA8's <0.38° worst-case direction
+    // error is immaterial to the cel lighting and wide outline thresholds.
     const depthTexture = new THREE.DepthTexture(dw, dh)
     depthTexture.type = THREE.UnsignedIntType
     this.gBuffer = new THREE.WebGLRenderTarget(dw, dh, {
@@ -241,17 +293,22 @@ export class DeferredRenderer {
       type: THREE.HalfFloatType,
       minFilter: THREE.NearestFilter,
       magFilter: THREE.NearestFilter,
+      depthBuffer: true,
       depthTexture,
     })
     this.gColor = this.gBuffer.textures[0]
     this.gNormal = this.gBuffer.textures[1]
+    // Three allocates MRT attachments from each texture's own descriptor, so
+    // changing this before the first render produces a mixed RGBA16F + RGBA8
+    // framebuffer and halves the normal attachment's storage/bandwidth.
+    this.gNormal.type = THREE.UnsignedByteType
     this.depthTex = depthTexture
   }
 
   _initSSAO(dw, dh) {
     const { w: aw, h: ah } = this._halfRes(dw, dh, AO_SCALE)
-    this.aoRT = new THREE.WebGLRenderTarget(aw, ah, HALF_RT_OPTS)
-    this.aoBlurRT = new THREE.WebGLRenderTarget(aw, ah, HALF_RT_OPTS)
+    this.aoRT = this._effectScratch(dw, dh, AO_SCALE, 'mask')
+    this.aoBlurRT = new THREE.WebGLRenderTarget(aw, ah, MASK_RT_OPTS)
     this.aoUniforms = {
       tNormal: { value: this.gNormal },
       tDepth: { value: this.depthTex },
@@ -280,8 +337,8 @@ export class DeferredRenderer {
   _initShadow(dw, dh) {
     // Half-res screen-space lamp shadow mask + depth-aware bilateral blur.
     const { w: sw, h: sh } = this._halfRes(dw, dh, SHADOW_SCALE)
-    this.shadowRT = new THREE.WebGLRenderTarget(sw, sh, HALF_RT_OPTS)
-    this.shadowBlurRT = new THREE.WebGLRenderTarget(sw, sh, HALF_RT_OPTS)
+    this.shadowRT = this._effectScratch(dw, dh, SHADOW_SCALE, 'mask')
+    this.shadowBlurRT = new THREE.WebGLRenderTarget(sw, sh, MASK_RT_OPTS)
     this.shadowUniforms = {
       tNormal: { value: this.gNormal },
       tDepth: { value: this.depthTex },
@@ -289,9 +346,9 @@ export class DeferredRenderer {
       uProj: { value: new THREE.Matrix4() },
       uProjInverse: { value: new THREE.Matrix4() },
       uShadowThickness: { value: SHADOW_THICKNESS },
-      uLampViewPos: this.lamps.uLampViewPos,
-      uLampCount: this.lamps.uLampCount,
-      uLampChar: this.lamps.uLampChar,
+      uLampViewPos: this.visibleLamps.uLampViewPos,
+      uLampCount: this.visibleLamps.uLampCount,
+      uLampChar: this.visibleLamps.uLampChar,
       uLampRange: { value: LIGHT_RANGE },
       uLampWrap: { value: LAMP_WRAP },
       uSteps: { value: SHADOW_STEPS },
@@ -311,7 +368,7 @@ export class DeferredRenderer {
   _initLighting() {
     const { dw, dh } = this._dims()
     // Linear HDR lit buffer.
-    this.litRT = new THREE.WebGLRenderTarget(dw, dh, { type: THREE.HalfFloatType })
+    this.litRT = new THREE.WebGLRenderTarget(dw, dh, HDR_RT_OPTS)
 
     this.lightUniforms = {
       tColor: { value: this.gColor },
@@ -323,9 +380,9 @@ export class DeferredRenderer {
       uProjInverse: { value: new THREE.Matrix4() },
       uShadowStrength: { value: SHADOW_STRENGTH },
       uUpView: { value: new THREE.Vector3(0, 1, 0) },
-      uLampViewPos: this.lamps.uLampViewPos,
-      uLampCount: this.lamps.uLampCount,
-      uLampChar: this.lamps.uLampChar,
+      uLampViewPos: this.visibleLamps.uLampViewPos,
+      uLampCount: this.visibleLamps.uLampCount,
+      uLampChar: this.visibleLamps.uLampChar,
       uLampColor: { value: linVec(PANEL_COLOR) },
       uLampIntensity: { value: LIGHT_INTENSITY },
       uLampFlicker: { value: 1 }, // Engine._updateFlicker dips this with the fluorescent hum
@@ -355,9 +412,9 @@ export class DeferredRenderer {
       tDepth: { value: this.depthTex },
       uProj: { value: new THREE.Matrix4() },
       uProjInverse: { value: new THREE.Matrix4() },
-      uLampViewPos: this.lamps.uLampViewPos,
-      uLampCount: this.lamps.uLampCount,
-      uLampChar: this.lamps.uLampChar,
+      uLampViewPos: this.visibleLamps.uLampViewPos,
+      uLampCount: this.visibleLamps.uLampCount,
+      uLampChar: this.visibleLamps.uLampChar,
       uLampColor: { value: linVec(PANEL_COLOR) },
       // Share the lit pass's lamp-intensity + flicker value-objects so shafts
       // track lamp brightness (incl. LightTool edits + the Engine flicker dip).
@@ -387,7 +444,7 @@ export class DeferredRenderer {
   _initBloom(dw, dh) {
     const { w: bw, h: bh } = this._halfRes(dw, dh, BLOOM_SCALE)
     this.bloomPreRT = new THREE.WebGLRenderTarget(bw, bh, HALF_RT_OPTS)
-    this.bloomTmpRT = new THREE.WebGLRenderTarget(bw, bh, HALF_RT_OPTS)
+    this.bloomTmpRT = this._effectScratch(dw, dh, BLOOM_SCALE, 'hdr')
     this.bloomRT = new THREE.WebGLRenderTarget(bw, bh, HALF_RT_OPTS)
     this.bloomPreUniforms = {
       tLit: { value: this.litRT.texture },
@@ -405,7 +462,7 @@ export class DeferredRenderer {
 
   _initComposite(dw, dh) {
     // Composite (lit + volumetrics + bloom) -> linear sceneRT.
-    this.sceneRT = new THREE.WebGLRenderTarget(dw, dh, { type: THREE.HalfFloatType })
+    this.sceneRT = new THREE.WebGLRenderTarget(dw, dh, HDR_RT_OPTS)
     this.compositeUniforms = {
       tInput: { value: this.litRT.texture },
       tVol: { value: this.volRT.texture },
@@ -417,7 +474,6 @@ export class DeferredRenderer {
   }
 
   _initOutline(dw, dh) {
-    this.outlineRT = new THREE.WebGLRenderTarget(dw, dh, { type: THREE.HalfFloatType })
     this.outlineUniforms = {
       tDiffuse: { value: this.sceneRT.texture },
       tColor: { value: this.gColor },
@@ -440,9 +496,10 @@ export class DeferredRenderer {
   }
 
   _initGrade(dw, dh) {
-    this.gradeRT = new THREE.WebGLRenderTarget(dw, dh) // LDR sRGB for FXAA input
+    this.gradeRT = new THREE.WebGLRenderTarget(dw, dh, LDR_RT_OPTS) // LDR sRGB for FXAA input
     this.gradeUniforms = {
-      tDiffuse: { value: this.outlineRT.texture },
+      // Outline reuses litRT after bloom/composite have consumed the lit image.
+      tDiffuse: { value: this.litRT.texture },
       time: { value: 0 },
       levels: { value: GRADE_LEVELS },
       exposure: { value: 1 }, // pre-tonemap exposure
@@ -507,24 +564,26 @@ export class DeferredRenderer {
     const { dw, dh } = this._dims()
     this.gBuffer.setSize(dw, dh)
     this.litRT.setSize(dw, dh)
+    for (const scaledPool of this._effectScratchRTs.values()) {
+      for (const [scale, rt] of scaledPool) {
+        const scratch = this._halfRes(dw, dh, scale)
+        rt.setSize(scratch.w, scratch.h)
+      }
+    }
     const ao = this._halfRes(dw, dh, AO_SCALE)
-    this.aoRT.setSize(ao.w, ao.h)
     this.aoBlurRT.setSize(ao.w, ao.h)
     this.aoUniforms.uResolution.value.set(dw, dh)
     this.aoBlurUniforms.uTexel.value.set(1 / ao.w, 1 / ao.h)
     const sh = this._halfRes(dw, dh, SHADOW_SCALE)
-    this.shadowRT.setSize(sh.w, sh.h)
     this.shadowBlurRT.setSize(sh.w, sh.h)
     this.shadowBlurUniforms.uTexel.value.set(1 / sh.w, 1 / sh.h)
     const vol = this._halfRes(dw, dh, VOL_SCALE)
     this.volRT.setSize(vol.w, vol.h)
     const b = this._halfRes(dw, dh, BLOOM_SCALE)
     this.bloomPreRT.setSize(b.w, b.h)
-    this.bloomTmpRT.setSize(b.w, b.h)
     this.bloomRT.setSize(b.w, b.h)
     this._bloomTexel.set(1 / b.w, 1 / b.h)
     this.sceneRT.setSize(dw, dh)
-    this.outlineRT.setSize(dw, dh)
     this.gradeRT.setSize(dw, dh)
     this.outlineUniforms.uTexel.value.set(1 / dw, 1 / dh)
     this.fxaaUniforms.uTexel.value.set(1 / dw, 1 / dh)
@@ -532,34 +591,59 @@ export class DeferredRenderer {
 
   // --- per-frame stages ----------------------------------------------------
 
-  // Per-frame shared work done once, before the passes: invert the projection
-  // (each pass then copies it) and transform the active lamps to view space on the
-  // CPU (so the lighting / shadow / volumetric shaders skip a mat4*vec4 per lamp
-  // per pixel). Each lamp's uLampChar.w is also recombined here as raw flicker x
-  // query-edge set fade — the fade depends only on the lamp's camera distance,
-  // so computing it per lamp per FRAME (instead of per pixel in the lighting
-  // shader, as before) is free and gives the shadow + volumetric passes the
-  // same faded weight the lit pass uses. Must run every frame — the view matrix
-  // changes as the camera moves.
+  // Per-frame shared work done once, before the passes: invert the projection,
+  // frustum-cull source lamp influence spheres, and compact the survivors into
+  // renderer-local view-space arrays. All passes consume that one derived set,
+  // skipping a mat4*vec4 per lamp per pixel and avoiding loops over lamps whose
+  // physical reach cannot touch the view.
+  //
+  // Compaction is stable (source order is nearest-first), and never mutates the
+  // source arrays, so shadow/volumetric head budgets keep their meaning and a
+  // culled lamp can reappear immediately when the camera turns. Derived
+  // uLampChar.w folds raw flicker × query-edge fade; computing it here gives all
+  // passes exactly the same faded weight. Must run every frame because both the
+  // view transform and frustum change with the camera.
   _updateFrame() {
     const cam = this.camera
     this._projInv.copy(cam.projectionMatrix).invert()
     const view = cam.matrixWorldInverse
-    const world = this.lamps.uLampPos.value
-    const viewPos = this.lamps.uLampViewPos.value
-    const char = this.lamps.uLampChar.value
-    const raw = this.lamps.lampFlickerRaw
-    const n = this.lamps.uLampCount.value
+    const source = this.lamps
+    const visible = this.visibleLamps
+    const world = source.uLampPos.value
+    const sourceChar = source.uLampChar.value
+    const viewPos = visible.uLampViewPos.value
+    const visibleChar = visible.uLampChar.value
+    const raw = source.lampFlickerRaw
+    const n = Math.min(source.uLampCount.value, world.length)
     const fade0 = LAMP_QUERY_R - LAMP_FADE_BAND
+    // The passes normally share one range, but the LightTool exposes live
+    // tuning and integrations may adjust them independently. Cull against the
+    // maximum so no pass loses an influence that can reach the viewport.
+    this._lampSphere.radius =
+      Math.max(
+        0,
+        this.lightUniforms.uLampRange.value,
+        this.shadowUniforms.uLampRange.value,
+        this.volUniforms.uLampRange.value,
+      ) + LAMP_FRUSTUM_EPSILON
+    this._lampFrustum.setFromProjectionMatrix(cam.projectionMatrix)
+    let visibleCount = 0
     for (let i = 0; i < n; i++) {
-      const v = viewPos[i].copy(world[i]).applyMatrix4(view)
+      const v = this._lampViewScratch.copy(world[i]).applyMatrix4(view)
+      this._lampSphere.center.copy(v)
+      if (!this._lampFrustum.intersectsSphere(this._lampSphere)) continue
+      viewPos[visibleCount].copy(v)
       // 1 - smoothstep(fade0, LAMP_QUERY_R, cameraDist): lamps ramp to zero over
       // the last LAMP_FADE_BAND units of the query radius, so LightField set
       // churn is invisible (see render-coupling.test.js).
       let t = (v.length() - fade0) / LAMP_FADE_BAND
       t = t < 0 ? 0 : t > 1 ? 1 : t
-      char[i].w = raw[i] * (1 - t * t * (3 - 2 * t))
+      visibleChar[visibleCount]
+        .copy(sourceChar[i])
+        .setComponent(3, raw[i] * (1 - t * t * (3 - 2 * t)))
+      visibleCount++
     }
+    visible.uLampCount.value = visibleCount
   }
 
   _renderGBuffer() {
@@ -656,9 +740,11 @@ export class DeferredRenderer {
     ou.tDiffuse.value = this.sceneRT.texture
     ou.uProjInverse.value.copy(this._projInv) // live camera, matches the G-buffer
     ou.uDepthScale.value = 1 / this.camera.far
-    this.renderer.setRenderTarget(this.outlineRT)
+    // litRT is dead after bloom + composite. Debug returns before this pass, so
+    // its tLit channel still observes the real lighting output.
+    this.renderer.setRenderTarget(this.litRT)
     this.outlineQuad.render(this.renderer)
-    return this.outlineRT.texture
+    return this.litRT.texture
   }
 
   // Grade to `target` — gradeRT when FXAA follows, or straight to screen
@@ -690,14 +776,14 @@ export class DeferredRenderer {
   render(time) {
     // 1. G-buffer  2. SSAO  3. shadow mask  4. lighting  5. volumetrics  6. bloom  7. composite
     if (this.timingEnabled) this.timer.frameStart()
-    this._updateFrame() // proj-inverse (once) + CPU lamp world->view + char.w fold
+    this._updateFrame() // proj-inverse + stable visible lamp compaction / char.w fold
     this._pass('gbuffer', () => this._renderGBuffer())
     // A pass can be skipped for two reasons: its quality tier disables it, or
     // its result is provably constant this frame (no lamps loaded -> shadow
     // mask is 1 everywhere; no lamps and no flashlight -> shafts are black).
     // Either way the output RT is cleared to the pass's identity value, so
     // downstream shaders read a neutral mask instead of stale frames.
-    const lampsLoaded = this.lamps.uLampCount.value > 0
+    const lampsLoaded = this.visibleLamps.uLampCount.value > 0
     const flashOn = this.lightUniforms.uFlashOn.value > 0.5
     if (this.aoEnabled) this._pass('ssao', () => this._renderSSAO())
     else this._clearRT(this.aoBlurRT, 0xffffff)
@@ -733,16 +819,16 @@ export class DeferredRenderer {
     if (this.timer) this.timer.dispose()
     this.gBuffer.dispose()
     this.litRT.dispose()
-    this.aoRT.dispose()
+    for (const scaledPool of this._effectScratchRTs.values()) {
+      for (const rt of scaledPool.values()) rt.dispose()
+    }
+    this._effectScratchRTs.clear()
     this.aoBlurRT.dispose()
-    this.shadowRT.dispose()
     this.shadowBlurRT.dispose()
     this.volRT.dispose()
     this.bloomPreRT.dispose()
-    this.bloomTmpRT.dispose()
     this.bloomRT.dispose()
     this.sceneRT.dispose()
-    this.outlineRT.dispose()
     this.gradeRT.dispose()
     this.ramp.dispose()
     this.lightQuad.dispose()

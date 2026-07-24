@@ -14,6 +14,7 @@ import { DEFAULT_WORLD_CONFIG } from '../config.js'
 import {
   LIGHT_RANGE,
   LIGHT_SPILL_R,
+  LAMP_QUERY_R,
   STALKER_AMBIENT,
   LAYER_H,
   WALL_H,
@@ -229,6 +230,85 @@ describe('cross-floor lamp filter', () => {
     })
     expect(cm.collectLampsNear(sampleX, sampleZ, [], structure.baseCy))
       .not.toContain(farLamp)
+  })
+
+  it('matches a full resident scan without iterating unrelated loaded chunks', () => {
+    const seed = 0x1a19
+    const structure = findStructure(seed, tallConfig(10))
+    const bounds = structure.globalBounds
+    const x = ((bounds.x0 + bounds.x1 + 1) / 2) * CELL
+    const z = ((bounds.z0 + bounds.z1 + 1) / 2) * CELL
+    const participant = structure.participants.find(({ cx, cz }) =>
+      x >= cx * CHUNK * CELL &&
+      x <= (cx + 1) * CHUNK * CELL &&
+      z >= cz * CHUNK * CELL &&
+      z <= (cz + 1) * CHUNK * CELL
+    )
+    expect(participant).toBeTruthy()
+
+    const baseCy = structure.baseCy
+    const same = lampAt(x + 1, baseCy, z)
+    const adjacent = lampAt(x, baseCy + 1, z + 1)
+    const tall = lampAt(x, baseCy + 2, z)
+    const beyondVerticalRange = lampAt(x, baseCy + 4, z)
+    const cm = makeCM({
+      [baseCy]: {
+        ...participant,
+        lamps: [same],
+        structure,
+      },
+      [baseCy + 1]: {
+        ...participant,
+        lamps: [adjacent],
+        structure,
+      },
+      [baseCy + 2]: {
+        ...participant,
+        lamps: [tall],
+        structure,
+      },
+      [baseCy + 4]: {
+        ...participant,
+        lamps: [beyondVerticalRange],
+        structure,
+      },
+    }, [{ centerX: x, centerZ: z, lowerCy: baseCy }])
+
+    // Model a retained tall world around the query. None of these chunks can
+    // intersect either the horizontal query circle or its relevant floors.
+    for (let i = 0; i < 400; i++) {
+      const cx = participant.cx + 20 + i
+      const cy = baseCy + 20 + i
+      const cz = participant.cz - 20 - i
+      cm.chunks.set(chunkKey3(cx, cy, cz), {
+        cx,
+        cy,
+        cz,
+        lamps: [lampAt(cx * CHUNK * CELL, cy, cz * CHUNK * CELL)],
+        apertures: [],
+        structure: null,
+        data: { structure: null },
+      })
+    }
+
+    // The pre-optimization algorithm was a full values() scan. Reuse the
+    // unchanged per-chunk predicate as the equivalence oracle.
+    const expected = []
+    const r2 = LAMP_QUERY_R * LAMP_QUERY_R
+    for (const chunk of cm.chunks.values()) {
+      cm._appendChunkLampsNear(chunk, x, z, baseCy, r2, expected)
+    }
+
+    // Integer-floor runtime queries must now use keyed coordinate lookups.
+    cm.chunks.values = () => {
+      throw new Error('collectLampsNear scanned all resident chunks')
+    }
+    const actual = cm.collectLampsNear(x, z, [], baseCy)
+    expect(new Set(actual)).toEqual(new Set(expected))
+    expect(actual).toContain(same)
+    expect(actual).toContain(adjacent)
+    expect(actual).toContain(tall)
+    expect(actual).not.toContain(beyondVerticalRange)
   })
 })
 

@@ -8,7 +8,9 @@ const HALF = (ROOM / 2) | 0
 // An isolated, enclosed room built from the game's shared materials/geometry,
 // lit by a controllable lamp grid written straight into the deferred lamp
 // uniforms. Has its own orbit camera so the renderer can swap to it for a clean,
-// world-free illumination test. Bypasses LightField (debug mode is frozen here).
+// world-free illumination test. Bypasses LightField (debug mode is frozen here)
+// and writes the same source set; DeferredRenderer still derives/culls its
+// camera-visible uniform set each frame.
 export class LightRoom {
   constructor(engine) {
     this.engine = engine
@@ -116,7 +118,7 @@ export class LightRoom {
     this._fixtures = fix
   }
 
-  // Write our lamps into the shared deferred uniform array (LightField is idle).
+  // Write our lamps into the shared deferred source set (LightField is idle).
   applyLamps(deferred) {
     const L = deferred.lamps
     const n = this.lampPos.length
@@ -124,8 +126,9 @@ export class LightRoom {
     for (let i = 0; i < n; i++) {
       L.uLampPos.value[i].copy(this.lampPos[i])
       lampTint(this.lampPos[i].x, this.lampPos[i].z, 0, tint)
-      // raw flicker 1: isolated room runs steady tubes (no flicker dip on cast
-      // light). DeferredRenderer folds raw * query-edge fade into uLampChar.w.
+      // Raw flicker 1: isolated room runs steady tubes (no flicker dip on cast
+      // light). DeferredRenderer folds raw * query-edge fade into its separate
+      // visible uLampChar.w without mutating this source character.
       L.uLampChar.value[i].set(tint[0], tint[1], tint[2], 1)
       L.lampFlickerRaw[i] = 1
     }

@@ -19,12 +19,18 @@ npm run lint
 npm run build
 ```
 
-The map-family benchmark is report-only unless explicit `--budget-*` options
-are supplied:
+The checked-in performance probes are report-only unless explicit
+`--budget-*` options are supplied:
 
 ```bash
 npm run benchmark:map-families
+npm run benchmark:render-scene -- --family office --profile high
 ```
+
+The map-family probe measures headless generation and streaming behavior. The
+render-scene probe measures Node-side prewarm cost and CPU-side scene
+submission potential after visibility/detail gates; it is not a GPU or browser
+frame-time benchmark.
 
 ## Debug tools
 
@@ -37,8 +43,39 @@ npm run benchmark:map-families
   params, 3D gizmos), and **perf** (fps, frame-time sparkline, draw calls,
   memory).
 - `F3` — freeze/unfreeze the sim while the panel is open.
-- `` ` `` (backtick) — lightweight fps / draw-call overlay, no panel needed.
+- `` ` `` (backtick) — lightweight fps / complete-frame draw-call overlay, no
+  panel needed.
 - `?touch=1` / `?touch=0` — force the touch or desktop UI tier.
+
+The full F2 toolbox and its map/editor dependencies load on the first F2 press,
+not in the initial game module graph. Both performance readouts aggregate all
+passes in the deferred frame rather than reporting only its last fullscreen
+pass.
+
+## Rendering and runtime quality
+
+The renderer is a custom multipass deferred toon pipeline with analytic lamps,
+flashlight, and fog. Post-process targets omit unused depth attachments,
+non-overlapping half-resolution effects share compatible scratch storage, AO
+and shadow masks use filtered `R8`, view normals use `RGBA8` beside the HDR
+color attachment, and the outline reuses the expired lighting target. A
+4K-equivalent backing-pixel ceiling prevents Retina/5K windows from multiplying
+every deferred attachment without bound.
+
+Graphics presets also select an explicit `worldDetail` profile. The profile
+keeps each streamed chunk and complete tall-structure vista under the existing
+visibility contract, but removes decorative and then silhouette child batches
+at fog-coupled horizontal chunk rings. Static chunk transforms are frozen after
+mounting, and floor-aware lamp queries address only nearby keyed chunks while
+preserving stair and tall-structure spill rules. Title and pause backdrops keep
+RAF-driven input and animation responsive while limiting full deferred
+submissions to 30 FPS; gameplay, transitions, death effects, and active
+diagnostics remain display-rate. The disposable title world synchronously
+prewarms only its fog-visible radius-2/current-floor seed, then fills the normal
+streaming box within the per-frame count/time budget; playable levels retain
+the full ready-before-control prewarm. See
+[Lighting & Rendering Pipeline](docs/lighting-pipeline.md) for the exact pass,
+detail-profile, instrumentation, and benchmark contracts.
 
 ## World generation
 

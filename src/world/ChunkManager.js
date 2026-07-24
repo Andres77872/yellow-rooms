@@ -14,8 +14,10 @@ import {
   APERTURE_VIS_CHUNKS,
   LIGHT_SPILL_R,
   MAX_BUILDS_PER_FRAME,
+  STREAM_BUILD_BUDGET_MS,
   LAMP_QUERY_R,
   LIGHT_RANGE,
+  LAYER_H,
   STALKER_AMBIENT,
   PLAYER_R,
   chunkKey3,
@@ -25,6 +27,11 @@ import {
   worldToCell,
 } from './constants.js'
 import { DEFAULT_WORLD_CONFIG } from './config.js'
+import {
+  DEFAULT_RENDER_DETAIL_PROFILE,
+  normalizeRenderDetailProfile,
+  renderDetailForChunk,
+} from './renderDetail.js'
 import { slabContract } from './structures/slab.js'
 import { chunkMultilevelRooms } from './structures/multilevel.js'
 import { Chunk } from './Chunk.js'
@@ -32,6 +39,7 @@ import {
   COLUMN_FURNITURE,
   COLUMN_MONUMENTAL,
   MAP_FAMILY_LATTICE,
+  MAP_FAMILY_OFFICE,
   MAP_FAMILY_TOWER,
   wallFeatureSeesThrough,
 } from './mapTypes.js'
@@ -40,6 +48,7 @@ import { resolveStepSurface } from './stepSurface.js'
 
 const UINT32_MAX = 0xffffffff
 const HARD_VOID_PLANE_KEYS = Object.freeze(['deathYmm', 'family', 'id'])
+const TITLE_BACKDROP_RADIUS = 2
 
 function exactHardVoidPlane(plane) {
   if (plane === null || typeof plane !== 'object' || Array.isArray(plane)) {
@@ -174,6 +183,21 @@ export class ChunkManager {
     this._streamPcx = null
     this._streamPcy = null
     this._streamPcz = null
+    // The load box is discrete: while the player stays in the same chunk and
+    // floor, its desired requests and unload bounds cannot change. Keep the
+    // last planned generation inputs separate from the live origin so update()
+    // can keep draining builds without rediscovering the whole box every frame.
+    this._streamPlanSeed = null
+    this._streamPlanConfig = null
+    this._streamPlanChunkCount = null
+    // Child-mesh LOD is horizontal and chunk-ring based. Cache the complete
+    // classification tuple so the per-frame streaming update only re-walks
+    // residents after a chunk transition, quality change or family swap.
+    this._renderDetailProfile = DEFAULT_RENDER_DETAIL_PROFILE
+    this._detailPcx = null
+    this._detailPcz = null
+    this._detailFamily = null
+    this._detailAppliedProfile = null
   }
 
   setSeed(seed) {
@@ -188,6 +212,23 @@ export class ChunkManager {
   // spawn clearing unless the caller overrides it.
   setClearings(list) {
     this.clearings = list
+  }
+
+  setRenderDetailProfile(profile) {
+    const next = normalizeRenderDetailProfile(profile)
+    if (next === this._renderDetailProfile) return false
+    this._renderDetailProfile = next
+
+    const pcx = Number.isInteger(this._detailPcx)
+      ? this._detailPcx
+      : this._streamPcx
+    const pcz = Number.isInteger(this._detailPcz)
+      ? this._detailPcz
+      : this._streamPcz
+    if (Number.isInteger(pcx) && Number.isInteger(pcz)) {
+      this._syncRenderDetail(pcx, pcz)
+    }
+    return true
   }
 
   reset() {
@@ -206,6 +247,44 @@ export class ChunkManager {
     this._streamPcx = null
     this._streamPcy = null
     this._streamPcz = null
+    this._streamPlanSeed = null
+    this._streamPlanConfig = null
+    this._streamPlanChunkCount = null
+    this._detailPcx = null
+    this._detailPcz = null
+    this._detailFamily = null
+    this._detailAppliedProfile = null
+  }
+
+  _applyRenderDetail(chunk) {
+    if (!Number.isInteger(this._detailPcx) || !Number.isInteger(this._detailPcz)) {
+      return false
+    }
+    const detail = renderDetailForChunk(
+      this._detailPcx,
+      this._detailPcz,
+      chunk.cx,
+      chunk.cz,
+      this._renderDetailProfile
+    )
+    return chunk.setRenderDetail?.(detail) ?? false
+  }
+
+  _syncRenderDetail(pcx, pcz) {
+    const family = this.config?.mapFamily?.selected ?? MAP_FAMILY_OFFICE
+    if (
+      pcx === this._detailPcx &&
+      pcz === this._detailPcz &&
+      family === this._detailFamily &&
+      this._renderDetailProfile === this._detailAppliedProfile
+    ) return false
+
+    this._detailPcx = pcx
+    this._detailPcz = pcz
+    this._detailFamily = family
+    this._detailAppliedProfile = this._renderDetailProfile
+    for (const chunk of this.chunks.values()) this._applyRenderDetail(chunk)
+    return true
   }
 
   _normalRequestRelevant(request, pcx, pcy, pcz) {
@@ -353,15 +432,7 @@ export class ChunkManager {
     }
   }
 
-  // Per-frame streaming around the player. `pcy` is the player's floor index;
-  // layers within LOAD_RADIUS_Y stream alongside the XZ ring.
-  update(px, pz, pcy = 0) {
-    const pcx = worldToChunk(px)
-    const pcz = worldToChunk(pz)
-    this._streamPcx = pcx
-    this._streamPcy = pcy
-    this._streamPcz = pcz
-
+  _planStreamingRequests(pcx, pcy, pcz) {
     // A request may wait across many frames. Reconcile the queue with the
     // CURRENT load box before adding work: teleports and floor handoffs must
     // not spend the build budget on the old location. Rebuilding `queued`
@@ -369,19 +440,26 @@ export class ChunkManager {
     // collapses duplicate requests.
     this._reconcileQueue(pcx, pcy, pcz)
 
-    // Resident structure chunks rediscover their complete vertical volume on
-    // every update. This re-tags ordinary overlaps and makes floor changes
-    // inside a retained structure self-healing without globally widening Y.
+    // Resident structure chunks rediscover their complete vertical volume
+    // when the origin changes. This re-tags ordinary overlaps and makes floor
+    // changes inside a retained structure self-healing without globally
+    // widening Y. Builds also discover structures in _buildNext(), so pending
+    // work remains self-expanding while an unchanged origin drains the queue.
     this._discoverStructureRequests(pcy)
 
-    // Queue missing chunks within the load box (nearest first; the player's
-    // own floor first — off-floor chunks only jump the penalty queue when a
-    // vertical opening connects them to the player's floor, because those are
-    // the only ones that can be SEEN through the slab).
-    for (let dcy = -LOAD_RADIUS_Y; dcy <= LOAD_RADIUS_Y; dcy++) {
+    this._enqueueMissingChunks(pcx, pcy, pcz, LOAD_RADIUS, LOAD_RADIUS_Y)
+    this.queue.sort(compareRequests)
+  }
+
+  _enqueueMissingChunks(pcx, pcy, pcz, xzRadius, yRadius) {
+    // Queue missing chunks nearest-first. The player's floor wins ties;
+    // off-floor chunks only jump the penalty queue when a vertical opening
+    // connects them to that floor, because those are the only ones visible
+    // through the slab.
+    for (let dcy = -yRadius; dcy <= yRadius; dcy++) {
       const cy = pcy + dcy
-      for (let dz = -LOAD_RADIUS; dz <= LOAD_RADIUS; dz++) {
-        for (let dx = -LOAD_RADIUS; dx <= LOAD_RADIUS; dx++) {
+      for (let dz = -xzRadius; dz <= xzRadius; dz++) {
+        for (let dx = -xzRadius; dx <= xzRadius; dx++) {
           const cx = pcx + dx
           const cz = pcz + dz
           const key = chunkKey3(cx, cy, cz)
@@ -393,12 +471,9 @@ export class ChunkManager {
         }
       }
     }
-    this.queue.sort(compareRequests)
+  }
 
-    // Build a few per frame.
-    for (let i = 0; i < MAX_BUILDS_PER_FRAME && this.queue.length; i++) this._buildNext()
-
-    // Unload beyond the hysteresis radii.
+  _unloadOutsideStreamingBounds(pcx, pcy, pcz) {
     let aperturesChanged = false
     for (const [key, c] of this.chunks) {
       const outsideXZ =
@@ -419,6 +494,45 @@ export class ChunkManager {
     // the registry can strand off-floor chunks visible (or a ring stale), so
     // re-gate. (Additions re-gate in _buildNext.)
     if (aperturesChanged) this.updateVisibility(this._visCy, this._visStair)
+  }
+
+  // Per-frame streaming around the player. `pcy` is the player's floor index;
+  // layers within LOAD_RADIUS_Y stream alongside the XZ ring.
+  update(px, pz, pcy = 0) {
+    const pcx = worldToChunk(px)
+    const pcz = worldToChunk(pz)
+    const planDirty =
+      pcx !== this._streamPcx ||
+      pcy !== this._streamPcy ||
+      pcz !== this._streamPcz ||
+      this.seed !== this._streamPlanSeed ||
+      this.config !== this._streamPlanConfig ||
+      this.chunks.size !== this._streamPlanChunkCount
+
+    this._streamPcx = pcx
+    this._streamPcy = pcy
+    this._streamPcz = pcz
+    this._syncRenderDetail(pcx, pcz)
+
+    if (planDirty) {
+      this._planStreamingRequests(pcx, pcy, pcz)
+      this._streamPlanSeed = this.seed
+      this._streamPlanConfig = this.config
+    }
+
+    // Queue planning is discrete, but construction stays amortized: unchanged
+    // frames keep consuming pending requests, including structure requests
+    // appended and re-sorted by _buildNext(). A chunk build is indivisible, so
+    // check elapsed time after each one; a slow slice then stands alone instead
+    // of being followed by up to three more stalls.
+    const buildStart = performance.now()
+    for (let i = 0; i < MAX_BUILDS_PER_FRAME && this.queue.length; i++) {
+      this._buildNext()
+      if (performance.now() - buildStart >= STREAM_BUILD_BUDGET_MS) break
+    }
+
+    if (planDirty) this._unloadOutsideStreamingBounds(pcx, pcy, pcz)
+    this._streamPlanChunkCount = this.chunks.size
   }
 
   _buildNext() {
@@ -443,8 +557,9 @@ export class ChunkManager {
       this.config,
       clearings.length ? clearings : null
     )
-    this.root.add(chunk.group)
+    chunk.mount(this.root)
     this.chunks.set(key, chunk)
+    this._applyRenderDetail(chunk)
     // Discovery is intentionally build-driven: ordinary streaming stays at
     // LOAD_RADIUS_Y, but encountering a structure that contains the current
     // player floor schedules its whole participant volume. Sorting inside the
@@ -461,13 +576,49 @@ export class ChunkManager {
     if (chunk.apertures.length) this.updateVisibility(this._visCy, this._visStair)
   }
 
+  // The title world is disposable and fog-heavy, so first paint only needs a
+  // near, current-floor seed. Canonical structures discovered by those builds
+  // still expand through _enqueueStructureRequests and are drained in full.
+  // The normal load-box plan remains deliberately invalid: the first title RAF
+  // calls update(), schedules the full 9x9x3 box, and resumes amortised builds.
+  prewarmTitleBackdrop(px, pz, pcy = 0) {
+    const pcx = worldToChunk(px)
+    const pcz = worldToChunk(pz)
+    this._streamPcx = pcx
+    this._streamPcy = pcy
+    this._streamPcz = pcz
+    this._syncRenderDetail(pcx, pcz)
+
+    // This entry point is for a fresh disposable backdrop. Drop any pending
+    // plan so it cannot accidentally turn the bounded seed into a full prewarm;
+    // update() reconstructs all missing normal work on the next RAF.
+    this.queue.length = 0
+    this.queued.clear()
+    this._enqueueMissingChunks(
+      pcx,
+      pcy,
+      pcz,
+      TITLE_BACKDROP_RADIUS,
+      0
+    )
+    this.queue.sort(compareRequests)
+    while (this.queue.length) this._buildNext()
+
+    this._streamPlanSeed = null
+    this._streamPlanConfig = null
+    this._streamPlanChunkCount = null
+  }
+
   // Build EVERYTHING the streaming radius wants, synchronously. Called behind
-  // the title / level-transition overlays so the world never visibly assembles
-  // in front of the player (MAX_BUILDS_PER_FRAME only amortises steady-state
-  // walking; a fresh level otherwise streams ~240 chunks over ~1s of gameplay).
+  // level-transition overlays so the world never visibly assembles in front of
+  // the player (MAX_BUILDS_PER_FRAME only amortises steady-state walking; a
+  // fresh level otherwise streams ~240 chunks over ~1s of gameplay).
   prewarm(px, pz, pcy = 0) {
     this.update(px, pz, pcy)
     while (this.queue.length) this._buildNext()
+    // prewarm drains outside update()'s per-frame budget; seal the resulting
+    // resident set so the first gameplay frame remains a steady-state update.
+    this._streamPlanChunkCount = this.chunks.size
   }
 
   // --- Cross-floor visibility (v8) ---
@@ -711,6 +862,39 @@ export class ChunkManager {
     return target.set((gx + 0.5) * CELL, layerY(cy), (gz + 0.5) * CELL)
   }
 
+  _appendChunkLampsNear(c, px, pz, pcy, r2, out) {
+    const lamps = c.lamps
+    if (!lamps || !lamps.length) return
+    const floorDelta = pcy === null ? 0 : Math.abs(c.cy - pcy)
+    const structureCandidate = pcy !== null && floorDelta !== 0 &&
+      chunkHasLampContinuity(c, pcy) &&
+      Math.abs(layerY(c.cy) - layerY(pcy)) <= LIGHT_RANGE
+    if (pcy !== null && floorDelta > 1 && !structureCandidate) return
+
+    // Retain the exact AABB rejection after the keyed query. The coordinate
+    // bounds below are a conservative square around the circle, while this
+    // check removes its corner chunks before their lamp arrays are touched.
+    const minX = c.cx * CHUNK_WORLD
+    const minZ = c.cz * CHUNK_WORLD
+    const ndx = px < minX ? minX - px : px > minX + CHUNK_WORLD ? px - (minX + CHUNK_WORLD) : 0
+    const ndz = pz < minZ ? minZ - pz : pz > minZ + CHUNK_WORLD ? pz - (minZ + CHUNK_WORLD) : 0
+    if (ndx * ndx + ndz * ndz > r2) return
+
+    const offFloor = pcy !== null && c.cy !== pcy
+    for (let i = 0; i < lamps.length; i++) {
+      const v = lamps[i]
+      const dx = v.x - px
+      const dz = v.z - pz
+      if (dx * dx + dz * dz > r2) continue
+      const adjacentSpill = floorDelta === 1 &&
+        this._lampSpills(v, Math.min(v.cy, pcy))
+      const structureSpill = structureCandidate &&
+        this._lampSpillsThroughStructure(v, c, pcy)
+      if (offFloor && !structureSpill && !adjacentSpill) continue
+      out.push(v)
+    }
+  }
+
   // Lit-lamp world positions within LAMP_QUERY_R of (px,pz). Reuses `out`
   // (cleared in place) to avoid per-refresh allocation.
   //
@@ -722,34 +906,36 @@ export class ChunkManager {
   collectLampsNear(px, pz, out, pcy = null) {
     out.length = 0
     const r2 = LAMP_QUERY_R * LAMP_QUERY_R
-    for (const c of this.chunks.values()) {
-      const lamps = c.lamps
-      if (!lamps || !lamps.length) continue
-      const floorDelta = pcy === null ? 0 : Math.abs(c.cy - pcy)
-      const structureCandidate = pcy !== null && floorDelta !== 0 &&
-        chunkHasLampContinuity(c, pcy) &&
-        Math.abs(layerY(c.cy) - layerY(pcy)) <= LIGHT_RANGE
-      if (pcy !== null && floorDelta > 1 && !structureCandidate) continue
-      // Chunk-AABB prune: skip chunks whose nearest edge is beyond the query
-      // radius. Exact for any radius; still culls most of the loaded chunks'
-      // lamp arrays each call (called per-frame by lightAt + AI).
-      const minX = c.cx * CHUNK_WORLD
-      const minZ = c.cz * CHUNK_WORLD
-      const ndx = px < minX ? minX - px : px > minX + CHUNK_WORLD ? px - (minX + CHUNK_WORLD) : 0
-      const ndz = pz < minZ ? minZ - pz : pz > minZ + CHUNK_WORLD ? pz - (minZ + CHUNK_WORLD) : 0
-      if (ndx * ndx + ndz * ndz > r2) continue
-      const offFloor = pcy !== null && c.cy !== pcy
-      for (let i = 0; i < lamps.length; i++) {
-        const v = lamps[i]
-        const dx = v.x - px
-        const dz = v.z - pz
-        if (dx * dx + dz * dz > r2) continue
-        const adjacentSpill = floorDelta === 1 &&
-          this._lampSpills(v, Math.min(v.cy, pcy))
-        const structureSpill = structureCandidate &&
-          this._lampSpillsThroughStructure(v, c, pcy)
-        if (offFloor && !structureSpill && !adjacentSpill) continue
-        out.push(v)
+
+    // Compatibility calls without a concrete floor retain the historical
+    // unfiltered scan. Every runtime caller supplies an integer floor, which
+    // lets the hot path address only chunks that can possibly contribute.
+    if (!Number.isInteger(pcy)) {
+      for (const c of this.chunks.values()) {
+        this._appendChunkLampsNear(c, px, pz, pcy, r2, out)
+      }
+      return out
+    }
+
+    // Include every chunk AABB that intersects the query circle. Using
+    // ceil(...)-1 for the lower edge preserves the exact boundary case where
+    // the circle touches the preceding chunk's maximum edge.
+    const minCx = Math.ceil((px - LAMP_QUERY_R) / CHUNK_WORLD) - 1
+    const maxCx = Math.floor((px + LAMP_QUERY_R) / CHUNK_WORLD)
+    const minCz = Math.ceil((pz - LAMP_QUERY_R) / CHUNK_WORLD) - 1
+    const maxCz = Math.floor((pz + LAMP_QUERY_R) / CHUNK_WORLD)
+
+    // Same-floor and adjacent-floor spill require at least one neighbour on
+    // either side. A farther floor can contribute only while its actual layer
+    // separation is within LIGHT_RANGE, so no other floor can pass the
+    // unchanged structure-continuity predicate in _appendChunkLampsNear().
+    const floorReach = Math.max(1, Math.floor(LIGHT_RANGE / LAYER_H))
+    for (let cy = pcy - floorReach; cy <= pcy + floorReach; cy++) {
+      for (let cz = minCz; cz <= maxCz; cz++) {
+        for (let cx = minCx; cx <= maxCx; cx++) {
+          const c = this.chunks.get(chunkKey3(cx, cy, cz))
+          if (c) this._appendChunkLampsNear(c, px, pz, pcy, r2, out)
+        }
       }
     }
     return out

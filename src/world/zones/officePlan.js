@@ -785,16 +785,22 @@ function mergeInvalidRoomFragments(plan, corridor, fragments, cfg) {
     parent[a] = b
   }
 
+  // Cell membership changes only when two roots join. Build it once and update
+  // that pair incrementally instead of rescanning the entire district after
+  // every single union (large Office/Hotel plans can require many unions).
+  // Root iteration, score values, and deterministic tie selection stay
+  // unchanged; rebuildFragments() below still emits canonical cell ordering.
+  const groups = new Map()
+  for (let i = 0; i < fragments.labels.length; i++) {
+    const room = fragments.labels[i]
+    if (room < 0) continue
+    let cells = groups.get(room)
+    if (!cells) groups.set(room, (cells = []))
+    cells.push(i)
+  }
+
   for (let pass = 0; pass < fragments.rooms.length; pass++) {
     let changed = false
-    const groups = new Map()
-    for (let i = 0; i < fragments.labels.length; i++) {
-      if (fragments.labels[i] < 0) continue
-      const root = find(fragments.labels[i])
-      let cells = groups.get(root)
-      if (!cells) groups.set(root, (cells = []))
-      cells.push(i)
-    }
     for (let room = 0; room < fragments.rooms.length; room++) {
       const root = find(room)
       const cells = groups.get(root)
@@ -828,11 +834,13 @@ function mergeInvalidRoomFragments(plan, corridor, fragments, cfg) {
         }
       }
       if (best >= 0) {
+        const mergedCells = cells.concat(groups.get(best) || [])
         join(root, best)
+        groups.delete(root)
+        groups.set(best, mergedCells)
         changed = true
-        // Rebuild root cell sets before scoring another union. This keeps the
-        // shape calculation exact after every merge rather than using a stale
-        // snapshot from the start of the pass.
+        // Preserve the established one-union-per-pass sequence. The next root
+        // sees the exact merged cell set without a district-wide rescan.
         break
       }
     }

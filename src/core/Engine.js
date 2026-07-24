@@ -31,9 +31,14 @@ import { LightField } from '../render/LightField.js'
 import { GameState, Phase } from './GameState.js'
 import { Settings } from './Settings.js'
 import { GRAPHICS_KEYS, GRAPHICS_PRESETS, resolveGraphics } from './graphics.js'
-import { IS_TOUCH, MAX_DPR, enterImmersive } from './device.js'
+import {
+  IS_TOUCH,
+  MAX_DPR,
+  computeEffectivePixelRatio,
+  enterImmersive,
+} from './device.js'
 import { DebugOverlay } from './DebugOverlay.js'
-import { DebugMode } from '../debug/DebugMode.js'
+import { LazyDebugMode } from './LazyDebugMode.js'
 import { UI } from '../ui/overlays.js'
 import { TouchControls } from '../ui/TouchControls.js'
 import { Minimap } from '../ui/Minimap.js'
@@ -50,6 +55,10 @@ import { createExitPlacement, evaluateExit } from './exitPlacement.js'
 THREE.ColorManagement.enabled = true
 
 const SPAWN = SPAWN_WORLD
+// Menus keep their animated world backdrop, but a complete deferred frame is
+// wasteful at 60–144 Hz while no gameplay is advancing. RAF itself stays live
+// for immediate Start/Resume input; only canvas submissions are capped.
+const IDLE_RENDER_INTERVAL_MS = 1000 / 30
 
 export class Engine {
   constructor(app) {
@@ -62,7 +71,14 @@ export class Engine {
       powerPreference: 'high-performance',
       stencil: false,
     })
-    renderer.setPixelRatio(Math.min(devicePixelRatio, MAX_DPR))
+    // This engine owns a multipass deferred pipeline. Three.js normally clears
+    // renderer.info before every renderer.render() call, which would leave the
+    // overlays reporting only the final fullscreen pass instead of the frame.
+    // Reset explicitly once per engine frame so every pass accumulates.
+    renderer.info.autoReset = false
+    renderer.setPixelRatio(
+      computeEffectivePixelRatio(innerWidth, innerHeight, devicePixelRatio, MAX_DPR, 1)
+    )
     renderer.setSize(innerWidth, innerHeight)
     renderer.toneMapping = THREE.NoToneMapping
     renderer.setClearColor(FOG_COLOR, 1)
@@ -188,7 +204,9 @@ export class Engine {
       })
     }
 
-    this.debugMode = new DebugMode(this) // inert until F2; visualizes gen/lighting/AI
+    // The full developer toolbox is intentionally absent from the initial
+    // bundle. This inert facade preserves the frame hooks and loads it on F2.
+    this.debugMode = new LazyDebugMode(this)
 
     // Footsteps/landings sound like the floor they land on: family floor
     // style refined by cell semantics (stairs, bridges, wet rooms — see
@@ -210,11 +228,19 @@ export class Engine {
     this._dipActive = 0
     this._titleYaw = 0
     this._transT = 0
+    this._idleRenderPhase = null
+    this._nextIdleRenderAt = 0
+    this._idleRenderInvalidated = true
+    this._running = false
+    this._raf = null
     this.exitTarget = new THREE.Vector3()
     this.exitInfo = null
 
     addEventListener('resize', () => this._onResize())
-    this.cm.prewarm(SPAWN, SPAWN) // full title backdrop on first paint
+    // First paint needs only the fog-visible neighbourhood. The title loop's
+    // first update immediately starts filling the normal box within the
+    // streaming count/time budget.
+    this.cm.prewarmTitleBackdrop(SPAWN, SPAWN)
     this._animate = this._animate.bind(this)
   }
 
@@ -254,6 +280,7 @@ export class Engine {
       this.settings.set('preset', 'custom')
     }
     this._runSetting(k, this.settings.set(k, v))
+    this._invalidateIdleRender()
   }
 
   _applyAllSettings() {
@@ -292,23 +319,35 @@ export class Engine {
   }
 
   // Re-resolve the stored graphics settings and push them into the renderer:
-  // backing-store scale (render scale x DPR clamp) + the deferred pipeline's
-  // pass enables / loop trip counts. Cheap enough to run per changed key —
-  // same-size setSize calls early-return inside three.
+  // backing-store scale (render scale x DPR clamp x 4K pixel ceiling) + the
+  // deferred pipeline's pass enables / loop trip counts. Cheap enough to run
+  // per changed key — same-size setSize calls early-return inside three.
   _applyGraphics() {
     const q = resolveGraphics(this.settings)
     this._renderScale = q.renderScale
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, MAX_DPR) * q.renderScale)
+    this.renderer.setPixelRatio(
+      computeEffectivePixelRatio(
+        innerWidth,
+        innerHeight,
+        devicePixelRatio,
+        MAX_DPR,
+        q.renderScale
+      )
+    )
     this.deferred.setSize()
     this.deferred.applyQuality(q)
+    this.cm.setRenderDetailProfile(q.worldDetail)
+    this._invalidateIdleRender()
   }
 
   start() {
+    if (this._running) return
+    this._running = true
     const urlSeed = new URLSearchParams(location.search).get('seed')
     if (urlSeed) this.ui.setSeedInput(urlSeed)
     this.ui.setFamilyInput(this.state.mapFamily)
     this.ui.showTitle()
-    requestAnimationFrame(this._animate)
+    this._raf = requestAnimationFrame(this._animate)
   }
 
   startRun(seedText, family = this.state.mapFamily) {
@@ -717,19 +756,56 @@ export class Engine {
   _onResize() {
     this.camera.aspect = innerWidth / innerHeight
     this.camera.updateProjectionMatrix()
-    // Re-apply the clamped pixel ratio (x the graphics render scale): browser
-    // zoom / moving the window between a HiDPI and a standard monitor changes
-    // devicePixelRatio, and a resize event fires for zoom. Without this the
-    // buffers stay at the construction-time ratio.
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, MAX_DPR) * (this._renderScale ?? 1))
+    // Re-apply the DPR, graphics scale, and backing-pixel ceiling: browser zoom
+    // or moving the window between monitors can change every input here.
+    this.renderer.setPixelRatio(
+      computeEffectivePixelRatio(
+        innerWidth,
+        innerHeight,
+        devicePixelRatio,
+        MAX_DPR,
+        this._renderScale ?? 1
+      )
+    )
     this.renderer.setSize(innerWidth, innerHeight)
     this.deferred.setSize()
     this.debugMode.resize(innerWidth, innerHeight)
     this.minimap.resize()
+    this._invalidateIdleRender()
+  }
+
+  _invalidateIdleRender() {
+    this._idleRenderInvalidated = true
+  }
+
+  // TITLE/PAUSED render on a deadline rather than a display-frame divisor, so
+  // 90/120/144 Hz panels all converge on 30 canvas frames. Phase transitions,
+  // resized buffers, changed settings, and active diagnostics draw immediately.
+  // Missed intervals (background tabs) are skipped rather than replayed.
+  _shouldRender(now, phase) {
+    const idle = phase === Phase.TITLE || phase === Phase.PAUSED
+    if (!idle || this.debugMode.active || this.debug.visible) {
+      this._idleRenderPhase = null
+      this._idleRenderInvalidated = false
+      return true
+    }
+
+    if (this._idleRenderInvalidated || this._idleRenderPhase !== phase) {
+      this._idleRenderPhase = phase
+      this._idleRenderInvalidated = false
+      this._nextIdleRenderAt = now + IDLE_RENDER_INTERVAL_MS
+      return true
+    }
+
+    if (now < this._nextIdleRenderAt) return false
+    const elapsedIntervals =
+      Math.floor((now - this._nextIdleRenderAt) / IDLE_RENDER_INTERVAL_MS) + 1
+    this._nextIdleRenderAt += elapsedIntervals * IDLE_RENDER_INTERVAL_MS
+    return true
   }
 
   _animate() {
-    requestAnimationFrame(this._animate)
+    if (this._running) this._raf = requestAnimationFrame(this._animate)
     const now = performance.now()
     const dt = Math.min((now - this._last) / 1000, 0.05)
     this._last = now
@@ -771,6 +847,15 @@ export class Engine {
       this._updateCameraMatrices()
     }
 
+    // Keep RAF-time simulation/title animation current, but omit the expensive
+    // deferred submission between idle deadlines. renderer.info deliberately
+    // retains the previous completed frame on skipped callbacks.
+    if (!this._shouldRender(now, p)) return
+
+    // DebugMode.update() runs first so PerfTool can sample the last completed
+    // frame. Start the new renderer-info interval immediately before its first
+    // possible draw; DebugOverlay reads the finished aggregate below.
+    this.renderer.info.reset()
     this.debugMode.preRender()
     try {
       this.deferred.render(this._time)
@@ -781,6 +866,11 @@ export class Engine {
   }
 
   dispose() {
+    this._running = false
+    if (this._raf != null) {
+      globalThis.cancelAnimationFrame?.(this._raf)
+      this._raf = null
+    }
     this.debugMode.dispose()
     disposeGBufferMaterials(this.materials)
     disposeGeometries(this.geom)

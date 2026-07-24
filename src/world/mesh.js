@@ -608,9 +608,10 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
   }
 
   // --- Exit anomaly ---
+  let exit = null
   let exitWorld = null
   if (data.exit) {
-    const exit = new THREE.Mesh(geom.exit, materials.exit)
+    exit = new THREE.Mesh(geom.exit, materials.exit)
     exit.position.set((data.exit.lx + 0.5) * CELL, 1.35, (data.exit.lz + 0.5) * CELL)
     group.add(exit)
     exitWorld = new THREE.Vector3(
@@ -633,5 +634,22 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
     group.parent?.remove(group)
   }
 
-  return { group, lamps, exitWorld, dispose }
+  // Stable semantic references let Chunk lower render detail without relying
+  // on child order or material identity. The shell and emissive/gameplay cues
+  // are intentionally separate from decorative and silhouette batches.
+  const parts = Object.freeze({
+    floor,
+    ceiling: ceil,
+    walls,
+    frames,
+    leaves,
+    props,
+    signs,
+    furniture,
+    litPanels: panels,
+    deadPanels,
+    exit,
+  })
+
+  return { group, parts, lamps, exitWorld, dispose }
 }

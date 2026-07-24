@@ -4,6 +4,12 @@ import { latticeStructureSlice } from './structures/latticeStamp.js'
 import { resolveMapFamily } from './mapFamily.js'
 import { MAP_FAMILY_LATTICE } from './mapTypes.js'
 import { buildChunkMeshes } from './mesh.js'
+import {
+  RENDER_DETAIL_FULL,
+  RENDER_DETAIL_REDUCED,
+  RENDER_DETAIL_SHELL,
+  normalizeRenderDetailLevel,
+} from './renderDetail.js'
 import { buildStairCells } from './structures/stairCells.js'
 import { validatedRuntimeStructure } from './structures/contract.js'
 
@@ -107,6 +113,8 @@ export class Chunk {
     this.lamps = mesh.lamps // world Vector3 of LIT lamps (for the light pool), tagged .cy
     this.exitWorld = mesh.exitWorld
     this._mesh = mesh
+    this.renderParts = mesh.parts
+    this.renderDetail = RENDER_DETAIL_FULL
     this.stairCells = buildStairCells(this.data, cx, cy, cz)
     this.structure = this.data.structure
 
@@ -132,6 +140,53 @@ export class Chunk {
       })
     }
     this._registerStructureAperture(seed, config)
+  }
+
+  // Lower only decorative child batches; the chunk group remains under the
+  // cross-floor visibility contract owned by ChunkManager. Shell geometry,
+  // emissive cues, live fixtures and the exit anomaly are never hidden.
+  setRenderDetail(level) {
+    const next = normalizeRenderDetailLevel(level)
+    if (next === this.renderDetail) return false
+
+    const reduced = next === RENDER_DETAIL_REDUCED
+    const shell = next === RENDER_DETAIL_SHELL
+    const lattice = this.data.mapFamily === MAP_FAMILY_LATTICE
+    const p = this.renderParts
+
+    // Lattice frames include guard-rail caps and posts, so its reduced tier
+    // retains that silhouette while other families shed ornamental joinery.
+    if (p.frames) p.frames.visible = next === RENDER_DETAIL_FULL || (lattice && reduced)
+    if (p.props) p.props.visible = next === RENDER_DETAIL_FULL
+    if (p.deadPanels) p.deadPanels.visible = next === RENDER_DETAIL_FULL
+    if (p.leaves) p.leaves.visible = !shell
+    if (p.furniture) p.furniture.visible = !shell
+
+    // These references are explicit rather than inferred from child order so
+    // a future mesh batch cannot accidentally enter an LOD tier.
+    if (p.floor) p.floor.visible = true
+    if (p.ceiling) p.ceiling.visible = true
+    if (p.walls) p.walls.visible = true
+    if (p.signs) p.signs.visible = true
+    if (p.litPanels) p.litPanels.visible = true
+    if (p.exit) p.exit.visible = true
+
+    this.renderDetail = next
+    return true
+  }
+
+  // Chunk geometry is immutable after construction. Attach first so the
+  // cached world matrices include the complete parent chain, then disable
+  // Three's local composition and world-matrix multiplication for this static
+  // subtree. Visibility changes remain valid because they do not touch
+  // transforms.
+  mount(parent) {
+    parent.add(this.group)
+    this.group.updateWorldMatrix(true, true)
+    this.group.traverse((object) => {
+      object.matrixAutoUpdate = false
+      object.matrixWorldAutoUpdate = false
+    })
   }
 
   _registerStructureAperture(seed, config) {

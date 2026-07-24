@@ -98,12 +98,13 @@ vi.mock('../../world/ChunkManager.js', () => ({
         this.exit = { cx, cy, cz, lx, lz }
       })
       this.reset = vi.fn()
+      this.setRenderDetailProfile = vi.fn()
       this.updateVisibility = vi.fn()
       this.update = vi.fn()
       this.stairAt = vi.fn(() => null)
       this.surfaceAt = vi.fn(() => 'carpet')
       this.lightAt = vi.fn(() => 0.1)
-      this.prewarm = vi.fn((x, z) => {
+      const recordPrewarm = (x, z) => {
         this.initialDigest = JSON.stringify({
           version: this.config.version,
           seed: this.seed,
@@ -112,7 +113,9 @@ vi.mock('../../world/ChunkManager.js', () => ({
           z,
         })
         return this.initialDigest
-      })
+      }
+      this.prewarmTitleBackdrop = vi.fn(recordPrewarm)
+      this.prewarm = vi.fn(recordPrewarm)
     }
   },
 }))

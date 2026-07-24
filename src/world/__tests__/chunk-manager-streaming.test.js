@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { Chunk } from '../Chunk.js'
 import { ChunkManager } from '../ChunkManager.js'
@@ -8,6 +8,7 @@ import {
   LOAD_RADIUS,
   LOAD_RADIUS_Y,
   MAX_BUILDS_PER_FRAME,
+  STREAM_BUILD_BUDGET_MS,
   UNLOAD_RADIUS,
   chunkKey3,
 } from '../constants.js'
@@ -21,6 +22,7 @@ import {
 } from '../mapTypes.js'
 import { slabContract } from '../structures/slab.js'
 import { structureAt } from '../structures/contract.js'
+import { RENDER_DETAIL_SHELL } from '../renderDetail.js'
 import {
   chunkMultilevelRooms,
   multilevelBandBase,
@@ -30,6 +32,8 @@ import {
 import { discoverTowerFixture } from './tower-fixture.js'
 
 const LOAD_COUNT = (LOAD_RADIUS * 2 + 1) ** 2 * (LOAD_RADIUS_Y * 2 + 1)
+const TITLE_BACKDROP_RADIUS = 2
+const TITLE_BACKDROP_COUNT = (TITLE_BACKDROP_RADIUS * 2 + 1) ** 2
 
 function ordinaryConfig() {
   const config = structuredClone(DEFAULT_WORLD_CONFIG)
@@ -98,11 +102,16 @@ function makeManager(seed = 1, config = ordinaryConfig()) {
       apertures: [],
       lamps: [],
       group: { visible: true },
+      renderDetail: null,
+      setRenderDetail(detail) {
+        this.renderDetail = detail
+      },
       dispose() {},
     }
     this.chunks.set(request.key, chunk)
     this._enqueueStructureRequests(structure)
     this._applyVisibility(chunk)
+    this._applyRenderDetail(chunk)
   }
 
   return { cm, built }
@@ -140,6 +149,47 @@ function registerStructureAperture(seed, config, structure, slice, participant, 
   chunk._registerStructureAperture(seed, config)
   return chunk.apertures
 }
+
+describe('Chunk static scene transforms', () => {
+  it('caches the attached world transform and disables matrix recomputation for the subtree', () => {
+    const scene = new THREE.Scene()
+    const parent = new THREE.Group()
+    parent.position.set(7, 2, -5)
+    scene.add(parent)
+
+    const group = new THREE.Group()
+    group.position.set(CHUNK_WORLD, 3.6, -CHUNK_WORLD)
+    const child = new THREE.Object3D()
+    child.position.set(4, 1, 9)
+    group.add(child)
+    const chunk = Object.assign(Object.create(Chunk.prototype), { group })
+
+    chunk.mount(parent)
+
+    const groupWorld = new THREE.Vector3().setFromMatrixPosition(group.matrixWorld)
+    const childWorld = new THREE.Vector3().setFromMatrixPosition(child.matrixWorld)
+    expect(groupWorld.toArray()).toEqual([
+      7 + CHUNK_WORLD,
+      5.6,
+      -5 - CHUNK_WORLD,
+    ])
+    expect(childWorld.toArray()).toEqual([
+      11 + CHUNK_WORLD,
+      6.6,
+      4 - CHUNK_WORLD,
+    ])
+    group.traverse((object) => {
+      expect(object.matrixAutoUpdate).toBe(false)
+      expect(object.matrixWorldAutoUpdate).toBe(false)
+    })
+
+    const cachedGroupWorld = group.matrixWorld.clone()
+    const cachedChildWorld = child.matrixWorld.clone()
+    scene.updateMatrixWorld(true)
+    expect(group.matrixWorld.equals(cachedGroupWorld)).toBe(true)
+    expect(child.matrixWorld.equals(cachedChildWorld)).toBe(true)
+  })
+})
 
 function plannedTowerFixture() {
   const discovered = discoverTowerFixture()
@@ -179,11 +229,16 @@ function makeTowerManager(seed, config) {
       apertures: [],
       lamps: [],
       group: { visible: true },
+      renderDetail: null,
+      setRenderDetail(detail) {
+        this.renderDetail = detail
+      },
       dispose() {},
     }
     this.chunks.set(request.key, chunk)
     this._enqueueStructureRequests(structure)
     this._applyVisibility(chunk)
+    this._applyRenderDetail(chunk)
   }
 
   return { cm, built }
@@ -259,17 +314,98 @@ function makeLatticeManager(seed, config) {
       apertures: [],
       lamps: [],
       group: { visible: true },
+      renderDetail: null,
+      setRenderDetail(detail) {
+        this.renderDetail = detail
+      },
       dispose() {},
     }
     this.chunks.set(request.key, chunk)
     this._enqueueStructureRequests(structure)
     this._applyVisibility(chunk)
+    this._applyRenderDetail(chunk)
   }
 
   return { cm, built }
 }
 
 describe('ChunkManager streaming queue', () => {
+  it('does not stack more builds after one chunk exhausts the frame budget', () => {
+    const { cm, built } = makeManager()
+    const times = [100, 100 + STREAM_BUILD_BUDGET_MS]
+    const clock = vi.spyOn(performance, 'now').mockImplementation(
+      () => times.shift() ?? 100 + STREAM_BUILD_BUDGET_MS
+    )
+
+    cm.update(0, 0, 0)
+
+    expect(built).toHaveLength(1)
+    expect(cm.queue).toHaveLength(LOAD_COUNT - 1)
+    expect(cm.queued).toEqual(new Set(cm.queue.map(({ key }) => key)))
+    clock.mockRestore()
+  })
+
+  it('bounds first-paint work to the near current-floor seed, then fills normally', () => {
+    const { cm, built } = makeManager()
+
+    cm.prewarmTitleBackdrop(
+      CHUNK_WORLD * 0.25,
+      CHUNK_WORLD * 0.75,
+      0
+    )
+
+    expect(built).toHaveLength(TITLE_BACKDROP_COUNT)
+    expect(cm.chunks.size).toBe(TITLE_BACKDROP_COUNT)
+    expect(cm.queue).toHaveLength(0)
+    expect(cm.queued.size).toBe(0)
+    for (const chunk of cm.chunks.values()) {
+      expect(chunk.cy).toBe(0)
+      expect(Math.abs(chunk.cx)).toBeLessThanOrEqual(TITLE_BACKDROP_RADIUS)
+      expect(Math.abs(chunk.cz)).toBeLessThanOrEqual(TITLE_BACKDROP_RADIUS)
+      expect(chunk.group.visible).toBe(true)
+      expect(chunk.renderDetail).not.toBeNull()
+    }
+
+    const plan = vi.spyOn(cm, '_planStreamingRequests')
+    cm.update(CHUNK_WORLD * 0.5, CHUNK_WORLD * 0.5, 0)
+
+    // The first normal update is intentionally dirty: it plans the complete
+    // load box, but consumes only the ordinary per-frame build budget.
+    expect(plan).toHaveBeenCalledOnce()
+    expect(built).toHaveLength(TITLE_BACKDROP_COUNT + MAX_BUILDS_PER_FRAME)
+    expect(cm.queue).toHaveLength(
+      LOAD_COUNT - TITLE_BACKDROP_COUNT - MAX_BUILDS_PER_FRAME
+    )
+    expect(cm.queued).toEqual(new Set(cm.queue.map(({ key }) => key)))
+
+    while (cm.queue.length) {
+      cm.update(CHUNK_WORLD * 0.5, CHUNK_WORLD * 0.5, 0)
+    }
+    expect(plan).toHaveBeenCalledOnce()
+    expect(cm.chunks.size).toBe(LOAD_COUNT)
+  })
+
+  it('keeps canonical structure expansion intact during title prewarm', () => {
+    const seed = 0x51ea7
+    const config = tallConfig(15)
+    const structure = findStructure(seed, config)
+    const playerChunk = structure.participants[0]
+    const px = (playerChunk.cx + 0.5) * CHUNK_WORLD
+    const pz = (playerChunk.cz + 0.5) * CHUNK_WORLD
+    const { cm } = makeManager(seed, config)
+
+    cm.prewarmTitleBackdrop(px, pz, structure.baseCy)
+
+    for (let cy = structure.baseCy; cy <= structure.topCy; cy++) {
+      for (const participant of structure.participants) {
+        const chunk = cm.chunks.get(chunkKey3(participant.cx, cy, participant.cz))
+        expect(chunk?.structure).toBe(structure)
+        expect(chunk?.group.visible).toBe(true)
+      }
+    }
+    expect(cm.queue).toHaveLength(0)
+  })
+
   it('keeps ordinary streaming at exactly the player floor plus cy±1', () => {
     const { cm } = makeManager()
     cm.prewarm(0, 0, 0)
@@ -314,6 +450,46 @@ describe('ChunkManager streaming queue', () => {
     cm.update(0, 0, -4)
     expectQueueMatchesLoadBox(cm, 0, -4, 0)
     expect(cm.queue).toHaveLength(LOAD_COUNT - MAX_BUILDS_PER_FRAME * 2)
+  })
+
+  it('keeps draining pending builds without replanning an unchanged origin', () => {
+    const { cm, built } = makeManager()
+    const plan = vi.spyOn(cm, '_planStreamingRequests')
+    const unload = vi.spyOn(cm, '_unloadOutsideStreamingBounds')
+
+    cm.update(CHUNK_WORLD * 0.1, CHUNK_WORLD * 0.1, 0)
+    expect(plan).toHaveBeenCalledTimes(1)
+    expect(unload).toHaveBeenCalledTimes(1)
+    expect(built).toHaveLength(MAX_BUILDS_PER_FRAME)
+    expect(cm.queue).toHaveLength(LOAD_COUNT - MAX_BUILDS_PER_FRAME)
+
+    // Position changed, but the load-box origin did not. Construction must
+    // continue while reconciliation, discovery, load-box fill and unload stay
+    // asleep.
+    cm.update(CHUNK_WORLD * 0.9, CHUNK_WORLD * 0.75, 0)
+    expect(plan).toHaveBeenCalledTimes(1)
+    expect(unload).toHaveBeenCalledTimes(1)
+    expect(built).toHaveLength(MAX_BUILDS_PER_FRAME * 2)
+    expect(cm.queue).toHaveLength(LOAD_COUNT - MAX_BUILDS_PER_FRAME * 2)
+    expect(cm.queued).toEqual(new Set(cm.queue.map((request) => request.key)))
+  })
+
+  it('replans on chunk, floor, seed and config transitions', () => {
+    const { cm } = makeManager()
+    const plan = vi.spyOn(cm, '_planStreamingRequests')
+    const unload = vi.spyOn(cm, '_unloadOutsideStreamingBounds')
+
+    cm.update(0, 0, 0)
+    cm.update(CHUNK_WORLD, 0, 0)
+    cm.update(CHUNK_WORLD, 0, 1)
+    cm.setSeed(cm.seed + 1)
+    cm.update(CHUNK_WORLD, 0, 1)
+    cm.config = structuredClone(cm.config)
+    cm.update(CHUNK_WORLD, 0, 1)
+
+    expect(plan).toHaveBeenCalledTimes(5)
+    expect(unload).toHaveBeenCalledTimes(5)
+    expectQueueMatchesLoadBox(cm, 1, 1, 0)
   })
 
   it('recomputes priority and produces deterministic tie ordering', () => {
@@ -519,6 +695,20 @@ describe('ChunkManager streaming queue', () => {
       }
     }
     expect(structureKeys).toHaveLength(30)
+
+    // Child LOD is independent from the structure visibility contract. Even a
+    // shell-classified viewpoint must leave every continuous atrium slice's
+    // group rendered; only Chunk's decorative children are reduced.
+    cm._syncRenderDetail(
+      playerChunk.cx + UNLOAD_RADIUS + 2,
+      playerChunk.cz
+    )
+    for (const key of structureKeys) {
+      const chunk = cm.chunks.get(key)
+      expect(chunk.group.visible).toBe(true)
+      expect(chunk.renderDetail).toBe(RENDER_DETAIL_SHELL)
+    }
+    cm._syncRenderDetail(playerChunk.cx, playerChunk.cz)
 
     // A subsequent steady-state update must not apply ordinary Y hysteresis
     // to slices of the same continuous structure.

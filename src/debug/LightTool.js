@@ -83,7 +83,7 @@ export class LightTool {
     // change re-stamps them from the stored quality (Engine._applyGraphics).
     const pp = section('pipeline')
     root.appendChild(pp.el)
-    this._lampCount = readout('active lamps')
+    this._lampCount = readout('lamps visible / loaded')
     pp.body.appendChild(this._lampCount.el)
     this._shadowBudget = readout('shadow march / vol lamps')
     pp.body.appendChild(this._shadowBudget.el)
@@ -276,7 +276,9 @@ export class LightTool {
     this._freeze.set(this.dbg.freeze)
     this._chan.set(this.dbg.channel)
     const d = this.d
-    this._lampCount.set(`${d.lamps.uLampCount.value} / ${LIGHT_MAX}`)
+    this._lampCount.set(
+      `${d.visibleLamps.uLampCount.value} / ${d.lamps.uLampCount.value} (max ${LIGHT_MAX})`
+    )
     this._shadowBudget.set(
       `${d.shadowUniforms.uMaxLamps.value} × ${d.shadowUniforms.uSteps.value} steps / ` +
         `${d.volUniforms.uMaxLights.value} × ${d.volUniforms.uSteps.value} steps`

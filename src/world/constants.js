@@ -34,6 +34,10 @@ export const UNLOAD_RADIUS = 5 // hysteresis: dispose only beyond this
 export const LOAD_RADIUS_Y = 1 // layers loaded above/below the player
 export const UNLOAD_RADIUS_Y = 2 // vertical hysteresis
 export const MAX_BUILDS_PER_FRAME = 4 // amortise generation across frames (27-chunk rows with 3 layers)
+// Count is only a hard ceiling: after each indivisible chunk build, stop when
+// this CPU budget is spent so one slow generated slice is never followed by
+// three more in the same animation frame.
+export const STREAM_BUILD_BUDGET_MS = 4
 
 // --- Minimap (player-explored fog-of-war) ---
 // Reveal radius (in cells) around the player for the HUD minimap. Cells within

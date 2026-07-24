@@ -1,6 +1,6 @@
 # World Generation Architecture
 
-Verified on 2026-07-21 against world-gen version 24. This documents the current
+Verified on 2026-07-23 against world-gen version 24. This documents the current
 module layout and runtime performance model; `design-review.md`,
 `liminal-horror-design.md`, and `map-generation-research.md` preserve the
 versioned design history.
@@ -389,14 +389,25 @@ in `config.js` and must not drift on an internal rename
 ## Performance model
 
 Chunk builds are synchronous on the main thread, amortized at
-`MAX_BUILDS_PER_FRAME` (4) by `ChunkManager.update`; `prewarm()` drains the
-whole queue behind the title overlay. On top of that, streaming re-validates
-every loaded structure chunk each frame (`_discoverStructureRequests` →
-`validatedRuntimeStructure`).
+`MAX_BUILDS_PER_FRAME` (4) by `ChunkManager.update`, with a 4 ms elapsed-time
+check after each indivisible build so a slow slice cannot be followed by three
+more in the same frame. The disposable title
+backdrop uses `prewarmTitleBackdrop()` to synchronously build only the
+radius-2, current-floor seed needed for first paint; canonical structures
+discovered inside that seed still expand normally. Its full streaming plan is
+left invalid, so the first title RAF schedules the normal load box and fills it
+incrementally. Level starts continue to use `prewarm()`, which drains the whole
+queue behind the transition overlay before control returns to the player.
 
-That per-frame path is why every pure planner layer is cached. All caches key
-on frozen-object identity (WeakMap) or on the full deterministic input, so
-they cannot change output — only cost:
+Queue reconciliation, structure rediscovery, load-box filling, sorting, and
+unload scans run only when the player changes chunk/floor or the seed, config
+identity, reset state, or resident set invalidates the plan. Steady frames
+still drain queued builds within that count/time ceiling, and each build can
+discover and enqueue a complete structure volume.
+
+Those transition/build paths are why every pure planner layer is cached. All
+caches key on frozen-object identity (WeakMap) or on the full deterministic
+input, so they cannot change output — only cost:
 
 | cache | where | keyed by |
 |---|---|---|
@@ -407,21 +418,57 @@ they cannot change output — only cost:
 | lattice floor geometry | `latticeStamp.js` | descriptor identity × levelCy |
 | lattice slices | `latticeStamp.js` `SLICE_CACHE` | descriptor identity × `(cx, cz, lowerCy)` — a floor's `structureUp` and the floor above's `structureDown` are the same frozen object |
 | lattice lethal-void halves | `latticeStamp.js` | slice identity |
+| multilevel void membership | `ChunkData.js` `multilevelVoidMasks` | deeply frozen slab-slice identity → bounded `CHUNK²` byte mask; mutable/editor descriptors stay on the live scan path |
 | runtime validation verdict | `contract.js` `RUNTIME_VALIDATION_CACHE` | descriptor identity × config identity × `(seed, cy)` |
 
-Use the checked-in benchmark for current measurements:
+Office/Hotel room-fragment repair also keeps its union-find cell groups
+incrementally instead of rescanning the whole district after each union. A
+680-plan equivalence corpus produced identical public plans; uncached planner
+medians improved by 32.4% for Office and 26.6% for Hotel. Compiled immutable
+void masks cut a structure-heavy Office prewarm by about 30–32% in the measured
+Node comparison; both figures are workload evidence, not browser frame-time
+guarantees.
+
+Built chunk geometry is immutable. `Chunk.mount()` attaches the subtree,
+computes its complete world matrices once, and disables both local and world
+matrix auto-update on the chunk group and its descendants. Visibility and
+child-detail changes do not mutate transforms.
+
+`worldDetail` is a separate render policy over the same resident chunks and
+topology. It classifies horizontal Chebyshev chunk rings as full, reduced, or
+shell detail and toggles explicit semantic mesh batches. The chunk group,
+structural shell, emissive/gameplay cues, collision, navigation, and complete
+tall-structure visibility contract are unchanged. The manager re-walks
+residents only after a chunk-origin, profile, or family change; new chunks
+receive the cached classification when mounted. Exact profile rings and batch
+semantics are documented in `lighting-pipeline.md`.
+
+Floor-aware lamp lookup is also bounded by address rather than resident-map
+size: `collectLampsNear` visits only chunk keys whose XZ AABBs and finite floor
+reach can contribute, then applies the unchanged exact radius, stair-aperture,
+and continuous-structure checks. The compatibility call without an integer
+floor retains the historical resident scan.
+
+Use the checked-in benchmarks for current measurements:
 
 ```bash
 npm run benchmark:map-families -- --family lattice
+npm run benchmark:render-scene -- --family lattice --profile high
 ```
 
-It reports generation percentiles, descriptor size, observed Node heap delta,
-and functional streaming queue/build/resident counts. Results depend on the
-host and workload. Without explicit `--budget-*` arguments the command is
-report-only and is not a performance acceptance gate. The remaining cold path
-is the first lattice descriptor plus analysis for a district band; caching
-amortizes subsequent slices but does not establish a universal frame-time
-bound.
+`benchmark:map-families` reports generation percentiles, descriptor size,
+observed Node heap delta, and functional streaming queue/build/resident counts.
+`benchmark:render-scene` builds the real CPU-side chunk mesh graph and reports
+prewarm time, visibility/detail-gated submission potential, semantic triangle
+counts, and frozen-matrix state. Its counts do not include a camera frustum,
+occlusion, rasterization, or GPU work, and its Node prewarm timing is not
+browser frame-time evidence. Results depend on the host and workload. Without
+explicit `--budget-*` arguments both commands are report-only and are not
+performance acceptance gates.
+
+The remaining cold path is the first lattice descriptor plus analysis for a
+district band; caching amortizes subsequent slices but does not establish a
+universal frame-time bound.
 
 Known retained cost: a lattice-owned chunk still runs the ordinary L1–L3 zone
 pipeline (usually the office interior planner) before the structure stamp

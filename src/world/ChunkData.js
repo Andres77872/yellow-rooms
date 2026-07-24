@@ -13,13 +13,53 @@ function stairHoleAt(stair, lx, lz) {
   return !!stair?.run?.some((cell) => cell.lx === lx && cell.lz === lz)
 }
 
+const multilevelVoidMasks = new WeakMap()
+
+function chunkCellIndex(lx, lz) {
+  if (
+    !Number.isInteger(lx) ||
+    !Number.isInteger(lz) ||
+    lx < 0 ||
+    lx >= CHUNK ||
+    lz < 0 ||
+    lz >= CHUNK
+  ) {
+    return -1
+  }
+  return cIdx(lx, lz)
+}
+
+function immutableMultilevelVoidMask(room) {
+  const cached = multilevelVoidMasks.get(room)
+  if (cached) return cached
+
+  // Canonical structure slices are deeply frozen. Keep mutable/editor-style
+  // descriptors on the live scan path so changing a cell in place can never
+  // leave a stale membership cache behind.
+  if (!Object.isFrozen(room) || !Object.isFrozen(room.voidCells)) return null
+
+  const mask = new Uint8Array(CHUNK * CHUNK)
+  for (const cell of room.voidCells) {
+    if (!Object.isFrozen(cell)) return null
+    const index = chunkCellIndex(cell.lx, cell.lz)
+    if (index >= 0) mask[index] = 1
+  }
+  multilevelVoidMasks.set(room, mask)
+  return mask
+}
+
 // Each multilevel slab descriptor carries its exact chunk-local void mask.
 // Tall structures can use a different bridge line on every storey (or no
 // bridge at all), so a rectangle-minus-one-line shortcut is no longer enough.
-// Keeping the mask on the canonical descriptor still lets independently
-// generated floor halves derive identical holes without another mutable raster.
+// A weak identity cache compiles immutable canonical descriptors to a bounded
+// byte mask. It neither mutates nor retains a slice after the owning generation
+// graph is released, while repeated meshing/validation queries become O(1).
 function multilevelHoleAt(room, lx, lz) {
   if (!room?.hasRoom || !Array.isArray(room.voidCells)) return false
+  const index = chunkCellIndex(lx, lz)
+  if (index < 0) return false
+  const mask = immutableMultilevelVoidMask(room)
+  if (mask) return mask[index] === 1
   return room.voidCells.some((cell) => cell.lx === lx && cell.lz === lz)
 }
 

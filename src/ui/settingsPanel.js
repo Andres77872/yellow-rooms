@@ -1,5 +1,9 @@
 import { NOISE_MODES, SENS_DEFAULT, SENS_MAX, SENS_MIN } from '../core/Settings.js'
-import { PRESET_ORDER, TIER_ORDER } from '../core/graphics.js'
+import {
+  PRESET_ORDER,
+  TIER_ORDER,
+  WORLD_DETAIL_ORDER,
+} from '../core/graphics.js'
 
 // The settings block lives on BOTH the title and pause cards, so it hooks into
 // each card via data-k attributes (ids must stay unique); the UI collects one
@@ -15,6 +19,9 @@ const presetOpts = [...PRESET_ORDER, 'custom']
   .map((p) => `<option value="${p}">${p.toUpperCase()}</option>`)
   .join('')
 const tierOpts = TIER_ORDER.map((t) => `<option value="${t}">${t.toUpperCase()}</option>`).join('')
+const worldDetailOpts = WORLD_DETAIL_ORDER
+  .map((t) => `<option value="${t}">${t.toUpperCase()}</option>`)
+  .join('')
 const noiseOpts = NOISE_MODES.map((n) => `<option value="${n}">${n.toUpperCase()}</option>`).join('')
 
 // Simple view: the three knobs a player actually reaches for. Every other
@@ -45,6 +52,7 @@ export const SETTINGS_HTML = `
       <input type="range" data-k="rscale" min="0.5" max="1" step="0.05">
       <output class="val" data-k="rscaleVal"></output>
     </span></label>
+    <label>WORLD DETAIL <select data-k="worldDetail">${worldDetailOpts}</select></label>
     <label>AMBIENT OCCLUSION <select data-k="ao">${tierOpts}</select></label>
     <label>LAMP SHADOWS <select data-k="shadow">${tierOpts}</select></label>
     <label>LIGHT SHAFTS <select data-k="volq">${tierOpts}</select></label>
@@ -73,6 +81,7 @@ const WIRE = [
   ['invX', 'change', 'invertX', (el) => el.checked],
   ['preset', 'change', 'preset', (el) => el.value],
   ['rscale', 'input', 'renderScale', (el) => parseFloat(el.value)],
+  ['worldDetail', 'change', 'worldDetail', (el) => el.value],
   ['ao', 'change', 'aoQuality', (el) => el.value],
   ['shadow', 'change', 'shadowQuality', (el) => el.value],
   ['volq', 'change', 'volQuality', (el) => el.value],
@@ -117,6 +126,7 @@ export class SettingsBlock {
     this.el.preset.value = s.get('preset')
     this.el.rscale.value = s.get('renderScale')
     this.el.rscaleVal.value = `${Math.round(s.get('renderScale') * 100)}%`
+    this.el.worldDetail.value = s.get('worldDetail')
     this.el.ao.value = s.get('aoQuality')
     this.el.shadow.value = s.get('shadowQuality')
     this.el.volq.value = s.get('volQuality')
