@@ -1,5 +1,12 @@
-import { IGN, LAMP_ATT, VIEW_RECON, glslFloat } from './common.js'
-import { LIGHT_MAX, VOL_STEPS_MAX, VOL_LIGHTS_MAX, VOL_OCC_NEAR, VOL_OCC_FAR } from '../../world/constants.js'
+import { IGN, LAMP_ATT, VIEW_PROJ, VIEW_RECON, glslFloat } from './common.js'
+import {
+  LIGHT_MAX,
+  VOL_STEPS_MAX,
+  VOL_LIGHTS_MAX,
+  VOL_OCC_NEAR,
+  VOL_OCC_FAR,
+  VOL_CONTRIB_EPS,
+} from '../../world/constants.js'
 
 // --- Volumetric light shafts (half-res in-scatter raymarch) ----------------
 // Marches the camera ray and, at each step, gathers in-scatter from the nearest
@@ -45,13 +52,16 @@ export const VOL_FRAG = /* glsl */ `
   ${IGN}
   ${LAMP_ATT}
   ${VIEW_RECON}
+  ${VIEW_PROJ}
 
   // Henyey-Greenstein phase, normalised so the spherical average is ~1 (keeps the
   // overall brightness stable while concentrating scatter toward the light).
+  // x^1.5 is written as x*sqrt(x): identical for x > 0 (which max() guarantees)
+  // and avoids a pow() in a loop that runs uSteps*uMaxLights times per pixel.
   float phaseHG(float cosT){
     float g2 = uPhaseG * uPhaseG;
-    float denom = 1.0 + g2 - 2.0 * uPhaseG * cosT;
-    return (1.0 - g2) / pow(max(denom, 1e-4), 1.5);
+    float denom = max(1.0 + g2 - 2.0 * uPhaseG * cosT, 1e-4);
+    return (1.0 - g2) / (denom * sqrt(denom));
   }
 
   // Screen-space visibility of view-space sample S toward light Lv: a couple of
@@ -62,9 +72,8 @@ export const VOL_FRAG = /* glsl */ `
     vec3 dir = toL / max(len, 1e-4);
     for (int k = 1; k <= 2; k++){
       vec3 Q = S + dir * (len * (float(k) / 3.0));
-      vec4 clip = uProj * vec4(Q, 1.0);
-      if (clip.w <= 0.0) continue;
-      vec2 uv = (clip.xy / clip.w) * 0.5 + 0.5;
+      vec2 uv;
+      if (!projectView(Q, uv)) continue;
       if (uv.x <= 0.0 || uv.x >= 1.0 || uv.y <= 0.0 || uv.y >= 1.0) continue;
       float dz = viewZAt(uv) - Q.z;       // >0: scene surface nearer than the ray sample
       if (dz > ${glslFloat(VOL_OCC_NEAR)} && dz < ${glslFloat(VOL_OCC_FAR)}) return 0.0;
@@ -80,7 +89,7 @@ export const VOL_FRAG = /* glsl */ `
     float plen = length(P);
     float maxT = min(plen, uMaxDist);
     vec3 dir = P / max(plen, 1e-4);
-    float step = maxT / float(uSteps);
+    float step = maxT / float(max(uSteps, 1));
     // Interleaved Gradient Noise like the lighting/shadow passes — the old
     // HASH jitter degenerated into correlated streaks on some drivers.
     float jitter = ign(gl_FragCoord.xy);
@@ -105,10 +114,15 @@ export const VOL_FRAG = /* glsl */ `
         if (j >= uLampCount || j >= uMaxLights) break;
         vec3 Lv = uLampViewPos[j];
         float dl = distance(S, Lv);
-        if (dl < uLampRange){
+        // Gate on the CHEAP weight before paying for the screen-space occlusion
+        // taps. lampAtt is cubic, so only ~48% of the in-range sphere volume
+        // carries more than 1% of peak: the old "dl < uLampRange" gate spent two
+        // projections and two depth taps per sample on light that rounds away.
+        // (lampAtt is already 0 at/past range, so this subsumes that test.)
+        float w = uLampChar[j].a * lampAtt(dl, uLampRange);
+        if (w > ${glslFloat(VOL_CONTRIB_EPS)}){
           float phase = phaseHG(dot(dir, (Lv - S) / max(dl, 1e-4)));
-          acc += uLampChar[j].rgb *
-            (uLampChar[j].a * lampAtt(dl, uLampRange) * phase * visToLight(S, Lv) * trans);
+          acc += uLampChar[j].rgb * (w * phase * visToLight(S, Lv) * trans);
         }
       }
       // Flashlight in-scatter: a dusty cone from the camera (view origin, axis -z).

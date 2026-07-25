@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { CHUNK } from '../constants.js'
+import * as sewer from '../zones/sewer.js'
 import { ChunkData } from '../ChunkData.js'
 import { RNG } from '../core/rng.js'
 import { worldConfigForFamily } from '../mapFamily.js'
 import { PASSAGE_OPEN, PASSAGE_WALL } from '../mapTypes.js'
 import { placeLights } from '../lamps.js'
 import { countChunkComponents } from '../topology.js'
-
-const SEWER_MODULE_PATH = '../zones/sewer.js'
 
 const ALLOWED_MODULE_KINDS = Object.freeze([
   't',
@@ -38,27 +37,7 @@ const FIXED_FIXTURES = Object.freeze([
   cz: ((index * 5) % 9) - 4,
 })))
 
-let sewerModulePromise = null
 let corpusPromise = null
-
-async function plannedSewerModule() {
-  if (!sewerModulePromise) {
-    sewerModulePromise = import(/* @vite-ignore */ SEWER_MODULE_PATH)
-      .catch((cause) => {
-        throw new Error(
-          'planned sewer behavior is missing: src/world/zones/sewer.js has not been implemented',
-          { cause }
-        )
-      })
-  }
-
-  const sewer = await sewerModulePromise
-  expect(
-    sewer.generate,
-    'planned sewer behavior is missing: the zone module must export generate(data, ctx)'
-  ).toBeTypeOf('function')
-  return sewer
-}
 
 function sewerConfig() {
   const config = worldConfigForFamily('sewer')
@@ -98,7 +77,6 @@ function resultDescriptor(result, data) {
 }
 
 async function compileFixture(fixture, { traceProfileRead = null } = {}) {
-  const sewer = await plannedSewerModule()
   const { config, profile, zone } = sewerConfig()
   const mapFamilyProfile = traceProfileRead
     ? new Proxy({ family: 'sewer', ...profile }, {
@@ -133,7 +111,7 @@ async function compileFixture(fixture, { traceProfileRead = null } = {}) {
   const descriptor = resultDescriptor(result, data)
   expect(
     descriptor,
-    'planned sewer behavior is missing: generate(data, ctx) must expose the canonical SewerDescriptor'
+    'generate(data, ctx) must expose the canonical SewerDescriptor'
   ).not.toBeNull()
 
   return { config, profile, zone, data, descriptor }
@@ -302,7 +280,6 @@ function generatedSnapshot({ data, descriptor }) {
 
 describe('bounded dry sewer vocabulary', () => {
   it('[R21-S01][D03][D05] exposes one bounded canonical sewer zone descriptor', async () => {
-    const sewer = await plannedSewerModule()
     const fixture = await compileFixture(FIXED_FIXTURES[0])
     const { descriptor, profile, zone } = fixture
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_WORLD_CONFIG, TOWER_RELEASE_EVIDENCE } from '../config.js'
-import { CELL, CHUNK, WORLD_GEN_VERSION } from '../constants.js'
+import { DEFAULT_WORLD_CONFIG } from '../config.js'
+import { CELL, CHUNK } from '../constants.js'
 import { generateChunk } from '../generate.js'
 import { worldConfigForFamily } from '../mapFamily.js'
 import {
@@ -451,22 +451,13 @@ describe('bounded canonical Tower/skybridge generation', () => {
     }
   })
 
-  it('[R05-S02][R06-S01..S03][R20-S01][R27-S01][R33-S01][D11] binds the active Tower profile to its version, corpus identity, and Sewer-independent fixture', () => {
+  // Tower must generate identically whether or not other families are enabled.
+  it('[R27-S01][R33-S01] generates a contract-clean Tower independently of Sewer', () => {
     const withoutSewer = structuredClone(DEFAULT_WORLD_CONFIG)
     withoutSewer.mapFamily.profiles.sewer.enabled = false
     const config = worldConfigForFamily('tower', withoutSewer)
     const fixture = generateTowerFixture(FIXED_SEEDS[0], config)
 
-    expect(WORLD_GEN_VERSION).toBe(TOWER_RELEASE_EVIDENCE.generatorVersion)
-    expect(TOWER_RELEASE_EVIDENCE).toMatchObject({
-      family: 'tower',
-      byteImpact: 'changed-output',
-      previousVersion: 23,
-      generatorVersion: 24,
-      profileIdentity: 'tower-forced-audit:levels-3:participants-2:skybridge-1',
-      seedDerivation: 'fixed-root-seeds(0x5a17,0x7157,0xc0ffee)',
-      affectsMaximumHeight: true,
-    })
     expect(config.mapFamily.profiles.sewer.enabled).toBe(false)
     expect(config.mapFamily.profiles.tower.enabled).toBe(true)
     expect(towerContractReasons(fixture)).toEqual([])

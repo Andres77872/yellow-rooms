@@ -1,4 +1,4 @@
-import { HASH, VIEW_RECON } from './common.js'
+import { IGN, VIEW_PROJ, VIEW_RECON } from './common.js'
 import { AO_SAMPLES_MAX } from '../../world/constants.js'
 
 // --- SSAO (half-res): normal-oriented hemisphere kernel + range check -------
@@ -17,7 +17,6 @@ export const AO_FRAG = /* glsl */ `
   uniform sampler2D tDepth;
   uniform mat4 uProj;
   uniform mat4 uProjInverse;
-  uniform vec2 uResolution;       // full-res, for noise rotation
   uniform vec3 uKernel[AO_MAX];
   uniform int uSamples;           // live sample count (quality tier), <= AO_MAX
   uniform float uRadius;
@@ -25,7 +24,8 @@ export const AO_FRAG = /* glsl */ `
   uniform float uIntensity;
 
   ${VIEW_RECON}
-  ${HASH}
+  ${VIEW_PROJ}
+  ${IGN}
 
   void main(){
     float d = texture(tDepth, vUv).x;
@@ -33,7 +33,12 @@ export const AO_FRAG = /* glsl */ `
     vec3 P = viewPosFromDepth(vUv);
     vec3 N = normalize(texture(tNormal, vUv).xyz * 2.0 - 1.0);
 
-    float ang = hash(vUv * uResolution) * 6.2831853;
+    // IGN on integer pixel coords, like the lighting/shadow/volumetric passes.
+    // The old hash(vUv * fullResolution) was doubly wrong here: HASH is the
+    // driver-unstable variant (see common.js), and this pass runs at AO_SCALE,
+    // so scaling half-res UVs by the FULL-res size sampled the hash only on
+    // odd-integer lattice points.
+    float ang = ign(gl_FragCoord.xy) * 6.2831853;
     vec3 randv = vec3(cos(ang), sin(ang), 0.0);
     // Gram-Schmidt; guard against randv (near-)parallel to N -> normalize(~0) = NaN.
     vec3 rd = randv - N * dot(randv, N);
@@ -46,9 +51,10 @@ export const AO_FRAG = /* glsl */ `
     for (int i = 0; i < AO_MAX; i++){
       if (i >= uSamples) break;
       vec3 sp = P + (TBN * uKernel[i]) * uRadius;
-      vec4 clip = uProj * vec4(sp, 1.0);
-      if (clip.w <= 0.0) continue; // sample behind the eye: perspective divide flips xy -> false occlusion
-      vec2 uv = (clip.xy / clip.w) * 0.5 + 0.5;
+      vec2 uv;
+      // projectView() rejects samples at/behind the eye, where the perspective
+      // divide would flip xy and report false occlusion.
+      if (!projectView(sp, uv)) continue;
       if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) continue;
       // Only Z participates below. The symmetric-perspective helper is exact
       // for this camera and avoids a full inverse-projection mat4 multiply for
@@ -57,7 +63,7 @@ export const AO_FRAG = /* glsl */ `
       float rangeCheck = smoothstep(0.0, 1.0, uRadius / max(abs(P.z - sceneZ), 1e-4));
       occ += (sceneZ >= sp.z + uBias ? 1.0 : 0.0) * rangeCheck;
     }
-    float ao = 1.0 - (occ / float(uSamples)) * uIntensity;
+    float ao = 1.0 - (occ / float(max(uSamples, 1))) * uIntensity;
     outColor = vec4(clamp(ao, 0.0, 1.0), 0.0, 0.0, 1.0);
   }
 `

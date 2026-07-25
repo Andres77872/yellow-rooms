@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { LIGHT_MAX, EYE_H, layerY } from '../world/constants.js'
+import { LIGHT_MAX, LAMP_QUERY_R, EYE_H, layerY } from '../world/constants.js'
 import { lampFlicker, lampTint } from '../world/lampCharacter.js'
 
 // Feeds the deferred lighting pass: each refresh it gathers the nearest lit
@@ -23,6 +23,8 @@ export class LightField {
   constructor(uniforms) {
     this.u = uniforms // the full makeLampUniforms() set
     this._cand = []
+    this._d2 = new Float64Array(128) // candidate eye-distances², grown on demand
+    this._order = [] // candidate indices, sorted by _d2
     this._t = 0
     this._time = 0
     this._tint = [0, 0, 0]
@@ -30,6 +32,8 @@ export class LightField {
 
   reset() {
     this.u.uLampCount.value = 0
+    this.u.cutoffR = LAMP_QUERY_R
+    this.u.lampFlickerRaw.fill(1)
     this._t = 0
   }
 
@@ -41,19 +45,40 @@ export class LightField {
       this._t = 0.08 // refresh ~12 Hz; lamps are static, only the near set changes
       const py = layerY(pcy) + EYE_H
       const cand = cm.collectLampsNear(px, pz, this._cand, pcy)
-      const d2 = (v) =>
-        (v.x - px) * (v.x - px) + (v.y - py) * (v.y - py) + (v.z - pz) * (v.z - pz)
-      cand.sort((a, b) => d2(a) - d2(b))
-      const n = Math.min(cand.length, LIGHT_MAX)
+      // Rank by eye distance. The distance is derived ONCE per candidate into a
+      // side buffer and an index array is sorted, instead of re-deriving two
+      // 3-component distances inside every comparison (~2·N·log2 N of them).
+      const total = cand.length
+      if (this._d2.length < total) this._d2 = new Float64Array(total * 2)
+      const d2 = this._d2
+      const order = this._order
+      order.length = total
+      for (let i = 0; i < total; i++) {
+        const v = cand[i]
+        const dx = v.x - px
+        const dy = v.y - py
+        const dz = v.z - pz
+        d2[i] = dx * dx + dy * dy + dz * dz
+        order[i] = i
+      }
+      order.sort((a, b) => d2[a] - d2[b])
+      const n = Math.min(total, LIGHT_MAX)
       const pos = this.u.uLampPos.value
       const char = this.u.uLampChar.value
       for (let i = 0; i < n; i++) {
-        const v = cand[i]
+        const v = cand[order[i]]
         pos[i].copy(v)
         lampTint(v.x, v.z, v.cy ?? 0, this._tint, v.role ?? 0)
         char[i].set(this._tint[0], this._tint[1], this._tint[2], char[i].w)
       }
       this.u.uLampCount.value = n
+      // Publish where the uploaded set ACTUALLY ends so the renderer's edge fade
+      // has something real to ramp against. LAMP_QUERY_R is only the boundary
+      // while the candidate list fits; on the office lamp grid a 60u circle
+      // holds ~92 lit fixtures for LIGHT_MAX=72 slots, so the true boundary is
+      // the LIGHT_MAX-th nearest lamp (~53u) — well inside the fade band, which
+      // used to leave lamps popping out at ~60% weight instead of 0.
+      this.u.cutoffR = total > LIGHT_MAX ? Math.sqrt(d2[order[LIGHT_MAX - 1]]) : LAMP_QUERY_R
     }
 
     // Per-frame flicker: <= LIGHT_MAX hash+sin evaluations, no allocations.
@@ -101,6 +126,11 @@ export function makeLampUniforms() {
     // set fade (a per-lamp camera-distance term) into visible.uLampChar.w each
     // frame, so all three passes see one consistent weight.
     lampFlickerRaw: new Float32Array(LIGHT_MAX).fill(1),
+    // Radius at which the uploaded set ends, written by whoever fills the source
+    // (LightField publishes the LIGHT_MAX-th nearest distance when the cap binds;
+    // LightRoom sets Infinity because its lamps are authored, not queried). NOT a
+    // uniform: DeferredRenderer._updateFrame anchors the edge fade to it.
+    cutoffR: LAMP_QUERY_R,
     visible: {
       uLampViewPos: { value: visibleViewPos },
       uLampCount: { value: 0 },

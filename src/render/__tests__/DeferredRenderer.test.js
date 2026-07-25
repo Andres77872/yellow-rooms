@@ -237,6 +237,83 @@ describe('DeferredRenderer render-target lifecycle', () => {
     deferred.dispose()
   })
 
+  it('owns no cel LUT and no stale AO resolution uniform', () => {
+    const deferred = makeDeferred()
+
+    // The cel ramp is the analytic CEL_BAND snippet now (see cel-band.test.js),
+    // so there is no LUT texture to bind, resize or dispose.
+    expect(deferred.ramp).toBeUndefined()
+    expect(deferred.lightUniforms.tRamp).toBeUndefined()
+    expect(deferred.shadowUniforms.tRamp).toBeUndefined()
+    // SSAO jitters from gl_FragCoord, so the full-res size it used to (wrongly)
+    // scale half-res UVs by is gone.
+    expect(deferred.aoUniforms.uResolution).toBeUndefined()
+
+    deferred.dispose()
+  })
+
+  it('fills a skipped pass output once instead of every frame', () => {
+    const renderer = makeRenderer()
+    renderer.clear = vi.fn()
+    renderer.getClearColor = (out) => out.set(0, 0, 0)
+    renderer.getClearAlpha = () => 1
+    const deferred = makeDeferred(renderer)
+    for (const method of [
+      '_renderGBuffer',
+      '_renderSSAO',
+      '_renderShadow',
+      '_renderLighting',
+      '_renderVolumetrics',
+      '_renderBloom',
+      '_composite',
+      '_renderGrade',
+      '_renderFXAA',
+    ]) {
+      vi.spyOn(deferred, method).mockImplementation(() => {})
+    }
+    vi.spyOn(deferred, '_renderOutline').mockReturnValue(deferred.litRT.texture)
+    deferred.applyQuality({
+      ao: { enabled: false, samples: 8 },
+      shadow: { enabled: false, steps: 12, lamps: 4 },
+      vol: { enabled: false, steps: 16, lights: 6 },
+      bloom: false,
+      fxaa: true,
+    })
+
+    // First frame fills each skipped pass's output with its identity value.
+    deferred.render(0)
+    expect(renderer.clear).toHaveBeenCalledTimes(4) // ao, shadow, vol, bloom
+
+    // The identity never changes, so subsequent frames must not re-clear.
+    renderer.clear.mockClear()
+    deferred.render(1)
+    deferred.render(2)
+    expect(renderer.clear).not.toHaveBeenCalled()
+
+    // Resizing reallocates the storage, so the cached fills are invalid.
+    renderer.size.width = 640
+    deferred.setSize()
+    deferred.render(3)
+    expect(renderer.clear).toHaveBeenCalledTimes(4)
+
+    // And a pass that starts rendering again reclaims its target: re-enabling
+    // volumetrics then disabling it must clear once more, not read as clean.
+    // The lamp goes in the SOURCE set — _updateFrame derives the visible count
+    // from it every frame, so poking the visible count directly would not stick.
+    renderer.clear.mockClear()
+    deferred.lamps.uLampPos.value[0].set(0, 0, -10)
+    deferred.lamps.uLampCount.value = 1
+    deferred.volEnabled = true
+    deferred.render(4)
+    expect(deferred.visibleLamps.uLampCount.value).toBe(1)
+    expect(renderer.clear).not.toHaveBeenCalled()
+    deferred.volEnabled = false
+    deferred.render(5)
+    expect(renderer.clear).toHaveBeenCalledTimes(1)
+
+    deferred.dispose()
+  })
+
   it('disposes each pooled render target exactly once', () => {
     const deferred = makeDeferred()
     const pooledTargets = new Set(

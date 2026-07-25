@@ -1,4 +1,4 @@
-import { IGN, LAMP_ATT, VIEW_RECON, glslFloat } from './common.js'
+import { CEL_BAND, IGN, LAMP_ATT, VIEW_PROJ, VIEW_RECON, glslFloat } from './common.js'
 import { LIGHT_MAX, SHADOW_STEPS_MAX, SHADOW_BIAS, SHADOW_MAX_DARK } from '../../world/constants.js'
 
 // --- Screen-space lamp shadows (half-res) ----------------------------------
@@ -21,7 +21,6 @@ export const SHADOW_FRAG = /* glsl */ `
   out vec4 outColor;
   uniform sampler2D tNormal;
   uniform sampler2D tDepth;
-  uniform sampler2D tRamp;
   uniform mat4 uProj;            // view -> clip (for the screen-space march)
   uniform mat4 uProjInverse;
   uniform float uShadowThickness;
@@ -36,7 +35,8 @@ export const SHADOW_FRAG = /* glsl */ `
   ${IGN}
   ${LAMP_ATT}
   ${VIEW_RECON}
-  float band(float x){ return texture(tRamp, vec2(clamp(x, 0.0, 1.0), 0.5)).r; }
+  ${VIEW_PROJ}
+  ${CEL_BAND}
   float wrapNL(float ndl){ return clamp((ndl + uLampWrap) / (1.0 + uLampWrap), 0.0, 1.0); }
 
   // March the depth buffer from P toward a lamp; return contact-hardened
@@ -44,19 +44,16 @@ export const SHADOW_FRAG = /* glsl */ `
   float march(vec3 P, vec3 Lv, float jitter){
     float maxd = distance(P, Lv);
     vec3 dir = (Lv - P) / max(maxd, 1e-4);
-    float step = maxd / float(uSteps);
+    float step = maxd / float(max(uSteps, 1));
     float t = step * (0.5 + jitter);
     for (int i = 0; i < STEPS_MAX; i++){
       if (i >= uSteps) break;
       vec3 S = P + dir * t;
-      vec4 clip = uProj * vec4(S, 1.0);
-      if (clip.w > 0.0){
-        vec2 uv = (clip.xy / clip.w) * 0.5 + 0.5;
-        if (uv.x > 0.0 && uv.x < 1.0 && uv.y > 0.0 && uv.y < 1.0){
-          float dz = viewZAt(uv) - S.z; // >0: scene surface closer than the ray sample
-          if (dz > ${glslFloat(SHADOW_BIAS)} && dz < uShadowThickness){
-            return clamp(t / maxd, 0.0, 1.0) * ${glslFloat(SHADOW_MAX_DARK)};
-          }
+      vec2 uv;
+      if (projectView(S, uv) && uv.x > 0.0 && uv.x < 1.0 && uv.y > 0.0 && uv.y < 1.0){
+        float dz = viewZAt(uv) - S.z; // >0: scene surface closer than the ray sample
+        if (dz > ${glslFloat(SHADOW_BIAS)} && dz < uShadowThickness){
+          return clamp(t / maxd, 0.0, 1.0) * ${glslFloat(SHADOW_MAX_DARK)};
         }
       }
       t += step;

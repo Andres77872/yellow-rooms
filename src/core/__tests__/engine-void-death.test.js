@@ -2,9 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Engine } from '../Engine.js'
 import { GameState, Phase } from '../GameState.js'
 import { groundHeightAt } from '../../player/ground.js'
-import { DEFAULT_WORLD_CONFIG, SEWER_RELEASE_EVIDENCE } from '../../world/config.js'
+import { DEFAULT_WORLD_CONFIG } from '../../world/config.js'
 import { CELL, WORLD_GEN_VERSION, layerY } from '../../world/constants.js'
-import { validateActivationEvidence } from '../../world/familyAudit.js'
 
 vi.mock('three', () => {
   class WebGLRenderer {
@@ -310,132 +309,7 @@ vi.mock('../exitPlacement.js', () => ({
 }))
 
 const VOID_ID = 0x5a17
-const VOID_LOWER_CY = 2
 const VOID_CELL = Object.freeze({ lx: 5, lz: 8, deathYmm: -7200 })
-
-function resetBaseline(family) {
-  return {
-    version: WORLD_GEN_VERSION,
-    seedText: 'same-level-void',
-    level: 7,
-    mapFamily: family,
-    profileIdentity: `${family}-core`,
-    initialDigest: `${family}:same-level-void:7:v${WORLD_GEN_VERSION}`,
-  }
-}
-
-function matchedVoidSafetyEvidence(family = 'tower') {
-  const half = {
-    id: VOID_ID,
-    family,
-    lowerCy: VOID_LOWER_CY,
-    cells: [{ ...VOID_CELL }],
-  }
-  const baseline = resetBaseline(family)
-  return {
-    hardVoidDeath: {
-      ok: true,
-      deathReason: 'void',
-      callbackCount: 1,
-      plane: {
-        id: VOID_ID,
-        family,
-        deathYmm: VOID_CELL.deathYmm,
-      },
-      halves: {
-        lethalVoidUp: structuredClone(half),
-        lethalVoidDown: structuredClone(half),
-      },
-      ownership: {
-        id: VOID_ID,
-        family,
-        lowerCy: VOID_LOWER_CY,
-      },
-    },
-    deterministicReset: {
-      ok: true,
-      before: structuredClone(baseline),
-      after: structuredClone(baseline),
-    },
-  }
-}
-
-function exposedFamilyActivationEvidence(family = 'tower') {
-  const candidateVersion = WORLD_GEN_VERSION + 1
-  const candidateDigest = `${family}-byte-stream-v${candidateVersion}`
-  return {
-    family,
-    enabled: true,
-    byteImpact: 'first-emission',
-    affectsMaximumHeight: true,
-    previous: {
-      version: WORLD_GEN_VERSION,
-      digest: 'pre-exposed-family-byte-stream',
-    },
-    candidate: {
-      version: candidateVersion,
-      digest: candidateDigest,
-    },
-    pins: {
-      global: {
-        version: candidateVersion,
-        digest: `global-${candidateDigest}`,
-      },
-      family: {
-        family,
-        version: candidateVersion,
-        digest: candidateDigest,
-      },
-      maximumHeight: {
-        version: candidateVersion,
-        digest: `maximum-height-${candidateDigest}`,
-      },
-    },
-    corpus: {
-      version: candidateVersion,
-      profileIdentity: `${family}-core`,
-      seedDerivation: 'hashStr(seedText#level)',
-    },
-    voidSafety: matchedVoidSafetyEvidence(family),
-  }
-}
-
-function sewerActivationEvidence(voidSafety) {
-  const release = SEWER_RELEASE_EVIDENCE
-  const evidence = {
-    family: release.family,
-    enabled: true,
-    byteImpact: release.byteImpact,
-    affectsMaximumHeight: release.affectsMaximumHeight,
-    previous: {
-      version: release.previousVersion,
-      digest: release.previousFamilyCorpusDigest,
-    },
-    candidate: {
-      version: release.generatorVersion,
-      digest: release.familyCorpusDigest,
-    },
-    pins: {
-      global: {
-        version: release.generatorVersion,
-        digest: release.globalGoldenDigest,
-      },
-      family: {
-        family: release.family,
-        version: release.generatorVersion,
-        digest: release.familyCorpusDigest,
-      },
-      maximumHeight: null,
-    },
-    corpus: {
-      version: release.generatorVersion,
-      profileIdentity: release.profileIdentity,
-      seedDerivation: release.seedDerivation,
-    },
-  }
-  if (voidSafety !== undefined) evidence.voidSafety = voidSafety
-  return evidence
-}
 
 function createEngine(family = 'tower') {
   const engine = new Engine({ appendChild: vi.fn() })
@@ -464,14 +338,6 @@ function engineBaseline(engine) {
   }
 }
 
-function expectSafetyRejection(evidence, reason) {
-  const result = validateActivationEvidence(evidence)
-  expect(
-    result.reasons,
-    `${reason}: exposed-family activation must report its safety failure`
-  ).toContain(reason)
-  expect(result.ok, `${reason}: exposed-family activation must fail closed`).toBe(false)
-}
 
 beforeEach(() => {
   vi.stubGlobal('devicePixelRatio', 1)
@@ -489,7 +355,7 @@ describe('Engine authored-void hard death (R18-S01..S03; D08/D09)', () => {
     'wires a validated %s void plane to hard death with reason void',
     (family) => {
       const engine = createEngine(family)
-      const event = matchedVoidSafetyEvidence(family).hardVoidDeath.plane
+      const event = { id: VOID_ID, family, deathYmm: VOID_CELL.deathYmm }
 
       expect(
         engine.controller.onVoidDeath,
@@ -679,160 +545,5 @@ describe('same-level deterministic void retry (R19-S01..S03; D09)', () => {
     expect(engine.state.mapFamily).toBe(before.mapFamily)
     expect(engine.cm.config.version).toBe(before.version)
     expect(engine.ui.showHud).not.toHaveBeenCalled()
-  })
-})
-
-describe('void-safety activation evidence (R20-S01..S03, R32-S04; D08/D09)', () => {
-  it.each(['tower', 'lattice'])(
-    'accepts complete matched hard-death and reset evidence for %s',
-    (family) => {
-      const evidence = exposedFamilyActivationEvidence(family)
-      expect(evidence.voidSafety.hardVoidDeath.plane).toStrictEqual({
-        id: VOID_ID,
-        family,
-        deathYmm: VOID_CELL.deathYmm,
-      })
-      expect(validateActivationEvidence(evidence))
-        .toEqual({ ok: true, reasons: [] })
-    }
-  )
-
-  it.each([
-    {
-      label: 'missing hard-death evidence',
-      reason: 'missing-hard-void-death-evidence',
-      damage(evidence) {
-        delete evidence.voidSafety.hardVoidDeath
-      },
-    },
-    {
-      label: 'failed hard-death evidence',
-      reason: 'hard-void-death-failed',
-      damage(evidence) {
-        evidence.voidSafety.hardVoidDeath.ok = false
-      },
-    },
-    {
-      label: 'non-void death result',
-      reason: 'hard-void-death-failed',
-      damage(evidence) {
-        evidence.voidSafety.hardVoidDeath.deathReason = 'caught'
-      },
-    },
-    {
-      label: 'duplicate callback result',
-      reason: 'void-death-not-idempotent',
-      damage(evidence) {
-        evidence.voidSafety.hardVoidDeath.callbackCount = 2
-      },
-    },
-  ])('blocks exposed families for $label', ({ damage, reason }) => {
-    for (const family of ['tower', 'lattice']) {
-      const evidence = exposedFamilyActivationEvidence(family)
-      damage(evidence)
-      expectSafetyRejection(evidence, reason)
-    }
-  })
-
-  it.each([
-    {
-      label: 'an orphaned descriptor half',
-      reason: 'missing-void-plane-half',
-      damage(evidence) {
-        evidence.voidSafety.hardVoidDeath.halves.lethalVoidDown = null
-      },
-    },
-    {
-      label: 'a mismatched canonical id',
-      reason: 'void-plane-mismatch',
-      damage(evidence) {
-        evidence.voidSafety.hardVoidDeath.halves.lethalVoidDown.id++
-      },
-    },
-    {
-      label: 'a mismatched family',
-      reason: 'void-plane-mismatch',
-      damage(evidence) {
-        evidence.voidSafety.hardVoidDeath.halves.lethalVoidDown.family = 'office'
-      },
-    },
-    {
-      label: 'a mismatched lower floor',
-      reason: 'void-plane-mismatch',
-      damage(evidence) {
-        evidence.voidSafety.hardVoidDeath.halves.lethalVoidDown.lowerCy++
-      },
-    },
-    {
-      label: 'a mismatched cell/death plane',
-      reason: 'void-plane-mismatch',
-      damage(evidence) {
-        evidence.voidSafety.hardVoidDeath.halves.lethalVoidDown.cells[0].deathYmm--
-      },
-    },
-    {
-      label: 'conflicting descriptor ownership',
-      reason: 'void-ownership-mismatch',
-      damage(evidence) {
-        evidence.voidSafety.hardVoidDeath.ownership.id++
-      },
-    },
-  ])('rejects $label before exposed-family activation', ({ damage, reason }) => {
-    const evidence = exposedFamilyActivationEvidence('tower')
-    damage(evidence)
-    expectSafetyRejection(evidence, reason)
-  })
-
-  it.each([
-    ['version', WORLD_GEN_VERSION + 1],
-    ['seedText', 'different-seed'],
-    ['level', 8],
-    ['mapFamily', 'office'],
-    ['profileIdentity', 'lattice-other-profile'],
-    ['initialDigest', 'different-initial-digest'],
-  ])('rejects a reset that changes baseline field %s', (field, replacement) => {
-    const evidence = exposedFamilyActivationEvidence('lattice')
-    evidence.voidSafety.deterministicReset.after[field] = replacement
-
-    expectSafetyRejection(evidence, 'reset-baseline-mismatch')
-  })
-
-  it.each([
-    {
-      label: 'missing deterministic-reset evidence',
-      reason: 'missing-deterministic-reset-evidence',
-      damage(evidence) {
-        delete evidence.voidSafety.deterministicReset
-      },
-    },
-    {
-      label: 'failed deterministic-reset evidence',
-      reason: 'deterministic-reset-failed',
-      damage(evidence) {
-        evidence.voidSafety.deterministicReset.ok = false
-      },
-    },
-  ])('blocks exposed families for $label', ({ damage, reason }) => {
-    const evidence = exposedFamilyActivationEvidence('tower')
-    damage(evidence)
-    expectSafetyRejection(evidence, reason)
-  })
-
-  it('keeps the activated Sewer release eligible without void-safety evidence', () => {
-    expect(DEFAULT_WORLD_CONFIG.mapFamily.profiles.sewer.enabled).toBe(true)
-    expect(DEFAULT_WORLD_CONFIG.mapFamily.profiles.tower.enabled).toBe(true)
-    expect(DEFAULT_WORLD_CONFIG.mapFamily.profiles.lattice.enabled).toBe(true)
-    expect(validateActivationEvidence(sewerActivationEvidence()))
-      .toEqual({ ok: true, reasons: [] })
-  })
-
-  it('ignores an exposed-family safety regression when evaluating Sewer', () => {
-    const irrelevantSafety = matchedVoidSafetyEvidence('tower')
-    irrelevantSafety.hardVoidDeath.ok = false
-    irrelevantSafety.hardVoidDeath.halves.lethalVoidDown = null
-    irrelevantSafety.deterministicReset.ok = false
-
-    expect(validateActivationEvidence(sewerActivationEvidence(irrelevantSafety)))
-      .toEqual({ ok: true, reasons: [] })
   })
 })

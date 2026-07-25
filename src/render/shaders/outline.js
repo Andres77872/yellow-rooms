@@ -1,3 +1,5 @@
+import { VIEW_RECON } from './common.js'
+
 // Ink outline: depth + normal Sobel straight off the G-buffer, faded by the
 // SAME exp^2 fog transmittance the lighting pass applies to surfaces (plus a
 // wide smoothstep safety envelope), so lines die exactly when the surface
@@ -16,34 +18,35 @@ export const OUTLINE_FRAG = /* glsl */ `
   uniform vec2 uTexel;
   uniform float uThickness, uDepthThresh, uNormalThresh, uFadeNear, uFadeFar;
   uniform vec3 uInk;
-  // Normalized [0,1] linear depth from the live projection. For a perspective
-  // matrix view-Z depends only on clip-space z, so x/y can be 0. This replaces
-  // the old build-time NEAR/FAR bake and matches the rest of the pipeline.
-  float lin(float d){
-    vec4 v = uProjInverse * vec4(0.0, 0.0, d * 2.0 - 1.0, 1.0);
-    return clamp(-(v.z / v.w) * uDepthScale, 0.0, 1.0);
-  }
+  ${VIEW_RECON}
+  // Normalized [0,1] linear depth. viewZAt is the shared symmetric-perspective
+  // reconstruction (two MADs and a divide); the Sobel used to run a full mat4
+  // unproject per tap, five times per pixel, plus a sixth for the fog distance.
+  float lin(vec2 uv){ return clamp(-viewZAt(uv) * uDepthScale, 0.0, 1.0); }
   vec3 nrm(vec2 uv){ return normalize(texture(tNormal, uv).xyz * 2.0 - 1.0); }
   void main(){
     vec3 base = texture(tDiffuse, vUv).rgb;
     vec2 t = uTexel * uThickness;
-    float dc = lin(texture(tDepth, vUv).x);
-    float dd = abs(dc - lin(texture(tDepth, vUv + vec2(t.x, 0.0)).x))
-             + abs(dc - lin(texture(tDepth, vUv - vec2(t.x, 0.0)).x))
-             + abs(dc - lin(texture(tDepth, vUv + vec2(0.0, t.y)).x))
-             + abs(dc - lin(texture(tDepth, vUv - vec2(0.0, t.y)).x));
+    // One centre unproject serves BOTH the Sobel reference depth and the radial
+    // fog distance below — the centre texel used to be fetched and unprojected
+    // twice.
+    vec3 vpc = viewPosFromDepth(vUv);
+    float dc = clamp(-vpc.z * uDepthScale, 0.0, 1.0);
+    float dd = abs(dc - lin(vUv + vec2(t.x, 0.0)))
+             + abs(dc - lin(vUv - vec2(t.x, 0.0)))
+             + abs(dc - lin(vUv + vec2(0.0, t.y)))
+             + abs(dc - lin(vUv - vec2(0.0, t.y)));
     vec3 nc = nrm(vUv);
     float nd = (1.0 - dot(nc, nrm(vUv + vec2(t.x, 0.0))))
              + (1.0 - dot(nc, nrm(vUv - vec2(t.x, 0.0))))
              + (1.0 - dot(nc, nrm(vUv + vec2(0.0, t.y))))
              + (1.0 - dot(nc, nrm(vUv - vec2(0.0, t.y))));
     float distFade = 1.0 - smoothstep(uFadeNear, uFadeFar, dc);
-    // Fog term must use the RADIAL view-space distance (full-NDC unproject),
-    // exactly like the lighting pass — the axial viewZ under-fades by 1/cos of
-    // the view ray (1.6-1.8x at 16:9 edges/corners), which left ghost ink
-    // floating on fully fogged surfaces in the outer third of the screen.
-    vec4 vpc = uProjInverse * vec4(vUv * 2.0 - 1.0, texture(tDepth, vUv).x * 2.0 - 1.0, 1.0);
-    float rdist = length(vpc.xyz / vpc.w);
+    // Fog term must use the RADIAL view-space distance, exactly like the
+    // lighting pass — the axial viewZ under-fades by 1/cos of the view ray
+    // (1.6-1.8x at 16:9 edges/corners), which left ghost ink floating on fully
+    // fogged surfaces in the outer third of the screen.
+    float rdist = length(vpc);
     float fogT = exp(-uFogDensity * uFogDensity * rdist * rdist);
     // Entities (matID 2) keep a crisp ink silhouette at ANY distance — a black
     // outline lingering in the haze long after the body melts is the point.

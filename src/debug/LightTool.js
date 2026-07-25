@@ -276,8 +276,12 @@ export class LightTool {
     this._freeze.set(this.dbg.freeze)
     this._chan.set(this.dbg.channel)
     const d = this.d
+    // A cutoff below LAMP_QUERY_R means the LIGHT_MAX cap is binding and the
+    // edge fade has moved inward with it — the readout makes that visible.
+    const cut = d.lamps.cutoffR
     this._lampCount.set(
-      `${d.visibleLamps.uLampCount.value} / ${d.lamps.uLampCount.value} (max ${LIGHT_MAX})`
+      `${d.visibleLamps.uLampCount.value} / ${d.lamps.uLampCount.value} (max ${LIGHT_MAX})` +
+        ` @ ${Number.isFinite(cut) ? cut.toFixed(1) : '∞'}u`
     )
     this._shadowBudget.set(
       `${d.shadowUniforms.uMaxLamps.value} × ${d.shadowUniforms.uSteps.value} steps / ` +

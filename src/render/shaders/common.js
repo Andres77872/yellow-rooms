@@ -1,3 +1,5 @@
+import { CEL_BANDS, CEL_FLOOR } from '../../world/constants.js'
+
 // Shared GLSL snippets for the deferred fullscreen passes. Injected into the
 // per-pass fragment shaders with ${...} template interpolation. Keeping these in
 // one place means the lighting / SSAO / volumetric / grade passes can't drift on
@@ -6,7 +8,7 @@
 // Implicit contract: snippets that read the depth buffer assume the including
 // shader declares `uniform sampler2D tDepth;` and `uniform mat4 uProjInverse;`
 // (every depth-consuming pass already does), exactly like the existing IGN /
-// COLOR_FNS pattern.
+// COLOR_FNS pattern. VIEW_PROJ additionally assumes `uniform mat4 uProj;`.
 
 // Format a JS number as a GLSL float literal. Integer-valued constants (3.0, 4.0)
 // would otherwise inject as `3`/`4`, which are int literals and break float-typed
@@ -79,5 +81,39 @@ export const VIEW_RECON = /* glsl */ `
   float viewZAt(vec2 uv){
     float ndcZ = texture(tDepth, uv).x * 2.0 - 1.0;
     return -1.0 / (ndcZ * uProjInverse[2][3] + uProjInverse[3][3]);
+  }
+`
+
+// Forward twin of viewZAt: project a VIEW-space point to screen UV under the
+// same symmetric-perspective assumption. The projection's off-diagonal terms are
+// zero and its w-row is (0,0,-1,0), so clip.xy is a per-axis scale and clip.w is
+// just -z — two multiplies and a divide instead of a full mat4 multiply. Returns
+// false when the point is at or behind the eye (the old `clip.w <= 0` test);
+// VIEWPORT BOUNDS ARE THE CALLER'S JOB because the existing passes disagree on
+// whether the [0,1] edges are inclusive.
+// The shadow march runs this up to uSteps*uMaxLamps times per pixel and the
+// volumetric occlusion taps up to uSteps*uMaxLights*2 times, so it is one of the
+// hottest expressions in the pipeline.
+export const VIEW_PROJ = /* glsl */ `
+  bool projectView(vec3 p, out vec2 uv){
+    if (p.z >= 0.0) return false;
+    uv = vec2(uProj[0][0] * p.x, uProj[1][1] * p.y) / -p.z * 0.5 + 0.5;
+    return true;
+  }
+`
+
+// Quantised cel step for the per-lamp N·L term, shared by the lighting and
+// shadow passes. This was a dependent texture read into the CEL_BANDS-texel
+// nearest-filtered LUT from render/gradientRamp.js, executed ONCE PER LAMP PER
+// PIXEL in both passes' innermost loops (up to 72x each). The LUT is a pure
+// function of x, so evaluate it in ALU instead: nearest sampling of a
+// clamp-to-edge texture picks texel min(floor(x*bands), bands-1), whose value is
+// floor + (1-floor)*i/(bands-1). Agrees with makeToonGradient() to within that
+// texture's own 8-bit quantisation (<= 1/510); render/__tests__/cel-band.test.js
+// locks the two together, so gradientRamp.js survives as the test oracle.
+export const CEL_BAND = /* glsl */ `
+  float band(float x){
+    float i = min(floor(clamp(x, 0.0, 1.0) * ${glslFloat(CEL_BANDS)}), ${glslFloat(CEL_BANDS - 1)});
+    return ${glslFloat(CEL_FLOOR)} + ${glslFloat(1 - CEL_FLOOR)} * (i / ${glslFloat(CEL_BANDS - 1)});
   }
 `

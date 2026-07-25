@@ -1,4 +1,4 @@
-import { IGN, LAMP_ATT, glslFloat } from './common.js'
+import { CEL_BAND, IGN, LAMP_ATT, glslFloat } from './common.js'
 import {
   LIGHT_MAX,
   CEL_BANDS,
@@ -23,7 +23,6 @@ export const LIGHTING_FRAG = /* glsl */ `
   uniform sampler2D tColor;
   uniform sampler2D tNormal;
   uniform sampler2D tDepth;
-  uniform sampler2D tRamp;
   uniform sampler2D tAO;
   uniform sampler2D tShadow;     // half-res, bilateral-blurred lamp visibility mask
   uniform mat4 uProjInverse;
@@ -51,7 +50,7 @@ export const LIGHTING_FRAG = /* glsl */ `
   uniform vec3 uFogColor;
   uniform float uFogDensity;
 
-  float band(float x){ return texture(tRamp, vec2(clamp(x, 0.0, 1.0), 0.5)).r; }
+  ${CEL_BAND}
   // Vertical sky/fog gradient: uFogColor is the HORIZON amber; rays tilting up
   // sink into a dark warm void, rays tilting down into a dim floor haze. Used
   // both for the raw void (depth == 1) and as the per-pixel fog target, so

@@ -4,6 +4,7 @@ import { CHUNK, LOAD_RADIUS } from '../constants.js'
 import { hash2i } from '../core/hash.js'
 import { layerSeed, SALT_LAYER } from '../layerSeed.js'
 import * as multilevelApi from '../structures/multilevel.js'
+import { validateStructureDescriptor } from '../structures/contract.js'
 
 const {
   chunkMultilevelRooms,
@@ -68,24 +69,8 @@ function globalCells(slice, cx, cz, field) {
   }))
 }
 
-const STRUCTURE_ADAPTERS_PATH = '../structures/contract.js'
-
-async function validateStructureFixture(structure, ownership) {
-  let api
-  try {
-    api = await import(/* @vite-ignore */ STRUCTURE_ADAPTERS_PATH)
-  } catch (error) {
-    throw new Error(
-      'D06 missing planned structureAdapters.js validation contract',
-      { cause: error }
-    )
-  }
-  const validate = api.validateStructureDescriptor
-  expect(
-    validate,
-    'D06 requires a canonical family-aware structure validator'
-  ).toBeTypeOf('function')
-  return validate(structure, { ownership })
+function validateStructureFixture(structure, ownership) {
+  return validateStructureDescriptor(structure, { ownership })
 }
 
 function officeStructureFixture() {
@@ -248,9 +233,9 @@ describe('canonical polygon participant contracts', () => {
     expect(structure.participantChunks).toBe(structure.participants)
   })
 
-  it('R09-S01 accepts a complete canonical office pair and ownership set', async () => {
+  it('R09-S01 accepts a complete canonical office pair and ownership set', () => {
     const structure = officeStructureFixture()
-    const result = await validateStructureFixture(
+    const result = validateStructureFixture(
       structure,
       officeOwnership(structure)
     )
@@ -267,7 +252,7 @@ describe('canonical polygon participant contracts', () => {
     reason,
   }) => {
     const { structure, ownership } = build()
-    const result = await validateStructureFixture(structure, ownership)
+    const result = validateStructureFixture(structure, ownership)
     expect(result.ok).toBe(false)
     expect(result.family).toBe('office')
     expect(result.reasons).toContain(reason)

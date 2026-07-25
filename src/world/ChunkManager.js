@@ -895,7 +895,7 @@ export class ChunkManager {
     }
   }
 
-  // Lit-lamp world positions within LAMP_QUERY_R of (px,pz). Reuses `out`
+  // Lit-lamp world positions within `radius` of (px,pz). Reuses `out`
   // (cleared in place) to avoid per-refresh allocation.
   //
   // `pcy` (null = legacy unfiltered) applies the cross-floor policy: lamps on
@@ -903,9 +903,14 @@ export class ChunkManager {
   // proximity rule; farther lamps qualify only in a continuous tall structure
   // containing pcy, and only while their layer separation is within the real
   // light range. The shader/lightAt still apply authoritative true-3D falloff.
-  collectLampsNear(px, pz, out, pcy = null) {
+  //
+  // `radius` defaults to the light-field's LAMP_QUERY_R. Callers that only need
+  // a lamp's actual reach (lightAt) pass LIGHT_RANGE instead, which shrinks both
+  // the chunk-key sweep and the per-lamp scan by more than an order of magnitude
+  // without changing a single result — lamps past LIGHT_RANGE contribute 0.
+  collectLampsNear(px, pz, out, pcy = null, radius = LAMP_QUERY_R) {
     out.length = 0
-    const r2 = LAMP_QUERY_R * LAMP_QUERY_R
+    const r2 = radius * radius
 
     // Compatibility calls without a concrete floor retain the historical
     // unfiltered scan. Every runtime caller supplies an integer floor, which
@@ -920,10 +925,10 @@ export class ChunkManager {
     // Include every chunk AABB that intersects the query circle. Using
     // ceil(...)-1 for the lower edge preserves the exact boundary case where
     // the circle touches the preceding chunk's maximum edge.
-    const minCx = Math.ceil((px - LAMP_QUERY_R) / CHUNK_WORLD) - 1
-    const maxCx = Math.floor((px + LAMP_QUERY_R) / CHUNK_WORLD)
-    const minCz = Math.ceil((pz - LAMP_QUERY_R) / CHUNK_WORLD) - 1
-    const maxCz = Math.floor((pz + LAMP_QUERY_R) / CHUNK_WORLD)
+    const minCx = Math.ceil((px - radius) / CHUNK_WORLD) - 1
+    const maxCx = Math.floor((px + radius) / CHUNK_WORLD)
+    const minCz = Math.ceil((pz - radius) / CHUNK_WORLD) - 1
+    const maxCz = Math.floor((pz + radius) / CHUNK_WORLD)
 
     // Same-floor and adjacent-floor spill require at least one neighbour on
     // either side. A farther floor can contribute only while its actual layer
@@ -999,8 +1004,16 @@ export class ChunkManager {
   // actually sees; spill lamps from other floors use true 3D distance (the
   // pool at the bottom of a stairwell or tall void is dimmer, as rendered).
   // Uses a private scratch so it never clobbers the LightField's candidate buffer.
+  //
+  // Queries only LIGHT_RANGE, not the light-field's much larger LAMP_QUERY_R:
+  // every lamp past LIGHT_RANGE is discarded by the falloff below anyway, and
+  // the off-floor branch measures 3D distance, which is >= the horizontal
+  // distance the query circle tests — so the smaller circle is a strict superset
+  // of what can contribute. This runs every tick (Engine hum + Stalker light
+  // sense), where the wide query was sweeping ~175 chunk keys and ~90 lamps to
+  // find the handful within reach.
   lightAt(wx, wz, cy = null) {
-    const lamps = this.collectLampsNear(wx, wz, (this._litScratch ||= []), cy)
+    const lamps = this.collectLampsNear(wx, wz, (this._litScratch ||= []), cy, LIGHT_RANGE)
     let acc = STALKER_AMBIENT
     const wy = cy === null ? null : layerY(cy)
     for (let i = 0; i < lamps.length; i++) {

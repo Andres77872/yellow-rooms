@@ -1,6 +1,6 @@
 # Lighting & Rendering Pipeline
 
-Verified on 2026-07-23 against the current renderer, shaders, graphics settings,
+Verified on 2026-07-24 against the current renderer, shaders, graphics settings,
 debug tools, and light-field implementation.
 
 The game renders through a custom deferred toon pipeline (`src/render/DeferredRenderer.js`).
@@ -61,13 +61,23 @@ targets rather than the effect aliases.
 ## The lamp field
 
 `LightField` (12 Hz refresh) collects the nearest lit lamps from
-`ChunkManager.collectLampsNear` (floor-filtered, stair-spill aware), sorts by
-true 3D distance to the eye, and uploads up to `LIGHT_MAX` (72) world positions.
+`ChunkManager.collectLampsNear` (floor-filtered, stair-spill aware), ranks them
+by true 3D distance to the eye, and uploads up to `LIGHT_MAX` (72) world
+positions. Distances are derived once per candidate into a side buffer and an
+index array is sorted, rather than re-derived inside every comparison.
 Per fixture, source `uLampChar` stores the rgb colour-temperature tint and
 `lampFlickerRaw` stores the live flicker. The renderer's derived visible
 `uLampChar` packs that tint plus the final flicker/fade weight in `.a`
 (`lampCharacter.js` — per-tube breathing, rare bad strobing tubes, room-role
 tints).
+
+`LightField` also publishes `cutoffR`: **where the uploaded set actually ends**.
+`LAMP_QUERY_R` is only the boundary while the candidate list fits in
+`LIGHT_MAX`. It usually does not — the office lamp grid carries ~0.0081 lit
+fixtures/u², so a 60u query circle holds ~92 candidates for 72 slots and the
+real edge is the 72nd-nearest lamp at ~53u. `cutoffR` is that distance when the
+cap binds and `LAMP_QUERY_R` otherwise; `LightRoom` sets `Infinity` because its
+lamps are authored rather than queried.
 
 Runtime calls supply the player's integer floor. The collector computes the
 bounded XZ chunk-key range whose AABBs can intersect `LAMP_QUERY_R`, visits only
@@ -86,12 +96,20 @@ The upload remains an immutable source set for the renderer. Per frame,
 3. stably compacts survivors into a separate visible position/character/count
    uniform set, preserving the source nearest-first order for the shadow and
    volumetric head budgets, and
-4. **folds the query-edge set fade into visible `uLampChar.w`** (`raw flicker ×
-   1-smoothstep(QUERY_R-FADE_BAND, QUERY_R, cameraDist)`). The fade only depends
-   on the lamp's camera distance, so computing it per-lamp-per-frame on the CPU
-   replaces the old per-pixel computation in the lighting shader — and the
-   shadow + volumetric passes now see exactly the same faded weight, so a lamp
-   leaving the candidate set fades its pool, its shadow and its shaft together.
+4. **folds the set-edge fade into visible `uLampChar.w`** (`raw flicker ×
+   1-smoothstep(cutoffR-band, cutoffR, cameraDist)`, where `band` is
+   `min(LAMP_FADE_BAND, cutoffR/4)` so a tight cutoff dims only its own edge).
+   The fade only depends on the lamp's camera distance, so computing it
+   per-lamp-per-frame on the CPU replaces the old per-pixel computation in the
+   lighting shader — and the shadow + volumetric passes now see exactly the same
+   faded weight, so a lamp leaving the candidate set fades its pool, its shadow
+   and its shaft together.
+
+   The anchor is `LightField.cutoffR`, **not** `LAMP_QUERY_R`. Anchoring to the
+   query radius assumed the candidate list always fits in `LIGHT_MAX`; where it
+   does not, the real edge lies inside the nominal band and lamps stepped out at
+   partial weight (~60% at office density) instead of fading to zero.
+   `render/__tests__/lamp-fade.test.js` locks both halves of this contract.
 
 All lighting, shadow, and volumetric uniforms and their pass-skip decisions use
 the derived visible count. The source arrays are never compacted or mutated by
@@ -121,13 +139,19 @@ is therefore instant: no shader rebuild, no pipeline reconstruction.
   additionally caps the complete backing store at 3840×2160 pixels. Smaller
   displays remain exact, while Retina/5K windows cannot multiply all deferred
   attachments past the 4K-equivalent fill/memory budget.
-- A disabled pass is skipped and its output cleared to its identity value
-  (white for AO/shadow masks, black for shafts/bloom) every frame, so
-  downstream shaders never special-case it. With FXAA off, grade renders
-  straight to screen.
-- The AO kernel radii use a radical-inverse (van der Corput) sequence so any
-  prefix of the max-size kernel is stratified — the low tier reads 8 of 24
-  samples and still covers the hemisphere.
+- A disabled pass is skipped and its output filled with its identity value
+  (white for AO/shadow masks, black for shafts/bloom), so downstream shaders
+  never special-case it. The fill happens **once**, not every frame: `_runOr`
+  keeps the identity bookkeeping next to the skip decision, and the cache is
+  invalidated when the pass renders again or `setSize` reallocates storage.
+  With FXAA off, grade renders straight to screen.
+- The AO kernel is low-discrepancy and **deterministic in all three dimensions**:
+  base-2 van der Corput elevation, golden-angle azimuth, base-3 van der Corput
+  radius (a different base, so radius cannot correlate with elevation). Any
+  prefix of the max-size kernel is therefore stratified — the low tier reads 8
+  of 24 samples and still covers the hemisphere. Previously only the radii used
+  the sequence while directions came from `Math.random()`, so a prefix was not
+  actually guaranteed to cover the hemisphere and AO differed per page load.
 
 `Settings` coerces every graphics key on load and set (enum whitelists, numeric
 clamps), so a hostile/stale localStorage blob can never push an out-of-range
@@ -185,7 +209,9 @@ press.
   current frame afterward. Draw calls and triangles therefore cover the whole
   multipass frame instead of only its last fullscreen pass.
 - **Channel strip** now includes the blurred lamp **shadow mask** (mode 10).
-- **pipeline section**: live `visible / loaded lamps` readout, the current
+- **pipeline section**: live `visible / loaded lamps @ cutoff` readout (a cutoff
+  below `LAMP_QUERY_R` means the `LIGHT_MAX` cap is binding and the edge fade has
+  moved inward with it), the current
   shadow/volumetric budgets, per-pass isolation toggles (ssao / shadow /
   volumetric / bloom / fxaa — ephemeral; any settings change re-stamps them),
   and **GPU pass timings** via `EXT_disjoint_timer_query_webgl2`
@@ -194,15 +220,41 @@ press.
 - **light room**: isolated scene + orbit camera with a controllable lamp grid
   writing straight into the deferred uniforms.
 
-## Cheap-depth reconstruction
+## Cheap projection helpers
 
-`viewZAt()` in `shaders/common.js` exploits the symmetric-perspective inverse
-structure (`viewZ = -1 / (ndcZ·ip[2][3] + ip[3][3])`) — two MADs and a divide
-instead of a full mat4 unproject. The bilateral blurs tap it 25× per pixel, the
-shadow/volumetric marches use it dozens of times, and each SSAO kernel tap now
-uses it because only sampled view Z participates in the occlusion test.
-`viewPosFromDepth` remains at the SSAO center and wherever a complete position
-is actually needed.
+All three exploit the same symmetric-perspective structure, and all three live in
+`shaders/common.js` so no pass can drift from the others.
+
+- `viewZAt()` — `viewZ = -1 / (ndcZ·ip[2][3] + ip[3][3])`: two MADs and a divide
+  instead of a full mat4 unproject. The bilateral blurs tap it 25× per pixel, the
+  shadow/volumetric marches use it dozens of times, each SSAO kernel tap uses it
+  because only sampled view Z participates in the occlusion test, and the outline
+  Sobel uses it for all four neighbour taps.
+- `projectView()` (`VIEW_PROJ`) — the forward twin. The projection's
+  off-diagonals are zero and its w-row is `(0,0,-1,0)`, so clip xy is a per-axis
+  scale and clip w is just `-z`: two multiplies and a divide instead of a mat4
+  multiply. Returns false at/behind the eye; **viewport bounds stay the caller's
+  job** because the passes disagree on whether the `[0,1]` edges are inclusive.
+  The shadow march runs it up to `uSteps × uMaxLamps` times per pixel and the
+  volumetric occlusion taps up to `uSteps × uMaxLights × 2` times.
+- `viewPosFromDepth` remains where a complete position is genuinely needed — the
+  SSAO centre, and the outline centre, where one unproject now serves both the
+  Sobel reference depth and the radial fog distance.
+
+## Analytic cel band
+
+`band()` (`CEL_BAND` in `shaders/common.js`) quantises N·L in ALU. It used to be
+a dependent texture read into the `CEL_BANDS`-texel nearest LUT from
+`gradientRamp.js`, executed **once per lamp per pixel** — up to 72× in the
+lighting loop and 72× in the shadow loop, the two hottest loops in the renderer.
+Nearest sampling of a clamp-to-edge LUT picks texel
+`min(floor(x·bands), bands-1)`, whose value is `floor + (1-floor)·i/(bands-1)`,
+so the closed form is exact to within the texture's own 8-bit rounding (≤ 1/510).
+
+`render/gradientRamp.js` is retained as the authored definition of the ramp and
+serves as the oracle for `render/__tests__/cel-band.test.js`, which transpiles
+the emitted GLSL and holds it to the LUT. No ramp texture is bound, resized or
+disposed by the pipeline.
 
 ## Coupled-constant contracts
 
@@ -212,6 +264,20 @@ streams, child detail changes, or lamp sets churn
 (`world/__tests__/render-coupling.test.js`). The cubic lamp attenuation window
 (`lampAtt` in `shaders/common.js`) is mirrored CPU-side by
 `ChunkManager.lightAt` for the AI's light sense — change both together.
+
+`collectLampsNear` takes a query radius, defaulting to the light field's
+`LAMP_QUERY_R`. `lightAt` passes `LIGHT_RANGE` instead: it runs every tick (the
+Engine's fluorescent hum and the Stalker's light sense) and every lamp past
+`LIGHT_RANGE` is discarded by the cubic window anyway, while the off-floor branch
+measures 3D distance, which is ≥ the horizontal distance the circle tests. The
+narrow circle is therefore a strict superset of what can contribute — same
+results, an order of magnitude fewer chunk-key lookups and lamp tests
+(`world/__tests__/light-filter.test.js` locks the equivalence).
+
+The volumetric march gates each lamp on `VOL_CONTRIB_EPS` before paying for its
+screen-space occlusion taps. The cubic window means only ~48% of a lamp's
+in-range volume carries more than 1% of peak, so this skips roughly half the taps
+in the pipeline's most expensive inner loop.
 
 ## Render-scene benchmark
 
@@ -230,3 +296,25 @@ Without `--budget-*` arguments the JSON is report-only. Explicit ceilings make
 the command fail when exceeded; CPU timing remains host-sensitive even when a
 budget is supplied. Use browser profiling and the F2 GPU pass timers for actual
 frame and GPU evidence.
+
+## Measured GPU cost
+
+A/B via the F2 pass timers (office, seed `review`, spawn, `high` preset, 44
+visible lamps, min of 5 × 100-frame rounds — the min rejects scheduler stalls
+that make the EMA swing up to 16× on *untouched* passes):
+
+| pass | before | after |
+| --- | --- | --- |
+| volumetric | 0.852 ms | **0.624 ms** (−27%) |
+| lighting | 0.146 ms | 0.139 ms |
+| shadow | 0.136 ms | 0.134 ms |
+| ssao | 0.131 ms | 0.138 ms |
+| outline | 0.028 ms | 0.028 ms |
+
+Only the volumetric gate lands outside the ~±5% noise floor (`gbuffer`, which
+nothing in this pass touched, moved 2%). The analytic cel band and the cheap
+forward projection are strictly fewer instructions and one fewer sampler
+binding, but on a desktop GPU a fully-cached 4-texel LUT fetch is close to free,
+so they do not show a measurable win at this lamp count — expect more from them
+on tile-based mobile GPUs (the `medium`/touch preset) and at higher lamp counts.
+**Re-measure on the target device before treating either as a budget saving.**

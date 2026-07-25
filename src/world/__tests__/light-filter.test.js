@@ -448,6 +448,54 @@ describe('lightAt curve identity', () => {
     expect(cm.lightAt(px, pz, 0)).toBeCloseTo(Math.min(want, 1), 12)
   })
 
+  it('is unchanged by the narrowed LIGHT_RANGE query radius', () => {
+    // lightAt asks collectLampsNear for LIGHT_RANGE, not the light field's much
+    // wider LAMP_QUERY_R: every lamp past LIGHT_RANGE is discarded by the cubic
+    // window anyway, and the off-floor branch measures 3D distance, which is >=
+    // the horizontal distance the query circle tests — so the small circle is a
+    // strict superset of what can contribute. This locks that equivalence,
+    // including for lamps sitting exactly on the boundary.
+    const lamps = [
+      lampAt(20, 0, 20), // right on top of the sample
+      lampAt(20 + LIGHT_RANGE - 0.01, 0, 20), // just inside the reach
+      lampAt(20 + LIGHT_RANGE, 0, 20), // exactly at the reach: contributes 0
+      lampAt(20 + LIGHT_RANGE + 0.01, 0, 20), // just outside
+      lampAt(20 + LAMP_QUERY_R - 1, 0, 20), // inside the OLD query, far out of reach
+    ]
+    const cm = makeCM({ 0: lamps }, [])
+    const scratch = []
+    for (const [px, pz] of [
+      [20, 20],
+      [22.5, 21],
+      [20 + LIGHT_RANGE, 20],
+      [31, 26],
+    ]) {
+      // Recompute the reference straight from the wide-radius candidate set.
+      const wide = cm.collectLampsNear(px, pz, scratch, 0, LAMP_QUERY_R)
+      let want = STALKER_AMBIENT
+      for (const v of wide) {
+        const d = Math.hypot(v.x - px, v.z - pz)
+        if (d >= LIGHT_RANGE) continue
+        const f = 1 - d / LIGHT_RANGE
+        want += f * f * f
+      }
+      expect(cm.lightAt(px, pz, 0), `${px},${pz}`).toBeCloseTo(Math.min(want, 1), 12)
+    }
+  })
+
+  it('narrowing the radius drops only lamps that cannot contribute', () => {
+    const near = lampAt(20, 0, 20)
+    const far = lampAt(20 + LAMP_QUERY_R - 1, 0, 20)
+    const cm = makeCM({ 0: [near, far] }, [])
+    const wide = cm.collectLampsNear(20, 20, [], 0, LAMP_QUERY_R)
+    const tight = cm.collectLampsNear(20, 20, [], 0, LIGHT_RANGE)
+    expect(wide).toHaveLength(2)
+    expect(tight).toEqual([near])
+    // Default radius is still the light field's, so every other caller is
+    // untouched by the new parameter.
+    expect(cm.collectLampsNear(20, 20, [], 0)).toHaveLength(2)
+  })
+
   it('spill lamps contribute with true 3D distance (dimmer through the hole)', () => {
     const above = lampAt(21, 1, 22) // 1u XZ from the sample, one floor up
     const cm = makeCM({ 1: [above] }, [{ centerX: 21, centerZ: 21, lowerCy: 0 }])

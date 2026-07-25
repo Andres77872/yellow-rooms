@@ -1,6 +1,5 @@
 import * as THREE from 'three'
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js'
-import { makeToonGradient } from './gradientRamp.js'
 import { makeLampUniforms } from './LightField.js'
 import { PassTimer } from './PassTimer.js'
 import { FS_VERT } from './shaders/common.js'
@@ -62,8 +61,7 @@ import {
   GRADE_LEVELS,
   GRADE_TINT,
   GRADE_SAT,
-  CEL_BANDS,
-  CEL_FLOOR,
+  GRADE_TIME_WRAP,
   OUTLINE_INK,
   OUTLINE_THICKNESS,
   OUTLINE_DEPTH_THRESH,
@@ -115,26 +113,38 @@ const LAMP_FRUSTUM_EPSILON = 0.05
 // over-saturated every solid color).
 const linVec = (hex) => new THREE.Color(hex)
 
-// Radical inverse base 2 (van der Corput): any PREFIX of the sequence covers
-// [0,1) uniformly, which is what lets one max-size kernel serve every quality
-// tier — the low tier reads the first 8 samples and still gets stratified
-// radii instead of the tight near-origin cluster a sorted ramp would give it.
-function radicalInverse(i) {
+// Radical inverse (van der Corput): any PREFIX of the sequence covers [0,1)
+// uniformly, which is what lets one max-size kernel serve every quality tier —
+// the low tier reads the first 8 samples and still gets a stratified spread
+// instead of the tight cluster a sorted ramp would give it.
+function radicalInverse(i, base) {
   let r = 0
-  let f = 0.5
-  for (let v = i; v > 0; v >>= 1) {
-    if (v & 1) r += f
-    f *= 0.5
+  let f = 1 / base
+  for (let v = i; v > 0; v = Math.floor(v / base)) {
+    r += (v % base) * f
+    f /= base
   }
   return r
 }
 
+// Golden angle: successive azimuths never repeat and any prefix is spread
+// evenly around the circle.
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5))
+
+// Normal-oriented hemisphere kernel. ALL THREE dimensions are low-discrepancy
+// and deterministic: base-2 van der Corput for the polar term, golden angle for
+// the azimuth, base-3 van der Corput for the radius (a different base so the
+// radius can't correlate with the elevation). Directions used to come from
+// Math.random(), which meant an 8-sample prefix was not actually guaranteed to
+// cover the hemisphere and AO differed on every page load.
 function aoKernel(n) {
   const k = []
   for (let i = 0; i < n; i++) {
-    const v = new THREE.Vector3(Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random())
-    v.normalize()
-    const s = radicalInverse(i + 1)
+    const z = radicalInverse(i + 1, 2) // (0,1): never a degenerate grazing sample
+    const r = Math.sqrt(Math.max(0, 1 - z * z))
+    const phi = (i + 1) * GOLDEN_ANGLE
+    const v = new THREE.Vector3(r * Math.cos(phi), r * Math.sin(phi), z)
+    const s = radicalInverse(i + 1, 3)
     v.multiplyScalar(0.1 + 0.9 * s * s) // cluster samples near the origin
     k.push(v)
   }
@@ -170,12 +180,14 @@ export class DeferredRenderer {
     // lifetimes. Pool compatible intermediates first by storage class, then by
     // resolution scale: scalar masks can alias each other, but never HDR bloom.
     this._effectScratchRTs = new Map()
+    // Render target -> the identity color it currently holds, so a pass that
+    // stays skipped is not re-cleared every frame (see _clearRT).
+    this._identityRT = new Map()
 
     const { dw, dh } = this._dims()
-    // Cel ramp + lamp field are shared by the shadow and lighting passes, so
-    // build them before either. CEL_BANDS bands + a tiny warm floor so grazing
-    // walls keep a dim step instead of snapping to black; ambient fills the rest.
-    this.ramp = makeToonGradient(CEL_BANDS, CEL_FLOOR)
+    // The lamp field is shared by the shadow and lighting passes, so build it
+    // before either. (The cel ramp they band with is the analytic CEL_BAND
+    // snippet in shaders/common.js — no LUT texture to own.)
     this.lamps = makeLampUniforms() // source world-space set, driven by LightField / LightRoom
     this.visibleLamps = this.lamps.visible // compact renderer-local view-space uniforms
     this._initGBuffer(dw, dh)
@@ -314,7 +326,6 @@ export class DeferredRenderer {
       tDepth: { value: this.depthTex },
       uProj: { value: new THREE.Matrix4() },
       uProjInverse: { value: new THREE.Matrix4() },
-      uResolution: { value: new THREE.Vector2(dw, dh) },
       // Kernel array is sized to the AO_MAX ceiling baked into ssao.js; the
       // live tier reads the first uSamples entries (prefix-stratified kernel).
       uKernel: { value: aoKernel(AO_SAMPLES_MAX) },
@@ -342,7 +353,6 @@ export class DeferredRenderer {
     this.shadowUniforms = {
       tNormal: { value: this.gNormal },
       tDepth: { value: this.depthTex },
-      tRamp: { value: this.ramp },
       uProj: { value: new THREE.Matrix4() },
       uProjInverse: { value: new THREE.Matrix4() },
       uShadowThickness: { value: SHADOW_THICKNESS },
@@ -374,7 +384,6 @@ export class DeferredRenderer {
       tColor: { value: this.gColor },
       tNormal: { value: this.gNormal },
       tDepth: { value: this.depthTex },
-      tRamp: { value: this.ramp },
       tAO: { value: this.aoBlurRT.texture },
       tShadow: { value: this.shadowBlurRT.texture },
       uProjInverse: { value: new THREE.Matrix4() },
@@ -562,6 +571,9 @@ export class DeferredRenderer {
   // which Engine updates (setSize + setPixelRatio) before calling this.
   setSize() {
     const { dw, dh } = this._dims()
+    // Every target below reallocates its storage, so nothing retains an
+    // identity fill across the resize.
+    this._identityRT.clear()
     this.gBuffer.setSize(dw, dh)
     this.litRT.setSize(dw, dh)
     for (const scaledPool of this._effectScratchRTs.values()) {
@@ -572,7 +584,6 @@ export class DeferredRenderer {
     }
     const ao = this._halfRes(dw, dh, AO_SCALE)
     this.aoBlurRT.setSize(ao.w, ao.h)
-    this.aoUniforms.uResolution.value.set(dw, dh)
     this.aoBlurUniforms.uTexel.value.set(1 / ao.w, 1 / ao.h)
     const sh = this._halfRes(dw, dh, SHADOW_SCALE)
     this.shadowBlurRT.setSize(sh.w, sh.h)
@@ -600,7 +611,7 @@ export class DeferredRenderer {
   // Compaction is stable (source order is nearest-first), and never mutates the
   // source arrays, so shadow/volumetric head budgets keep their meaning and a
   // culled lamp can reappear immediately when the camera turns. Derived
-  // uLampChar.w folds raw flicker × query-edge fade; computing it here gives all
+  // uLampChar.w folds raw flicker × set-edge fade; computing it here gives all
   // passes exactly the same faded weight. Must run every frame because both the
   // view transform and frustum change with the camera.
   _updateFrame() {
@@ -615,7 +626,16 @@ export class DeferredRenderer {
     const visibleChar = visible.uLampChar.value
     const raw = source.lampFlickerRaw
     const n = Math.min(source.uLampCount.value, world.length)
-    const fade0 = LAMP_QUERY_R - LAMP_FADE_BAND
+    // Fade against where the uploaded set ACTUALLY ends (LightField.cutoffR),
+    // not against LAMP_QUERY_R: whenever the candidate list exceeds LIGHT_MAX
+    // the real boundary is the LIGHT_MAX-th nearest lamp, which sits inside the
+    // nominal band and left lamps snapping out at partial weight. The band is
+    // also capped at a quarter of the cutoff so a tight boundary dims only its
+    // own edge instead of a quarter of the room. Infinity (LightRoom's authored
+    // set) yields fade0 = Infinity, i.e. no fade at all.
+    const cutoff = source.cutoffR ?? LAMP_QUERY_R
+    const fadeBand = Math.min(LAMP_FADE_BAND, cutoff * 0.25)
+    const fade0 = cutoff - fadeBand
     // The passes normally share one range, but the LightTool exposes live
     // tuning and integrations may adjust them independently. Cull against the
     // maximum so no pass loses an influence that can reach the viewport.
@@ -633,10 +653,10 @@ export class DeferredRenderer {
       this._lampSphere.center.copy(v)
       if (!this._lampFrustum.intersectsSphere(this._lampSphere)) continue
       viewPos[visibleCount].copy(v)
-      // 1 - smoothstep(fade0, LAMP_QUERY_R, cameraDist): lamps ramp to zero over
-      // the last LAMP_FADE_BAND units of the query radius, so LightField set
-      // churn is invisible (see render-coupling.test.js).
-      let t = (v.length() - fade0) / LAMP_FADE_BAND
+      // 1 - smoothstep(fade0, cutoff, cameraDist): lamps ramp to zero over the
+      // last fadeBand units before the set's real edge, so LightField set churn
+      // is invisible (see render-coupling.test.js).
+      let t = (v.length() - fade0) / fadeBand
       t = t < 0 ? 0 : t > 1 ? 1 : t
       visibleChar[visibleCount]
         .copy(sourceChar[i])
@@ -751,7 +771,13 @@ export class DeferredRenderer {
   // (null) when FXAA is off and grade is the last pass.
   _renderGrade(time, graded, target) {
     this.gradeUniforms.tDiffuse.value = graded
-    this.gradeUniforms.time.value = time
+    // Wrap the grain/static clock. Engine._time accumulates from boot, and the
+    // grade hashes it as `uv * 1280 + time` / `uv * 640 + time * 57`: past an
+    // hour the highp-float ULP of that argument (~0.015) swamps the per-pixel
+    // variation, freezing the grain into blocks and stalling the dead static.
+    // GRADE_TIME_WRAP keeps the hash argument small; the noise is aperiodic
+    // enough that the seam is invisible.
+    this.gradeUniforms.time.value = time % GRADE_TIME_WRAP
     this.renderer.setRenderTarget(target)
     this.gradeQuad.render(this.renderer)
   }
@@ -763,7 +789,14 @@ export class DeferredRenderer {
 
   // Fill a target with a flat color without running its shader — used when a
   // pass is skipped because nothing could contribute (see render()).
+  //
+  // A skipped pass stays skipped for many frames at a time (a disabled quality
+  // tier, an unlit corridor), and the identity value never changes, so re-clearing
+  // every frame is pure waste. `_identityRT` remembers the value a target already
+  // holds; _runOr drops the entry when the pass actually renders, and setSize()
+  // drops all of them because the storage is reallocated.
   _clearRT(rt, hex) {
+    if (this._identityRT.get(rt) === hex) return
     const r = this.renderer
     const prevColor = r.getClearColor(this._clearScratch)
     const prevAlpha = r.getClearAlpha()
@@ -771,6 +804,16 @@ export class DeferredRenderer {
     r.setClearColor(hex, 1)
     r.clear(true, false, false)
     r.setClearColor(prevColor, prevAlpha)
+    this._identityRT.set(rt, hex)
+  }
+
+  // Run a skippable pass, or fill its output with the identity value the
+  // downstream shaders expect. Either way `rt`'s cached state stays truthful, so
+  // a pass that stays skipped for many frames is only cleared once.
+  _runOr(run, name, method, rt, identityHex) {
+    if (!run) return this._clearRT(rt, identityHex)
+    this._pass(name, () => method.call(this))
+    this._identityRT.delete(rt)
   }
 
   render(time) {
@@ -785,15 +828,18 @@ export class DeferredRenderer {
     // downstream shaders read a neutral mask instead of stale frames.
     const lampsLoaded = this.visibleLamps.uLampCount.value > 0
     const flashOn = this.lightUniforms.uFlashOn.value > 0.5
-    if (this.aoEnabled) this._pass('ssao', () => this._renderSSAO())
-    else this._clearRT(this.aoBlurRT, 0xffffff)
-    if (this.shadowEnabled && lampsLoaded) this._pass('shadow', () => this._renderShadow())
-    else this._clearRT(this.shadowBlurRT, 0xffffff)
+    // _runOr keeps the identity-fill bookkeeping next to the skip decision that
+    // owns it: whichever branch is taken, the target's cached state is correct.
+    this._runOr(this.aoEnabled, 'ssao', this._renderSSAO, this.aoBlurRT, 0xffffff)
+    this._runOr(
+      this.shadowEnabled && lampsLoaded, 'shadow', this._renderShadow, this.shadowBlurRT, 0xffffff
+    )
     this._pass('lighting', () => this._renderLighting())
-    if (this.volEnabled && (lampsLoaded || flashOn)) this._pass('volumetric', () => this._renderVolumetrics())
-    else this._clearRT(this.volRT, 0x000000)
-    if (this.bloomEnabled) this._pass('bloom', () => this._renderBloom())
-    else this._clearRT(this.bloomRT, 0x000000)
+    this._runOr(
+      this.volEnabled && (lampsLoaded || flashOn), 'volumetric', this._renderVolumetrics,
+      this.volRT, 0x000000
+    )
+    this._runOr(this.bloomEnabled, 'bloom', this._renderBloom, this.bloomRT, 0x000000)
     this._pass('composite', () => this._composite())
 
     // Debug: blit a single pipeline channel to screen, skip grade/FXAA.
@@ -830,7 +876,6 @@ export class DeferredRenderer {
     this.bloomRT.dispose()
     this.sceneRT.dispose()
     this.gradeRT.dispose()
-    this.ramp.dispose()
     this.lightQuad.dispose()
     this.aoQuad.dispose()
     this.aoBlurQuad.dispose()

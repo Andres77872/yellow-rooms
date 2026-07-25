@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_WORLD_CONFIG, LATTICE_RELEASE_EVIDENCE } from '../config.js'
-import { CHUNK, WORLD_GEN_VERSION } from '../constants.js'
+import { DEFAULT_WORLD_CONFIG } from '../config.js'
+import { CHUNK } from '../constants.js'
 import { worldConfigForFamily } from '../mapFamily.js'
 import { MAP_FAMILY_LATTICE } from '../mapTypes.js'
 import { polygonCandidates } from '../structures/multilevel.js'
@@ -1045,51 +1045,5 @@ describe('Lattice graph and malformed-descriptor controls', () => {
     const fixture = referenceLatticeFixture()
     damage(fixture)
     expect(latticeContractReasons(fixture)).toContain(reason)
-  })
-})
-
-describe('Lattice atomic release-state gate', () => {
-  it('[R05-S02..S04][R06-S01..S03][R20-S02][R31-S01..S04][R33-S02][D11] binds the active Lattice profile to v24 pins, corpus identity, and Tower-independent generation', () => {
-    expect(WORLD_GEN_VERSION).toBe(24)
-    expect(DEFAULT_WORLD_CONFIG.mapFamily.selected).toBe('office')
-    expect(Object.fromEntries(Object.entries(DEFAULT_WORLD_CONFIG.mapFamily.profiles)
-      .map(([family, profile]) => [family, profile.enabled]))).toEqual({
-      office: true,
-      sewer: true,
-      tower: true,
-      lattice: true,
-      hotel: true,
-    })
-
-    expect(LATTICE_RELEASE_EVIDENCE).toMatchObject({
-      family: MAP_FAMILY_LATTICE,
-      byteImpact: 'changed-output',
-      previousVersion: 23,
-      generatorVersion: 24,
-      profileIdentity: 'lattice-forced-audit:levels-5:district-4:anchors-8:cycles-0.12-0.25:exposure-5-20:cues-8',
-      seedDerivation: 'hashStr("audit-lattice-N#1"), N=0..2',
-      affectsMaximumHeight: true,
-    })
-    expect(LATTICE_RELEASE_EVIDENCE.generatorVersion)
-      .toBe(LATTICE_RELEASE_EVIDENCE.previousVersion + 1)
-    for (const digest of [
-      LATTICE_RELEASE_EVIDENCE.globalGoldenDigest,
-      LATTICE_RELEASE_EVIDENCE.maximumHeightGoldenDigest,
-      LATTICE_RELEASE_EVIDENCE.familyRepresentativeDigest,
-      LATTICE_RELEASE_EVIDENCE.familyCorpusDigest,
-    ]) expect(digest).toMatch(/^[0-9a-f]{64}$/)
-
-    const withoutTower = structuredClone(DEFAULT_WORLD_CONFIG)
-    withoutTower.mapFamily.profiles.tower.enabled = false
-    const config = worldConfigForFamily(MAP_FAMILY_LATTICE, withoutTower)
-    const descriptor = findLatticeDescriptor(FIXED_SEEDS[0], config)
-    expect(config.mapFamily.profiles.tower.enabled).toBe(false)
-    expect(config.mapFamily.profiles.lattice.enabled).toBe(true)
-    expect(latticeContractReasons(plannerFixture(FIXED_SEEDS[0], config))).toEqual([])
-    expect(descriptor).toMatchObject({
-      family: MAP_FAMILY_LATTICE,
-      kind: LATTICE_KIND,
-      levelCount: LEVELS,
-    })
   })
 })

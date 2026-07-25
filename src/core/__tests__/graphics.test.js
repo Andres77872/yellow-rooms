@@ -63,6 +63,23 @@ describe('graphics presets / tiers', () => {
     }
   })
 
+  it('no tier specifies a zero trip count', () => {
+    // The shaders divide by these (occ/uSamples, marchLength/uSteps). They carry
+    // max(...,1) guards, but a zero here would still mean a pass that renders
+    // nothing while claiming to be enabled — so keep the floor at the source.
+    // 'off' tiers still carry numbers because the renderer clamps and uploads
+    // them whether or not the pass runs.
+    for (const t of Object.values(AO_TIERS)) expect(t.samples).toBeGreaterThanOrEqual(1)
+    for (const t of Object.values(SHADOW_TIERS)) {
+      expect(t.steps).toBeGreaterThanOrEqual(1)
+      expect(t.lamps).toBeGreaterThanOrEqual(1)
+    }
+    for (const t of Object.values(VOL_TIERS)) {
+      expect(t.steps).toBeGreaterThanOrEqual(1)
+      expect(t.lights).toBeGreaterThanOrEqual(1)
+    }
+  })
+
   it("the 'high' tier is the legacy desktop tuning (default look unchanged)", () => {
     expect(AO_TIERS.high).toEqual({ enabled: true, samples: AO_SAMPLES })
     expect(SHADOW_TIERS.high).toEqual({ enabled: true, steps: SHADOW_STEPS, lamps: SHADOW_MAX })

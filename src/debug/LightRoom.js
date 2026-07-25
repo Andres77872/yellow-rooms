@@ -133,6 +133,10 @@ export class LightRoom {
       L.lampFlickerRaw[i] = 1
     }
     L.uLampCount.value = n
+    // Authored set, not a radius query: no edge to fade against. Without this
+    // the renderer's set-edge fade would dim the whole grid once the orbit
+    // camera pulls past it (the wheel zooms out to 60u — the old anchor).
+    L.cutoffR = Infinity
     deferred.lightUniforms.uLampIntensity.value = this.config.intensity
     deferred.lightUniforms.uLampFlicker.value = 1 // isolated room: no flicker dip on the cast light
     if (deferred.volUniforms) deferred.volUniforms.uLampRange.value = deferred.lightUniforms.uLampRange.value

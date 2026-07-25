@@ -329,6 +329,12 @@ export const VOL_PHASE_G = 0.62 // Henyey-Greenstein anisotropy (0 = isotropic; 
 export const VOL_INTENSITY = 0.4 // composite strength of the shafts
 export const VOL_OCC_NEAR = 0.05 // volumetric visToLight near acceptance (shaft cutoff vs leak)
 export const VOL_OCC_FAR = 4.0 // volumetric visToLight far thickness window
+// Minimum per-sample lamp weight (flicker/fade x cubic attenuation) worth the
+// two screen-space occlusion taps in the volumetric march. The cubic window
+// means only ~48% of a lamp's in-range volume carries more than 1% of peak, so
+// this skips roughly half the taps while dropping in-scatter that is already
+// below the composite's VOL_INTENSITY floor.
+export const VOL_CONTRIB_EPS = 0.01
 
 // Emissive bloom (selective by matID; fluorescents + exit glow)
 export const BLOOM_SCALE = 0.5 // bloom buffers at half res
@@ -351,6 +357,13 @@ export const GRADE_TINT = [1.04, 1.0, 0.9]
 // saturated anime palette; done AFTER tone mapping so it never fights the
 // hue-preserving rolloff.
 export const GRADE_SAT = 1.18
+// Seconds after which the grade's grain/dead-static clock wraps. The shader
+// hashes `uv * 1280 + time`; Engine._time accumulates from boot, so past ~1e4
+// the highp-float ULP of that sum (~1e-3 and growing) exceeds the per-pixel
+// variation and the noise degenerates into static blocks. 600s keeps the hash
+// argument small while being far longer than any noise pattern's period, so
+// the wrap is not observable.
+export const GRADE_TIME_WRAP = 600
 
 // Ink outline (Sobel off the G-buffer). Static tunables (LightTool edits live).
 // The ink now also fades with the SAME exp^2 fog transmittance as the surfaces
