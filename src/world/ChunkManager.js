@@ -157,12 +157,16 @@ function compareRequests(a, b) {
 }
 
 export class ChunkManager {
-  constructor(scene, seed, materials, geom) {
+  constructor(scene, seed, materials, geom, models = null) {
     this.root = new THREE.Group()
     scene.add(this.root)
     this.seed = seed
     this.materials = materials
     this.geom = geom
+    // Blender-built furniture model library (render/furnitureModels.js), shared
+    // by reference: chunks consult it at mesh time and fall back to the
+    // procedural box builders while it is still empty.
+    this.furnitureModels = models
     this.chunks = new Map() // chunkKey3 -> Chunk
     this.queue = [] // pending keys
     this.queued = new Set()
@@ -212,6 +216,14 @@ export class ChunkManager {
   // spawn clearing unless the caller overrides it.
   setClearings(list) {
     this.clearings = list
+  }
+
+  // Swap the furniture model library and re-mesh every resident chunk's
+  // furniture batch (Engine calls this when the Blender GLBs finish loading).
+  // Chunks built afterwards pick the library up through the constructor path.
+  upgradeFurnitureModels(models = this.furnitureModels) {
+    this.furnitureModels = models
+    for (const chunk of this.chunks.values()) chunk.refreshFurniture(models)
   }
 
   setRenderDetailProfile(profile) {
@@ -555,7 +567,8 @@ export class ChunkManager {
       this.geom,
       exitCell,
       this.config,
-      clearings.length ? clearings : null
+      clearings.length ? clearings : null,
+      this.furnitureModels
     )
     chunk.mount(this.root)
     this.chunks.set(key, chunk)

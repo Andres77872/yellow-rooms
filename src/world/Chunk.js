@@ -3,7 +3,7 @@ import { generateChunk } from './generate.js'
 import { latticeStructureSlice } from './structures/latticeStamp.js'
 import { resolveMapFamily } from './mapFamily.js'
 import { MAP_FAMILY_LATTICE } from './mapTypes.js'
-import { buildChunkMeshes } from './mesh.js'
+import { buildChunkMeshes, buildFurniturePart, disposeFurniturePart } from './mesh.js'
 import {
   RENDER_DETAIL_FULL,
   RENDER_DETAIL_REDUCED,
@@ -95,10 +95,13 @@ function structureApertureRegions(
 // modules; this class just owns them and the per-chunk lifetime. v8: a chunk
 // is one floor slab of the layered world, keyed (cx, cy, cz).
 export class Chunk {
-  constructor(cx, cy, cz, seed, materials, geom, exitCell, config, clearings) {
+  constructor(cx, cy, cz, seed, materials, geom, exitCell, config, clearings, models = null) {
     this.cx = cx
     this.cy = cy
     this.cz = cz
+    this._materials = materials
+    this._geom = geom
+    this._models = models
     this.data = generateChunk(seed, cx, cy, cz, config, exitCell, clearings)
 
     const mesh = buildChunkMeshes(
@@ -107,7 +110,8 @@ export class Chunk {
       materials,
       cx * CHUNK_WORLD,
       layerY(cy),
-      cz * CHUNK_WORLD
+      cz * CHUNK_WORLD,
+      models
     )
     this.group = mesh.group
     this.lamps = mesh.lamps // world Vector3 of LIT lamps (for the light pool), tagged .cy
@@ -173,6 +177,28 @@ export class Chunk {
 
     this.renderDetail = next
     return true
+  }
+
+  // Rebuild only the furniture batch in place — called by ChunkManager when
+  // the Blender model library finishes loading, swapping box-builder batches
+  // for instanced GLBs without touching generation or the other batches.
+  refreshFurniture(models = this._models) {
+    this._models = models
+    const oldPart = this.renderParts.furniture
+    const nextPart = buildFurniturePart(this.data, this._geom, this._materials, this._models)
+    disposeFurniturePart(oldPart) // also detaches from this.group
+    if (nextPart) {
+      nextPart.visible = this.renderDetail !== RENDER_DETAIL_SHELL
+      this.group.add(nextPart)
+      // mount() froze this subtree's auto matrix composition; a late swap-in
+      // composes its world matrix once, then freezes the same way.
+      nextPart.updateWorldMatrix(true, true)
+      nextPart.traverse((object) => {
+        object.matrixAutoUpdate = false
+        object.matrixWorldAutoUpdate = false
+      })
+    }
+    this.renderParts = Object.freeze({ ...this.renderParts, furniture: nextPart })
   }
 
   // Chunk geometry is immutable after construction. Attach first so the

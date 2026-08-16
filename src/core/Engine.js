@@ -19,6 +19,11 @@ import {
 } from '../world/constants.js'
 import { applyFamilyMaterials, createGBufferMaterials, disposeGBufferMaterials } from '../render/gbufferMaterials.js'
 import { createGeometries, disposeGeometries } from '../render/geometries.js'
+import {
+  createFurnitureModelLibrary,
+  disposeFurnitureModels,
+  loadFurnitureModels,
+} from '../render/furnitureModels.js'
 import { ChunkManager } from '../world/ChunkManager.js'
 import { Controller } from '../player/Controller.js'
 import { AudioBus } from '../audio/AudioBus.js'
@@ -102,7 +107,11 @@ export class Engine {
     this.materials = createGBufferMaterials(renderer)
     this.geom = createGeometries()
 
-    this.cm = new ChunkManager(scene, hashStr('lobby'), this.materials, this.geom)
+    // Blender-built furniture models load in the background; chunks mesh with
+    // the procedural box builders until the library is ready, then every
+    // resident chunk swaps its furniture batch in place (no world rebuild).
+    this.furnitureModels = createFurnitureModelLibrary()
+    this.cm = new ChunkManager(scene, hashStr('lobby'), this.materials, this.geom, this.furnitureModels)
     // Apply the ?family= selection before anything reads cm.config — the title
     // backdrop prewarm below must already render the requested family's world.
     // Unknown/disabled values fall back to Office rather than crash the boot.
@@ -135,6 +144,12 @@ export class Engine {
     // Materials/lighting were built with the Office defaults; retarget them to
     // the URL-selected family before the title prewarm renders its backdrop.
     this._applyFamilyVisuals(this.state.mapFamily)
+
+    // Kick the furniture GLB fetch; resident chunks swap box batches for the
+    // Blender models when it resolves (each load failure keeps the fallback).
+    loadFurnitureModels(this.furnitureModels).then((lib) => {
+      if (lib.loaded && this._running) this.cm.upgradeFurnitureModels(lib)
+    })
 
     this.debug = new DebugOverlay(renderer)
     this.ui = new UI(this.settings)
@@ -874,6 +889,7 @@ export class Engine {
     this.debugMode.dispose()
     disposeGBufferMaterials(this.materials)
     disposeGeometries(this.geom)
+    disposeFurnitureModels(this.furnitureModels)
     this.deferred.dispose()
     this.renderer.dispose()
   }

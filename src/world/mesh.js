@@ -50,6 +50,12 @@ const _p = new THREE.Vector3()
 const _s = new THREE.Vector3()
 const _c = new THREE.Color()
 const _tint3 = [0, 0, 0]
+// Furniture GLB instancing: placement records rotate whole models by facing
+// (0=+z 1=-z 2=+x 3=-x — the same mapping objects/furniture/frame.js applies
+// to box parts). rotY angles below reproduce that frame exactly.
+const _qf = new THREE.Quaternion()
+const _Y_AXIS = new THREE.Vector3(0, 1, 0)
+const FURN_FACING_ANGLE = [0, Math.PI, Math.PI / 2, -Math.PI / 2]
 
 // Per-door leaf colour from the doorway's deterministic tone seed (doors.js).
 // instanceColor multiplies the doorLeaf material's painted-cream base: most
@@ -64,6 +70,90 @@ function leafTint(part, out) {
   const t = (tone - DOOR_DARK_CHANCE) / (1 - DOOR_DARK_CHANCE)
   const b = 1 - DOOR_TINT_VAR + 2 * DOOR_TINT_VAR * t
   return out.setRGB(b, b * 0.99, b * 0.955)
+}
+
+// --- Furniture node ------------------------------------------------------
+// One Group per chunk holding the collision-real furniture. Two render paths
+// with identical placement semantics (record x/z chunk-local centre, facing
+// 0..3 rotating the piece):
+//   GLB path — the Blender-built models (render/furnitureModels.js), one
+//     InstancedMesh per kind present, per-vertex part colors from the GLB and
+//     a white per-instance tint (instanceColor stays bound: the material
+//     declares USE_INSTANCING_COLOR and an unbound attribute reads black).
+//   box path — the procedural builders (objects/furniture/), one InstancedMesh
+//     of scaled unit boxes with per-part tints. Used until the GLBs load and
+//     as the permanent fallback when they are unavailable (tests, editor,
+//     network failure).
+export function buildFurniturePart(data, geom, materials, models = null) {
+  if (!data.furniture.length) return null
+  const node = new THREE.Group()
+  node.name = 'furniture'
+
+  const geometries = models?.geometries
+  if (geometries?.size && materials.furnitureModel) {
+    const byKind = new Map()
+    const uncovered = [] // kinds without a loaded GLB keep the box treatment
+    for (const f of data.furniture) {
+      if (!geometries.has(f.kind)) {
+        uncovered.push(f)
+        continue
+      }
+      if (!byKind.has(f.kind)) byKind.set(f.kind, [])
+      byKind.get(f.kind).push(f)
+    }
+    _s.set(1, 1, 1)
+    _c.setRGB(1, 1, 1)
+    for (const [kind, list] of byKind) {
+      const batch = new THREE.InstancedMesh(geometries.get(kind), materials.furnitureModel, list.length)
+      for (let i = 0; i < list.length; i++) {
+        const f = list[i]
+        _p.set(f.x, 0, f.z)
+        _qf.setFromAxisAngle(_Y_AXIS, FURN_FACING_ANGLE[f.facing & 3])
+        _m.compose(_p, _qf, _s)
+        batch.setMatrixAt(i, _m)
+        batch.setColorAt(i, _c)
+      }
+      batch.instanceMatrix.needsUpdate = true
+      batch.instanceColor.needsUpdate = true
+      batch.computeBoundingSphere()
+      node.add(batch)
+    }
+    if (uncovered.length) pushBoxBatch(node, geom, materials, uncovered)
+  } else if (data.furniture.length) {
+    pushBoxBatch(node, geom, materials, data.furniture)
+  }
+
+  return node.children.length ? node : null
+}
+
+// The procedural fallback: multi-part models (objects/furniture/) batched
+// into one instanced unit-box draw with per-part tints.
+function pushBoxBatch(node, geom, materials, records) {
+  const parts = []
+  for (const f of records) pushFurnitureModel(parts, f)
+  if (!parts.length) return
+  const batch = new THREE.InstancedMesh(geom.wallUnit, materials.furniture, parts.length)
+  for (let i = 0; i < parts.length; i++) {
+    const it = parts[i]
+    _p.set(it.px, it.py, it.pz)
+    _s.set(it.sx, it.sy, it.sz)
+    _m.compose(_p, _q, _s)
+    batch.setMatrixAt(i, _m)
+    batch.setColorAt(i, _c.setRGB(it.tint[0], it.tint[1], it.tint[2]))
+  }
+  batch.instanceMatrix.needsUpdate = true
+  batch.instanceColor.needsUpdate = true
+  batch.computeBoundingSphere()
+  node.add(batch)
+}
+
+// The furniture node owns only its InstancedMesh GPU buffers: geometries and
+// materials are shared (model library / gbuffer materials) and disposed with
+// their owners.
+export function disposeFurniturePart(node) {
+  if (!node) return
+  for (const child of node.children) child.dispose()
+  node.parent?.remove(node)
 }
 
 // Build the THREE meshes for one chunk from its ChunkData (thin-wall model).
@@ -215,7 +305,7 @@ function multilevelHoleOutsideChunk(data, lx, lz) {
     : gx !== room.globalBridgeLine
 }
 
-export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
+export function buildChunkMeshes(data, geom, materials, ox, oy, oz, models = null) {
   const group = new THREE.Group()
   group.position.set(ox, oy, oz)
 
@@ -533,30 +623,12 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
   }
 
   // --- Furniture (collision-real pieces from ChunkData.furniture) ---
-  // Multi-part models (objects/furniture/) batched into one instanced draw
-  // with per-part tints. These are the ONLY props the collision raster knows
-  // about: their cells carry COLUMN_FURNITURE and the player sweeps the
-  // precise piece AABBs.
-  let furniture = null
-  if (data.furniture.length) {
-    const parts = []
-    for (const f of data.furniture) pushFurnitureModel(parts, f)
-    if (parts.length) {
-      furniture = new THREE.InstancedMesh(geom.wallUnit, materials.furniture, parts.length)
-      for (let i = 0; i < parts.length; i++) {
-        const it = parts[i]
-        _p.set(it.px, it.py, it.pz)
-        _s.set(it.sx, it.sy, it.sz)
-        _m.compose(_p, _q, _s)
-        furniture.setMatrixAt(i, _m)
-        furniture.setColorAt(i, _c.setRGB(it.tint[0], it.tint[1], it.tint[2]))
-      }
-      furniture.instanceMatrix.needsUpdate = true
-      furniture.instanceColor.needsUpdate = true
-      furniture.computeBoundingSphere()
-      group.add(furniture)
-    }
-  }
+  // buildFurniturePart picks the render path: instanced Blender GLBs once the
+  // model library is loaded, else the procedural unit-box builders. Either way
+  // these are the ONLY props the collision raster knows about: their cells
+  // carry COLUMN_FURNITURE and the player sweeps the precise piece AABBs.
+  const furniture = buildFurniturePart(data, geom, materials, models)
+  if (furniture) group.add(furniture)
 
   // --- Fluorescent ceiling panels (lit feed the light pool; dead are dark) ---
   // Each lit panel's emissive is tinted by its fixture identity (lampCharacter):
@@ -627,7 +699,7 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz) {
     leaves?.dispose()
     props?.dispose()
     signs?.dispose()
-    furniture?.dispose()
+    disposeFurniturePart(furniture)
     panels?.dispose()
     deadPanels?.dispose()
     for (const g of ownedGeos) g.dispose()

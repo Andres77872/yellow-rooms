@@ -40,6 +40,9 @@ const VERT_INSTANCED = /* glsl */ `
   #ifdef USE_INSTANCING_COLOR
     in vec3 instanceColor;
   #endif
+  #ifdef USE_PART_COLOR
+    in vec3 color;
+  #endif
   uniform mat4 modelViewMatrix;
   uniform mat4 projectionMatrix;
   uniform mat3 normalMatrix;
@@ -57,6 +60,11 @@ const VERT_INSTANCED = /* glsl */ `
       vTint = instanceColor;
     #else
       vTint = vec3(1.0);
+    #endif
+    // Per-vertex part color baked from the Blender GLB materials
+    // (furnitureModels.js): one merged mesh tints each part separately.
+    #ifdef USE_PART_COLOR
+      vTint *= color;
     #endif
     gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
   }
@@ -110,10 +118,13 @@ function surfaceMaterial(map, instanced) {
   })
 }
 
-function flatMaterial(colorLinear, matID, instanced, tinted = false) {
+function flatMaterial(colorLinear, matID, instanced, tinted = false, partColor = false) {
   return new THREE.RawShaderMaterial({
     glslVersion: THREE.GLSL3,
-    defines: tinted ? { USE_INSTANCING_COLOR: '' } : {},
+    defines: {
+      ...(tinted ? { USE_INSTANCING_COLOR: '' } : {}),
+      ...(partColor ? { USE_PART_COLOR: '' } : {}),
+    },
     uniforms: {
       map: { value: null },
       uColor: { value: colorLinear },
@@ -206,8 +217,13 @@ export function createGBufferMaterials(renderer, family = MAP_FAMILY_OFFICE) {
   // Collision-real office furniture: white base tinted per part by the
   // objects/furniture palette (laminate, metal, fabric, screens, leaves).
   const furniture = flatMaterial(lin(0xffffff), 0, true, true)
+  // Blender-built furniture GLBs (render/furnitureModels.js): merged
+  // per-kind geometry whose baked vertex colors carry the per-part palette,
+  // multiplied by the per-instance tint. Same deferred lane as `furniture`;
+  // mesh.js picks this path once the model library has loaded.
+  const furnitureModel = flatMaterial(lin(0xffffff), 0, true, true, true)
 
-  return { carpet, ceiling, wallpaper, panel, panelDead, entity, pursuer, husk, exit, doorFrame, doorLeaf, prop, signGlow, furniture }
+  return { carpet, ceiling, wallpaper, panel, panelDead, entity, pursuer, husk, exit, doorFrame, doorLeaf, prop, signGlow, furniture, furnitureModel }
 }
 
 export function disposeGBufferMaterials(mats) {
