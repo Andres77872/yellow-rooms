@@ -39,6 +39,9 @@ export class Stalker {
     this.mesh.scale.set(1, 1.28, 1)
     this.mesh.visible = false
     scene.add(this.mesh)
+    // Capsule geometry is origin-centred; the Blender model upgrade is
+    // feet-origin (meshYOffset 0). See upgradeModel.
+    this.meshYOffset = this.mesh.scale.y * 0.95
     this.pos = new THREE.Vector3() // feet position (y = ground height)
     this.cy = 0 // floor index (v8)
     this.active = false
@@ -204,8 +207,17 @@ export class Stalker {
   }
 
   _faceMesh(player) {
-    this.mesh.position.set(this.pos.x, this.pos.y + this.mesh.scale.y * 0.95, this.pos.z)
+    this.mesh.position.set(this.pos.x, this.pos.y + this.meshYOffset, this.pos.z)
     this.mesh.rotation.y = Math.atan2(player.x - this.pos.x, player.z - this.pos.z)
+  }
+
+  // Swap the capsule silhouette for the Blender-built model (enemy GLB
+  // pipeline: feet-origin geometry, per-part vertex colors via entityModel).
+  upgradeModel(geometry, material) {
+    this.mesh.geometry = geometry
+    this.mesh.material = material
+    this.mesh.scale.set(1, 1, 1)
+    this.meshYOffset = 0
   }
 
   // One pursue tick: (re)route toward the last-seen cell/floor with the shared

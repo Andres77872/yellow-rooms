@@ -37,6 +37,9 @@ export class Husk {
     this.mesh.scale.set(0.9, 0.85, 0.9) // small, frail silhouette
     this.mesh.visible = false
     scene.add(this.mesh)
+    // Capsule geometry is origin-centred; the Blender model upgrade is
+    // feet-origin (meshYOffset 0). See upgradeModel.
+    this.meshYOffset = this.mesh.scale.y * 0.95
     this.pos = new THREE.Vector3() // feet position (y = ground height)
     this.cy = 0 // floor index
     this.active = false
@@ -113,8 +116,17 @@ export class Husk {
   }
 
   _faceMesh(player) {
-    this.mesh.position.set(this.pos.x, this.pos.y + this.mesh.scale.y * 0.95, this.pos.z)
+    this.mesh.position.set(this.pos.x, this.pos.y + this.meshYOffset, this.pos.z)
     this.mesh.rotation.y = Math.atan2(player.x - this.pos.x, player.z - this.pos.z)
+  }
+
+  // Swap the capsule silhouette for the Blender-built model (enemy GLB
+  // pipeline: feet-origin geometry, per-part vertex colors via entityModel).
+  upgradeModel(geometry, material) {
+    this.mesh.geometry = geometry
+    this.mesh.material = material
+    this.mesh.scale.set(1, 1, 1)
+    this.meshYOffset = 0
   }
 
   // Returns { caught:false, tension, seen, dist, inBeam:false, frozen:false, died }.

@@ -43,6 +43,9 @@ export class Pursuer {
     this.mesh.scale.set(1.2, 1.0, 1.2) // low, broad silhouette
     this.mesh.visible = false
     scene.add(this.mesh)
+    // Capsule geometry is origin-centred; the Blender model upgrade is
+    // feet-origin (meshYOffset 0). See upgradeModel.
+    this.meshYOffset = this.mesh.scale.y * 0.95
     this.pos = new THREE.Vector3() // feet position (y = ground height)
     this.cy = 0 // floor index (v8)
     this.active = false
@@ -99,7 +102,7 @@ export class Pursuer {
     this._lastTarget = { x: spot.x, z: spot.z, cy: spot.cy }
     this.cy = spot.cy
     this.pos.set(spot.x, layerY(spot.cy), spot.z)
-    this.mesh.position.set(spot.x, this.pos.y + this.mesh.scale.y * 0.95, spot.z)
+    this.mesh.position.set(spot.x, this.pos.y + this.meshYOffset, spot.z)
     this.mesh.visible = true
     return true
   }
@@ -150,8 +153,17 @@ export class Pursuer {
   }
 
   _faceMesh(player) {
-    this.mesh.position.set(this.pos.x, this.pos.y + this.mesh.scale.y * 0.95, this.pos.z)
+    this.mesh.position.set(this.pos.x, this.pos.y + this.meshYOffset, this.pos.z)
     this.mesh.rotation.y = Math.atan2(player.x - this.pos.x, player.z - this.pos.z)
+  }
+
+  // Swap the capsule silhouette for the Blender-built model (enemy GLB
+  // pipeline: feet-origin geometry, per-part vertex colors via entityModel).
+  upgradeModel(geometry, material) {
+    this.mesh.geometry = geometry
+    this.mesh.material = material
+    this.mesh.scale.set(1, 1, 1)
+    this.meshYOffset = 0
   }
 
   // Returns { caught, tension, seen, dist, inBeam:false, frozen:false }.

@@ -24,6 +24,12 @@ import {
   disposeFurnitureModels,
   loadFurnitureModels,
 } from '../render/furnitureModels.js'
+import {
+  createEnemyModelLibrary,
+  disposeEnemyModels,
+  loadEnemyModels,
+  upgradeEnemyModels,
+} from '../render/enemyModels.js'
 import { ChunkManager } from '../world/ChunkManager.js'
 import { Controller } from '../player/Controller.js'
 import { AudioBus } from '../audio/AudioBus.js'
@@ -111,6 +117,9 @@ export class Engine {
     // the procedural box builders until the library is ready, then every
     // resident chunk swaps its furniture batch in place (no world rebuild).
     this.furnitureModels = createFurnitureModelLibrary()
+    // Enemy GLBs ride the same background-load path; entities upgrade from
+    // capsule silhouettes when the library resolves below.
+    this.enemyModels = createEnemyModelLibrary()
     this.cm = new ChunkManager(scene, hashStr('lobby'), this.materials, this.geom, this.furnitureModels)
     // Apply the ?family= selection before anything reads cm.config — the title
     // backdrop prewarm below must already render the requested family's world.
@@ -149,6 +158,18 @@ export class Engine {
     // Blender models when it resolves (each load failure keeps the fallback).
     loadFurnitureModels(this.furnitureModels).then((lib) => {
       if (lib.loaded && this._running) this.cm.upgradeFurnitureModels(lib)
+    })
+
+    // Same upgrade path for the entities: capsule silhouettes until the
+    // Blender enemy GLBs arrive, then swap geometry + material in place.
+    loadEnemyModels(this.enemyModels).then((lib) => {
+      if (lib.loaded && this._running) {
+        upgradeEnemyModels(
+          lib,
+          { stalker: this.stalker, pursuer: this.pursuer, husk: this.husk },
+          this.materials.entityModel
+        )
+      }
     })
 
     this.debug = new DebugOverlay(renderer)
@@ -764,7 +785,7 @@ export class Engine {
     // toggle is a real accessibility escape, not just a floor removal.
     const grainFloor = this._noiseMode === 'always' ? 0.022 : 0.03 * tension
     g.grain.value = this._noiseMode === 'off' ? 0 : grainFloor + (1 - s) * 0.5 + e * 0.18
-    g.aberration.value = 0.0012 + (1 - s) * 0.007 + e * 0.006
+    g.aberration.value = 0.0026 + (1 - s) * 0.007 + e * 0.006
     g.dead.value = st.deadAmount
   }
 
@@ -890,6 +911,7 @@ export class Engine {
     disposeGBufferMaterials(this.materials)
     disposeGeometries(this.geom)
     disposeFurnitureModels(this.furnitureModels)
+    disposeEnemyModels(this.enemyModels)
     this.deferred.dispose()
     this.renderer.dispose()
   }

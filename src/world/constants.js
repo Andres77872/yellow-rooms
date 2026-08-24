@@ -88,13 +88,13 @@ export const FOG_DENSITY = 0.014
 // frame read as one foggy wash. A dark fog target makes distance RECEDE, so
 // lamp pools and silhouettes keep their contrast and the haze reads as depth,
 // not as glare. (FOG_DENSITY itself is locked by render-coupling.test.js.)
-export const FOG_COLOR = 0x6e5522
+export const FOG_COLOR = 0x7d5f26
 // Void/sky vertical gradient, as brightness multipliers on FOG_COLOR:
 // looking up fades toward a dark warm void, looking down toward a dim floor
 // haze. Keeps unloaded holes from glaring flat amber into dark zones and gives
 // the horizon an anime-background glow.
-export const SKY_ZENITH_MULT = 0.24
-export const SKY_NADIR_MULT = 0.52
+export const SKY_ZENITH_MULT = 0.18
+export const SKY_NADIR_MULT = 0.44
 
 // --- Lighting / panels ---
 export const PANEL_COLOR = 0xffe6a0
@@ -145,14 +145,18 @@ export const APERTURE_VIS_CHUNKS = 1
 
 // Cel ramp for the per-lamp N·L banding (see render/gradientRamp.js). CEL_BANDS
 // hard steps on the lit side; CEL_FLOOR keeps a tiny warm step on grazing walls.
-// 4 bands (not 6) so the toon terminator reads as deliberate anime shading
-// instead of a near-smooth gradient.
+// 4 bands, with the softness coming from a lifted floor + a wider wrap rather
+// than from dropping a band. Measured on a lamp-lit corridor: 3 bands at floor
+// 0.15 pushed every mid-lit wall into the TOP band, so the shadow side the cool
+// ambient exists to colour disappeared and the frame went flat cream. The floor
+// is what lets ambient tint the dark side; the band count is what keeps a
+// terminator there at all.
 export const CEL_BANDS = 4
-export const CEL_FLOOR = 0.08
+export const CEL_FLOOR = 0.12
 // How much SSAO modulates DIRECT lamp light (0 = none/physical, 1 = full). The
 // ambient term always gets full AO; this is a deliberate non-physical contact-
 // darkening lever for the direct term.
-export const LAMP_AO_MIX = 0.5
+export const LAMP_AO_MIX = 0.34
 
 // Ambient floor + rim (linear). Keeps lamp-less zones readable, never black.
 // SKY lights up-facing surfaces (floors); GROUND lights down-facing (ceilings).
@@ -162,25 +166,27 @@ export const LAMP_AO_MIX = 0.5
 // monochrome olive; the cool fill gives unlit zones their own hue so lamp
 // pools read as *light* against them. GRADE_TINT keeps blue >= 0.9 so this
 // survives the grade.
-export const AMBIENT_SKY = 0x2e3348 // hemi up tint (lights up-facing floors)
-export const AMBIENT_GROUND = 0x262236 // hemi down tint (lights down-facing ceilings)
-export const RIM_STRENGTH = 0.22 // anime fresnel edge light
+export const AMBIENT_SKY = 0x38456e // hemi up tint (lights up-facing floors)
+export const AMBIENT_GROUND = 0x2a2740 // hemi down tint (lights down-facing ceilings)
+export const RIM_STRENGTH = 0.24 // anime fresnel edge light
 export const RIM_POW = 3.0 // fresnel falloff exponent for the rim term
-export const RIM_MIX = 0.5 // rim contribution scale (uRimColor * rim * RIM_MIX)
+export const RIM_MIX = 0.52 // rim contribution scale (uRimColor * rim * RIM_MIX)
 // Rim light decoupled from the warm lamp color: a pale COOL edge light is the
 // classic anime treatment and is the one cool accent that survives the warm
 // grade. Entities get their own stepped slate-blue rim (see lighting.js) so a
 // silhouette down a long corridor reads as a *presence*, not a smudge.
-// Barely-cool pale rim: at grazing angles the fresnel term hits whole
-// floor/ceiling planes, so a strongly blue rim reads as a grey wash over the
-// amber world — keep the coolness a hint, not a hue.
-export const RIM_COLOR = 0xdcd8e4
+// Cool dusk rim. It reads as a hue now, not a hint: with the ambient pushed to
+// a real dusk blue the rim has to join that side of the split or it floats
+// between the two and greys the frame. Watch it at grazing angles — the fresnel
+// term hits whole floor/ceiling planes, so RIM_MIX is the safety valve.
+export const RIM_COLOR = 0xcfe0ff
 export const ENTITY_RIM = 0x8fa3c8
 // Wrapped diffuse (half-Lambert) factor for the per-lamp N·L. >0 wraps a lamp's
 // light around onto grazing / under-facing surfaces (ceilings, wall undersides)
 // so floor/roof/walls read consistently lit. The range window still keeps
-// lamp-less zones dark. 0 = pure Lambert (old look); ~0.3 = gentle wrap.
-export const LAMP_WRAP = 0.3
+// lamp-less zones dark. 0 = pure Lambert; ~0.3 gentle; ~0.46 is the wrapped
+// diffuse a painted background uses, which is what the 3-band ramp needs.
+export const LAMP_WRAP = 0.36
 
 // Per-lamp character (lampCharacter.js). The old lighting flickered EVERY lamp
 // in the world in lockstep off one global uniform — a screen-wide pulse no real
@@ -290,7 +296,7 @@ export const STAIR_SIGHT_R = 6
 export const SHADOW_STEPS = 20 // raymarch steps per shadowed lamp (more = less noise)
 export const SHADOW_MAX = 6 // shade at most the N nearest lamps (sorted nearest-first)
 export const SHADOW_THICKNESS = 0.7 // view-space occluder thickness window
-export const SHADOW_STRENGTH = 0.92
+export const SHADOW_STRENGTH = 0.8
 export const SHADOW_BIAS = 0.04 // view-space near acceptance bias for the depth march (leak vs acne)
 export const SHADOW_MAX_DARK = 0.85 // darkest the contact-hardening march returns on a hit
 export const SHADOW_SCALE = 0.5 // screen-space shadow mask computed at half res, then bilateral-blurred + upsampled
@@ -313,10 +319,10 @@ export const AO_SCALE = 0.5 // SSAO at half res
 export const AO_SAMPLES = 16 // hemisphere kernel size
 export const AO_RADIUS = 0.8 // view-space sample radius
 export const AO_BIAS = 0.025
-export const AO_INTENSITY = 1.3 // contrast of the occlusion (crisp corner shading reads as drawn shadow shapes)
+export const AO_INTENSITY = 1.15 // contrast of the occlusion (backed off for the 3-band soft terminator: the old crunch was tuned for hard cel and reads as dirt under a wrapped ramp)
 export const VOL_SCALE = 0.5 // volumetrics at half res
-export const VOL_STEPS = 32 // raymarch steps (more = smoother shafts)
-export const VOL_LIGHT_MAX = 8 // nearest lamps that in-scatter (caps occlusion cost)
+export const VOL_STEPS = 40 // raymarch steps (more = smoother shafts)
+export const VOL_LIGHT_MAX = 10 // nearest lamps that in-scatter (caps occlusion cost)
 export const VOL_MAXDIST = 46 // clamp march distance (world units)
 // Volumetrics are ACCENT god-rays, not an atmosphere pass. The old
 // density/intensity (0.05 / 0.7) with a near-isotropic phase filled the whole
@@ -324,9 +330,9 @@ export const VOL_MAXDIST = 46 // clamp march distance (world units)
 // contributor. Low density + a strongly forward phase means the shafts only
 // read when looking roughly toward a lamp (a deliberate anime beam), and the
 // air stays clear everywhere else.
-export const VOL_DENSITY = 0.022 // in-scatter coefficient
-export const VOL_PHASE_G = 0.62 // Henyey-Greenstein anisotropy (0 = isotropic; higher = tighter forward beams)
-export const VOL_INTENSITY = 0.4 // composite strength of the shafts
+export const VOL_DENSITY = 0.03 // in-scatter coefficient
+export const VOL_PHASE_G = 0.74 // Henyey-Greenstein anisotropy (0 = isotropic; higher = tighter forward beams)
+export const VOL_INTENSITY = 0.75 // composite strength of the shafts
 export const VOL_OCC_NEAR = 0.05 // volumetric visToLight near acceptance (shaft cutoff vs leak)
 export const VOL_OCC_FAR = 4.0 // volumetric visToLight far thickness window
 // Minimum per-sample lamp weight (flicker/fade x cubic attenuation) worth the
@@ -338,8 +344,8 @@ export const VOL_CONTRIB_EPS = 0.01
 
 // Emissive bloom (selective by matID; fluorescents + exit glow)
 export const BLOOM_SCALE = 0.5 // bloom buffers at half res
-export const BLOOM_SPREAD = 3.0 // blur step in texels (wider = softer glow)
-export const BLOOM_INTENSITY = 1.0
+export const BLOOM_SPREAD = 4.5 // blur step in texels (wider = softer glow)
+export const BLOOM_INTENSITY = 1.25
 // HDR boost on the lit tubes' emissive (× the flicker level). Pushes the panel
 // core past 1.0 so the tone map rolls it toward white and the selective bloom
 // halos it — fixtures read as SOURCES (the anime fluorescent glow), where at
@@ -347,16 +353,16 @@ export const BLOOM_INTENSITY = 1.0
 export const PANEL_GLOW = 1.7
 
 // Posterize cel bands in the grade (higher = smoother gradients)
-export const GRADE_LEVELS = 8.0
+export const GRADE_LEVELS = 14.0
 // Warm look-tint applied in the grade (linear). Blue at 0.9 keeps the amber
 // mood but stops crushing the cool half of the palette — the slate-violet
 // ambient, rim light, mint exit glow and violet sanity tones are exactly the
 // anime color contrast the old 0.78 was flattening to olive.
-export const GRADE_TINT = [1.04, 1.0, 0.9]
+export const GRADE_TINT = [1.06, 1.0, 0.88]
 // Post-tonemap saturation (1 = neutral). A gentle push toward the clean,
 // saturated anime palette; done AFTER tone mapping so it never fights the
 // hue-preserving rolloff.
-export const GRADE_SAT = 1.18
+export const GRADE_SAT = 1.34
 // Seconds after which the grade's grain/dead-static clock wraps. The shader
 // hashes `uv * 1280 + time`; Engine._time accumulates from boot, so past ~1e4
 // the highp-float ULP of that sum (~1e-3 and growing) exceeds the per-pixel
@@ -372,12 +378,15 @@ export const GRADE_TIME_WRAP = 600
 // distance. The near/far smoothstep below is only a wide safety envelope.
 // DEPTH_THRESH is in normalized-depth units (viewZ/FAR): rescaled 0.009->0.012
 // when FAR went 240->180 so the same world-space depth step trips an edge.
-export const OUTLINE_INK = 0x140e03
+export const OUTLINE_INK = 0x1c1710
 export const OUTLINE_THICKNESS = 1.8
 export const OUTLINE_DEPTH_THRESH = 0.012
-export const OUTLINE_NORMAL_THRESH = 0.3
-export const OUTLINE_FADE_NEAR = 0.1
-export const OUTLINE_FADE_FAR = 0.95
+export const OUTLINE_NORMAL_THRESH = 0.42
+// The near/far envelope is no longer a safety net — it is the look. World ink
+// dies at about a third of the far plane so distance is drawn by light and haze;
+// entities are exempt from this fade in outline.js (matID 2) and stay crisp.
+export const OUTLINE_FADE_NEAR = 0.03
+export const OUTLINE_FADE_FAR = 0.34
 
 // --- Thin-wall model (refactor) ---------------------------------------
 // World-gen version: bump whenever the algorithm changes the bytes a seed

@@ -13,6 +13,10 @@ editor/rendering sources.
   frame-wide instrumentation, and render-scene benchmark scope.
 - [Map Editor](map-editor.md) — editor routes, document semantics, tools, and
   the version-1 `.yrmap` binary layout.
+- [Furniture asset pipeline](furniture-pipeline.md) — Blender → GLB build for
+  the collision-real furniture kinds and the box-builder fallback contract.
+- [Enemy asset pipeline](enemy-pipeline.md) — Blender → GLB build for the
+  Stalker, Pursuer, and Husk figures and the capsule-fallback contract.
 
 ## Versioned design history
 

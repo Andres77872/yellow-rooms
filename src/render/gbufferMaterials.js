@@ -17,6 +17,9 @@ const VERT_STATIC = /* glsl */ `
   in vec3 position;
   in vec3 normal;
   in vec2 uv;
+  #ifdef USE_PART_COLOR
+    in vec3 color;
+  #endif
   uniform mat4 modelViewMatrix;
   uniform mat4 projectionMatrix;
   uniform mat3 normalMatrix;
@@ -27,6 +30,11 @@ const VERT_STATIC = /* glsl */ `
     vUv = uv;
     vViewNormal = normalize(normalMatrix * normal);
     vTint = vec3(1.0);
+    // Per-vertex part color baked from the Blender GLB materials
+    // (enemyModels.js): one merged mesh tints each part separately.
+    #ifdef USE_PART_COLOR
+      vTint *= color;
+    #endif
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
 `
@@ -200,6 +208,11 @@ export function createGBufferMaterials(renderer, family = MAP_FAMILY_OFFICE) {
   const entity = flatMaterial(lin(0x16161c), 2, false) // Stalker capsule silhouette (near-black)
   const pursuer = flatMaterial(lin(0x3a0d0d), 2, false) // Pursuer silhouette (dark blood-red, distinct)
   const husk = flatMaterial(lin(0x5c5847), 2, false) // Husk silhouette (pale ash — the weak one)
+  // Blender-built enemy GLBs (render/enemyModels.js): merged per-entity
+  // geometry whose baked vertex colors carry the per-part palette (ink body,
+  // pale oval head / pinpoint eyes / hollow void face). Same matID-2 entity
+  // lane as the capsule silhouettes; entities swap to this on upgradeModel.
+  const entityModel = flatMaterial(lin(0xffffff), 2, false, false, true)
   const exit = emissiveMaterial(lin(0xeafff2), false) // glowing anomaly
 
   const doorFrame = flatMaterial(lin(pal.trim), 0, true) // instanced door/window casings (family trim)
@@ -223,7 +236,7 @@ export function createGBufferMaterials(renderer, family = MAP_FAMILY_OFFICE) {
   // mesh.js picks this path once the model library has loaded.
   const furnitureModel = flatMaterial(lin(0xffffff), 0, true, true, true)
 
-  return { carpet, ceiling, wallpaper, panel, panelDead, entity, pursuer, husk, exit, doorFrame, doorLeaf, prop, signGlow, furniture, furnitureModel }
+  return { carpet, ceiling, wallpaper, panel, panelDead, entity, pursuer, husk, entityModel, exit, doorFrame, doorLeaf, prop, signGlow, furniture, furnitureModel }
 }
 
 export function disposeGBufferMaterials(mats) {
