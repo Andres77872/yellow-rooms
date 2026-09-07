@@ -492,7 +492,9 @@ export class ChunkManager {
         Math.abs(c.cx - pcx) > UNLOAD_RADIUS ||
         Math.abs(c.cz - pcz) > UNLOAD_RADIUS
       const outsideY = Math.abs(c.cy - pcy) > UNLOAD_RADIUS_Y
-      const retainedStructure = !outsideXZ && this._chunkSharesStructure(c, pcy)
+      // Ordinary Y hysteresis already retains nearby slabs. Canonical
+      // structure validation is only needed to extend that lifetime.
+      const retainedStructure = outsideY && !outsideXZ && this._chunkSharesStructure(c, pcy)
       if (outsideXZ || (outsideY && !retainedStructure)) {
         for (const a of c.apertures) {
           this.apertures.delete(a.key)

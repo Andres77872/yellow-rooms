@@ -137,6 +137,7 @@ describe('Pursuer class', () => {
     p.update(5, player, camera) // grace elapsed
     expect(p.active).toBe(true)
     expect(p.mesh.visible).toBe(true)
+    expect(p.mesh.rotation.y).toBeCloseTo(-Math.PI / 2)
   })
 
   it('beelines toward the player with LOS and catches at range', () => {

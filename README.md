@@ -25,12 +25,21 @@ The checked-in performance probes are report-only unless explicit
 ```bash
 npm run benchmark:map-families
 npm run benchmark:render-scene -- --family office --profile high
+npm run benchmark:render-scene -- --family office --profile high --models glb
 ```
 
 The map-family probe measures headless generation and streaming behavior. The
 render-scene probe measures Node-side prewarm cost and CPU-side scene
 submission potential after visibility/detail gates; it is not a GPU or browser
 frame-time benchmark.
+
+The `--models glb` option measures the shipped furniture assets; the default
+uses procedural fallbacks for historical comparisons. During development,
+open `/scripts/model-gallery.html` to inspect all 26 shipped models individually
+or together under studio lighting or the actual game pipeline. The gallery is
+development-only and is excluded from the production build. See the
+[model and engine review](docs/model-engine-review.md) for the latest changes
+and measured geometry reductions.
 
 ## Debug tools
 

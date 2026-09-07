@@ -387,6 +387,29 @@ describe('Engine authored-void hard death (R18-S01..S03; D08/D09)', () => {
     expect(engine.audio.setTension).toHaveBeenCalledTimes(1)
   })
 
+  it('stops gameplay on the physics substep that crosses an authored void plane', () => {
+    const engine = createEngine('tower')
+    engine.controller.step.mockImplementationOnce(() => engine.controller.onVoidDeath())
+    engine.state.flashlightOn = true
+    engine.state.battery = 0.5
+    engine.cm.update.mockClear()
+
+    engine._tick(0.05)
+
+    expect(engine.state.phase).toBe(Phase.DEAD)
+    expect(engine.state.deathReason).toBe('void')
+    expect(engine.controller.step).toHaveBeenCalledOnce()
+    expect(engine.controller.applyFrame).not.toHaveBeenCalled()
+    expect(engine.cm.update).not.toHaveBeenCalled()
+    expect(engine.stalker.update).not.toHaveBeenCalled()
+    expect(engine.pursuer.update).not.toHaveBeenCalled()
+    expect(engine.husk.update).not.toHaveBeenCalled()
+    expect(engine.audio.update).not.toHaveBeenCalled()
+    expect(engine.audio.setTension).toHaveBeenLastCalledWith(0)
+    expect(engine.ui.updateHud).not.toHaveBeenCalled()
+    expect(engine.state.battery).toBe(0.5)
+  })
+
   it('renders an explicit void-death overlay message', async () => {
     const { UI: ActualUI } = await vi.importActual('../../ui/overlays.js')
     const ui = Object.create(ActualUI.prototype)

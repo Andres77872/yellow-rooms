@@ -15,7 +15,7 @@ export function whiteboard(f, out) {
   b(0, cy + H / 2 + 0.015, 0, W + 0.04, 0.05, 0.05, FURN_TINT.legMetal)
   b(0, cy - H / 2 - 0.015, 0, W + 0.04, 0.05, 0.05, FURN_TINT.legMetal)
   for (const s of [-1, 1]) {
-    b(s * (W / 2 + 0.01), cy, 0, 0.04, H + 0.08, 0.05, FURN_TINT.legMetal)
+    b(s * (W / 2 + 0.01), cy, 0, 0.04, H - 0.02, 0.05, FURN_TINT.legMetal)
   }
   // Half-erased writing: a few faint lines and one red diagram box.
   b(-0.35, cy + 0.28, 0.022, 0.6, 0.03, 0.004, FURN_TINT.keyDark)

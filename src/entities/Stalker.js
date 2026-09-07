@@ -218,6 +218,7 @@ export class Stalker {
     this.mesh.material = material
     this.mesh.scale.set(1, 1, 1)
     this.meshYOffset = 0
+    this.mesh.position.copy(this.pos)
   }
 
   // One pursue tick: (re)route toward the last-seen cell/floor with the shared
@@ -353,12 +354,15 @@ export class Stalker {
       const step = this.chaseSpeed * this._lightMul() * dt
       const dxz = Math.hypot(dx, dz)
       const inv = dxz > 0.0001 ? 1 / dxz : 0
-      const before = this.pos.clone()
+      const beforeX = this.pos.x
+      const beforeY = this.pos.y
+      const beforeZ = this.pos.z
       moveAndCollide(this.cm, this.pos, dx * inv * step, dz * inv * step, this.cy)
       this.pos.y = groundHeightAt(this.cm, this.pos.x, this.pos.z, this.cy)
       this._faceMesh(player)
       // If somehow wall-stuck on a clear chase, allow it to re-teleport sooner.
-      if (this.pos.distanceTo(before) < step * 0.1) this._timer = Math.min(this._timer, 0.8)
+      const movedSq = (this.pos.x - beforeX) ** 2 + (this.pos.y - beforeY) ** 2 + (this.pos.z - beforeZ) ** 2
+      if (movedSq < (step * 0.1) ** 2) this._timer = Math.min(this._timer, 0.8)
     } else if (seen) {
       // Seen THROUGH a stairwell aperture (one floor apart): it can't lunge
       // through the slab — arm the pursuit toward the player's floor and let

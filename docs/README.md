@@ -5,6 +5,8 @@ editor/rendering sources.
 
 ## Current reference
 
+- [Model and engine review](model-engine-review.md) — September 2026 model
+  polish, loading/rendering/runtime fixes, comparison metrics, and visual QA tools.
 - [World Generation Architecture](worldgen-architecture.md) — map families,
   room and structure layers, cache/runtime behavior, audits, and current
   follow-ups.

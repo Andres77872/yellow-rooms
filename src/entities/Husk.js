@@ -115,9 +115,13 @@ export class Husk {
     return { caught: false, tension: 0, seen: false, dist: Infinity, inBeam: false, frozen: false, died: true }
   }
 
-  _faceMesh(player) {
+  _faceMesh(player, dt = Infinity) {
     this.mesh.position.set(this.pos.x, this.pos.y + this.meshYOffset, this.pos.z)
-    this.mesh.rotation.y = Math.atan2(player.x - this.pos.x, player.z - this.pos.z)
+    const target = Math.atan2(player.x - this.pos.x, player.z - this.pos.z)
+    const delta = Math.atan2(Math.sin(target - this.mesh.rotation.y), Math.cos(target - this.mesh.rotation.y))
+    // Spawn already faces the player. Once present, its promised slow stare
+    // follows along the shortest arc at the same rate on every frame rate.
+    this.mesh.rotation.y += delta * (1 - Math.exp(-Math.max(0, dt) * 2.5))
   }
 
   // Swap the capsule silhouette for the Blender-built model (enemy GLB
@@ -127,6 +131,7 @@ export class Husk {
     this.mesh.material = material
     this.mesh.scale.set(1, 1, 1)
     this.meshYOffset = 0
+    this.mesh.position.copy(this.pos)
   }
 
   // Returns { caught:false, tension, seen, dist, inBeam:false, frozen:false, died }.
@@ -186,7 +191,7 @@ export class Husk {
 
     // It cannot move — it only turns to keep facing the player.
     this.stateLabel = this._closeT > 0 ? 'cornered' : 'watching'
-    this._faceMesh(player)
+    this._faceMesh(player, dt)
     if (this.alwaysVisible) this.mesh.visible = true
 
     const seen = sightGate(this.cm, camera, this.pos, this.cy, player, playerCy, this.sightDist)

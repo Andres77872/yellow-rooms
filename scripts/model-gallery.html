@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Yellow Rooms · Model review</title>
+<style>
+  * { box-sizing: border-box } body { margin: 0; background: #171913; color: #eee4bf; font: 14px system-ui }
+  canvas { display: block } header { position: fixed; top: 16px; left: 16px; z-index: 1; padding: 16px; background: #161912ed; border: 1px solid #66654c; border-radius: 8px }
+  h1 { font-size: 18px; margin: 0 0 10px } select, button { color: inherit; background: #303528; border: 1px solid #77795e; padding: 6px; border-radius: 4px }
+  label { margin-right: 12px } #stats, p { margin: 10px 0 0; color: #c3c3ac } #error { color: #ffafa5; max-width: 420px }
+</style>
+<header>
+  <h1>Yellow Rooms · Model review</h1>
+  <label>Model <select id="model"><option value="all">All 26 models</option></select></label>
+  <label>Lighting <select id="lighting"><option value="studio">Studio</option><option value="game">Game pipeline</option></select></label>
+  <button id="reset">Reset view</button>
+  <p>Drag to orbit · Scroll to zoom · Right-drag to pan</p>
+  <p id="stats">Loading models…</p><p id="error" role="alert"></p>
+</header>
+<script type="module">
+  import * as THREE from 'three'
+  import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+  import { DeferredRenderer } from '../src/render/DeferredRenderer.js'
+  import { createGBufferMaterials, disposeGBufferMaterials } from '../src/render/gbufferMaterials.js'
+  import { createFurnitureModelLibrary, loadFurnitureModels, disposeFurnitureModels, FURNITURE_MODEL_FILES } from '../src/render/furnitureModels.js'
+  import { createEnemyModelLibrary, loadEnemyModels, disposeEnemyModels, ENEMY_MODEL_FILES } from '../src/render/enemyModels.js'
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true })
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5))
+  renderer.setSize(innerWidth, innerHeight)
+  renderer.setClearColor(0x171913)
+  document.body.append(renderer.domElement)
+  const scene = new THREE.Scene()
+  const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.05, 150)
+  const controls = new OrbitControls(camera, renderer.domElement)
+  controls.enableDamping = true
+  const materials = createGBufferMaterials(renderer)
+  const deferred = new DeferredRenderer(renderer, scene, camera)
+  deferred.lightUniforms.uFogDensity.value = 0.008
+  deferred.grade.grain.value = 0.008
+  deferred.grade.aberration.value = 0
+  deferred.grade.vignette.value = 0.08
+  const hemi = new THREE.HemisphereLight(0xfff6df, 0x333f3e, 2)
+  const key = new THREE.DirectionalLight(0xffedd1, 3)
+  key.position.set(3, 12, 6)
+  scene.add(hemi, key)
+  const floorGeo = new THREE.PlaneGeometry(50, 42)
+  floorGeo.rotateX(-Math.PI / 2)
+  const floor = new THREE.Mesh(floorGeo, materials.carpet)
+  floor.position.y = -0.008
+  scene.add(floor)
+  const studioFloor = new THREE.MeshStandardMaterial({ color: 0x787969, roughness: 1 })
+  const studioMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.78 })
+  const furniture = createFurnitureModelLibrary()
+  const enemies = createEnemyModelLibrary()
+  const rows = []
+  const select = document.querySelector('#model')
+  const lighting = document.querySelector('#lighting')
+
+  function resetView() {
+    controls.target.set(0, 0.7, 0)
+    camera.position.set(18, 25, 29)
+    controls.update()
+  }
+  resetView()
+  function applySelection() {
+    const selected = select.value
+    for (const row of rows) {
+      row.mesh.visible = selected === 'all' || selected === row.name
+      row.mesh.position.copy(selected === 'all' ? row.position : new THREE.Vector3())
+    }
+    if (selected === 'all') resetView()
+    else {
+      controls.target.set(0, 1, 0)
+      camera.position.set(3.6, 2.8, 4.5)
+      controls.update()
+    }
+    const visible = rows.filter((row) => row.mesh.visible)
+    document.querySelector('#stats').textContent = `${visible.length} ${visible.length === 1 ? 'model' : 'models'} · ${visible.reduce((sum, row) => sum + row.triangles, 0).toLocaleString()} triangles`
+  }
+  function applyLighting() {
+    floor.material = lighting.value === 'studio' ? studioFloor : materials.carpet
+    for (const row of rows) row.mesh.material = lighting.value === 'studio' ? studioMaterial : row.material
+  }
+  select.addEventListener('change', applySelection)
+  lighting.addEventListener('change', applyLighting)
+  document.querySelector('#reset').addEventListener('click', applySelection)
+  try {
+    await Promise.all([loadFurnitureModels(furniture), loadEnemyModels(enemies)])
+    const entries = Object.entries(FURNITURE_MODEL_FILES)
+      .map(([kind, name]) => [name, furniture.geometries.get(Number(kind)), true])
+    entries.push(...Object.keys(ENEMY_MODEL_FILES).map((name) => [name, enemies.geometries.get(name), false]))
+    const loaded = entries.filter(([, geometry]) => geometry)
+    for (const [index, [name, geometry, instanced]] of loaded.entries()) {
+      const material = instanced ? materials.furnitureModel : materials.entityModel
+      const mesh = instanced ? new THREE.InstancedMesh(geometry, material, 1) : new THREE.Mesh(geometry, material)
+      if (instanced) {
+        mesh.setMatrixAt(0, new THREE.Matrix4())
+        mesh.setColorAt(0, new THREE.Color(1, 1, 1))
+        mesh.computeBoundingSphere()
+      }
+      const position = new THREE.Vector3((index % 6 - 2.5) * 4, 0, (Math.floor(index / 6) - 2) * 4)
+      mesh.position.copy(position)
+      scene.add(mesh)
+      rows.push({ mesh, name, position, material, triangles: (geometry.index?.count ?? geometry.attributes.position.count) / 3 })
+      select.add(new Option(name, name))
+    }
+    if (loaded.length !== 26) throw new Error(`Loaded ${loaded.length}/26 models; inspect network/console for missing assets.`)
+    // Authored steady lamps bypass query-edge fading, like the debug light room.
+    deferred.lamps.cutoffR = Infinity
+    deferred.lamps.uLampCount.value = 12
+    for (let i = 0; i < 12; i++) {
+      deferred.lamps.uLampPos.value[i].set((i % 4 - 1.5) * 6, 4.5, (Math.floor(i / 4) - 1) * 7)
+      deferred.lamps.uLampChar.value[i].set(1, 1, 1, 1)
+      deferred.lamps.lampFlickerRaw[i] = 1
+    }
+    applySelection()
+    applyLighting()
+  } catch (error) {
+    document.querySelector('#error').textContent = error.message
+    console.error(error)
+  }
+  addEventListener('resize', () => {
+    renderer.setSize(innerWidth, innerHeight)
+    camera.aspect = innerWidth / innerHeight
+    camera.updateProjectionMatrix()
+    deferred.setSize()
+  })
+  renderer.setAnimationLoop((time) => {
+    controls.update()
+    camera.updateMatrixWorld()
+    if (lighting.value === 'game') deferred.render(time / 1000)
+    else renderer.render(scene, camera)
+  })
+  addEventListener('pagehide', (event) => {
+    if (event.persisted) return // the browser may restore this same page from its history cache
+    renderer.setAnimationLoop(null)
+    controls.dispose()
+    for (const row of rows) if (row.mesh.isInstancedMesh) row.mesh.dispose()
+    deferred.dispose()
+    disposeFurnitureModels(furniture)
+    disposeEnemyModels(enemies)
+    disposeGBufferMaterials(materials)
+    floorGeo.dispose()
+    studioMaterial.dispose()
+    studioFloor.dispose()
+    renderer.dispose()
+  })
+</script>
+</html>

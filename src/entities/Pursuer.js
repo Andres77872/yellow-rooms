@@ -102,7 +102,7 @@ export class Pursuer {
     this._lastTarget = { x: spot.x, z: spot.z, cy: spot.cy }
     this.cy = spot.cy
     this.pos.set(spot.x, layerY(spot.cy), spot.z)
-    this.mesh.position.set(spot.x, this.pos.y + this.meshYOffset, spot.z)
+    this._faceMesh(player)
     this.mesh.visible = true
     return true
   }
@@ -164,6 +164,7 @@ export class Pursuer {
     this.mesh.material = material
     this.mesh.scale.set(1, 1, 1)
     this.meshYOffset = 0
+    this.mesh.position.copy(this.pos)
   }
 
   // Returns { caught, tension, seen, dist, inBeam:false, frozen:false }.

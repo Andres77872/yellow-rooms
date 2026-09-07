@@ -137,10 +137,19 @@ def finish(obj, key, bev=0.0, smooth=False):
     if bev > 0:
         mod = obj.modifiers.new("bev", "BEVEL")
         mod.width = bev
-        mod.segments = 2
+        # Small chamfers need one ring; upholstery keeps a soft silhouette.
+        mod.segments = 2 if bev >= 0.02 else 1
         mod.limit_method = "ANGLE"
         activate(obj)
         bpy.ops.object.modifier_apply(modifier="bev")
+        # Smooth bevel strips while weighting the large planar faces: flat
+        # polygon normals made every chamfer segment trigger an ink outline.
+        for polygon in obj.data.polygons:
+            polygon.use_smooth = True
+        normals = obj.modifiers.new("weighted_normals", "WEIGHTED_NORMAL")
+        normals.keep_sharp = True
+        normals.weight = 50
+        bpy.ops.object.modifier_apply(modifier=normals.name)
     if smooth:
         activate(obj)
         try:
@@ -162,12 +171,12 @@ def box(parts, cu, cy, cv, su, sy, sv, key, bev=0.01, rot=None):
     bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
     if rot:
         o.rotation_euler = rot
-    finish(o, key, bev=min(bev, su / 2.5, sy / 2.5, sv / 2.5))
+    finish(o, key, bev=min(bev, su / 2.5, sy / 2.5, sv / 2.5) if bev >= 0.004 else 0.0)
     parts.append(o)
     return o
 
 
-def cyl(parts, cu, cy, cv, r, h, key, axis="y", bev=0.0, verts=20, smooth=True):
+def cyl(parts, cu, cy, cv, r, h, key, axis="y", bev=0.0, verts=16, smooth=True):
     rot = (0, 0, 0)
     if axis == "v":
         rot = (math.radians(90), 0, 0)
@@ -181,7 +190,7 @@ def cyl(parts, cu, cy, cv, r, h, key, axis="y", bev=0.0, verts=20, smooth=True):
     return o
 
 
-def cone(parts, cu, cy, cv, r1, r2, h, key, rot=None, verts=20, smooth=True):
+def cone(parts, cu, cy, cv, r1, r2, h, key, rot=None, verts=16, smooth=True):
     bpy.ops.mesh.primitive_cone_add(vertices=verts, radius1=r1, radius2=r2, depth=h,
                                     location=(cu, -cv, cy), rotation=rot or (0, 0, 0))
     o = bpy.context.active_object
@@ -191,7 +200,7 @@ def cone(parts, cu, cy, cv, r1, r2, h, key, rot=None, verts=20, smooth=True):
 
 
 def sphere(parts, cu, cy, cv, r, key, scale=(1, 1, 1), smooth=True):
-    bpy.ops.mesh.primitive_uv_sphere_add(segments=20, ring_count=12, radius=r,
+    bpy.ops.mesh.primitive_uv_sphere_add(segments=12, ring_count=8, radius=r,
                                          location=(cu, -cv, cy))
     o = bpy.context.active_object
     o.scale = (scale[0], scale[2], scale[1])
@@ -205,12 +214,60 @@ def sphere(parts, cu, cy, cv, r, key, scale=(1, 1, 1), smooth=True):
 def torus(parts, cu, cy, cv, major, minor, key, axis="y", smooth=True):
     rot = (math.radians(90), 0, 0) if axis == "v" else (0, 0, 0)
     bpy.ops.mesh.primitive_torus_add(major_radius=major, minor_radius=minor,
-                                     major_segments=24, minor_segments=8,
+                                     major_segments=24, minor_segments=6,
                                      location=(cu, -cv, cy), rotation=rot)
     o = bpy.context.active_object
     finish(o, key, smooth=smooth)
     parts.append(o)
     return o
+
+
+def bowl(parts, cu, cv, profile, key, segments=28):
+    """Closed elliptical shell, outer bottom -> rim -> recessed inner floor."""
+    vertices = []
+    for ru, rv, y in profile:
+        for i in range(segments):
+            a = i * TAU / segments
+            vertices.append((cu + ru * math.cos(a), -cv + rv * math.sin(a), y))
+    faces = [tuple(reversed(range(segments)))]
+    for ring in range(len(profile) - 1):
+        for i in range(segments):
+            j = (i + 1) % segments
+            faces.append((ring * segments + i, ring * segments + j,
+                          (ring + 1) * segments + j, (ring + 1) * segments + i))
+    faces.append(tuple(range((len(profile) - 1) * segments, len(profile) * segments)))
+    mesh = bpy.data.meshes.new("basin_shell")
+    mesh.from_pydata(vertices, [], faces)
+    mesh.update()
+    obj = bpy.data.objects.new("basin_shell", mesh)
+    bpy.context.collection.objects.link(obj)
+    finish(obj, key, smooth=True)
+    parts.append(obj)
+    return obj
+
+
+def leaf(parts, cu, cy, cv, height, angle, lean):
+    """A folded, tapered blade rooted in the soil, with a closed thin back."""
+    vertices = []
+    for t, half_width in ((0, 0.012), (0.45, 0.035), (0.82, 0.024), (1, 0.001)):
+        spread = math.sin(lean) * height * t * t
+        for side, fold in ((-1, 0), (0, -0.004), (1, 0), (0, 0.007)):
+            u = cu + math.cos(angle) * (spread + fold) - math.sin(angle) * half_width * side
+            v = cv + math.sin(angle) * (spread + fold) + math.cos(angle) * half_width * side
+            vertices.append((u, -v, cy + height * t))
+    faces = [(3, 2, 1, 0)]
+    for ring in range(3):
+        for i in range(4):
+            faces.append((ring * 4 + i, ring * 4 + (i + 1) % 4,
+                          (ring + 1) * 4 + (i + 1) % 4, (ring + 1) * 4 + i))
+    faces.append((12, 13, 14, 15))
+    mesh = bpy.data.meshes.new("snake_plant_leaf")
+    mesh.from_pydata(vertices, [], faces)
+    mesh.update()
+    obj = bpy.data.objects.new("snake_plant_leaf", mesh)
+    bpy.context.collection.objects.link(obj)
+    finish(obj, "leafGreen")
+    parts.append(obj)
 
 
 # --- The 23 models -------------------------------------------------------------
@@ -226,8 +283,8 @@ def m_desk(p):
     box(p, 0, 0.45, -(D / 2 - 0.07), W - 0.2, 0.38, 0.025, "panel", bev=0.006)
     # Drawer stack (right): case, two proud fronts, bar handles.
     box(p, W / 2 - 0.28, 0.33, 0, 0.42, 0.58, D - 0.12, "panel", bev=0.01)
-    box(p, W / 2 - 0.28, 0.46, D / 2 - 0.075, 0.38, 0.18, 0.02, "drawerFace", bev=0.005)
-    box(p, W / 2 - 0.28, 0.18, D / 2 - 0.075, 0.38, 0.28, 0.02, "drawerFace", bev=0.005)
+    box(p, W / 2 - 0.28, 0.46, D / 2 - 0.052, 0.38, 0.18, 0.02, "drawerFace", bev=0.005)
+    box(p, W / 2 - 0.28, 0.18, D / 2 - 0.052, 0.38, 0.28, 0.02, "drawerFace", bev=0.005)
     box(p, W / 2 - 0.28, 0.40, D / 2 - 0.05, 0.14, 0.02, 0.03, "legMetal", bev=0.004)
     box(p, W / 2 - 0.28, 0.32, D / 2 - 0.05, 0.14, 0.02, 0.03, "legMetal", bev=0.004)
     # Monitor: bezel + screen face (slight back tilt), stand, foot.
@@ -266,7 +323,7 @@ def m_chair(p):
         a = i * TAU / 5 + 0.31
         cu, cv = 0.14 * math.cos(a), 0.14 * math.sin(a)
         box(p, cu, 0.075, cv, 0.26, 0.035, 0.055, "legMetal", bev=0.01, rot=(0, 0, -a))
-        sphere(p, 0.26 * math.cos(a), 0.032, 0.26 * math.sin(a), 0.033, "keyDark", scale=(1, 0.85, 1))
+        sphere(p, 0.26 * math.cos(a), 0.02805, 0.26 * math.sin(a), 0.033, "keyDark", scale=(1, 0.85, 1))
 
 
 def m_table(p):
@@ -294,7 +351,7 @@ def m_cabinet(p):
     box(p, 0.05, 0.97, D / 2 + 0.026, 0.025, 0.2, 0.02, "legMetal", bev=0.004)
     box(p, -0.2275, 1.52, D / 2 + 0.022, 0.18, 0.06, 0.012, "slotDark", bev=0.003)
     box(p, 0.2275, 1.52, D / 2 + 0.022, 0.18, 0.06, 0.012, "slotDark", bev=0.003)
-    box(p, 0, H - 0.012, 0, W - 0.02, 0.024, D - 0.02, "panel", bev=0.006)
+    box(p, 0, H - 0.004, 0, W - 0.02, 0.024, D - 0.02, "panel", bev=0.006)
 
 
 def m_copier(p):
@@ -332,7 +389,7 @@ def m_cooler(p):
 
 def m_plant(p):
     # Snake plant: tapered pot + a rosette of stiff blades.
-    cone(p, 0, 0.17, 0, 0.19, 0.155, 0.34, "potClay", verts=24)
+    cone(p, 0, 0.17, 0, 0.155, 0.19, 0.34, "potClay", verts=24)
     cyl(p, 0, 0.36, 0, 0.2, 0.05, "potClay", verts=24)
     cyl(p, 0, 0.385, 0, 0.175, 0.025, "soil", verts=24)
     blades = [
@@ -342,8 +399,7 @@ def m_plant(p):
     ]
     for i, (bu, bv, h, tilt) in enumerate(blades):
         a = i * 2.4  # golden-ish spread
-        box(p, bu, 0.4 + h / 2, bv, 0.055, h, 0.014, "leafGreen", bev=0.006,
-            rot=(math.radians(tilt) * math.sin(a), 0, math.radians(tilt) * math.cos(a)))
+        leaf(p, bu, 0.395, bv, h, a, math.radians(tilt))
 
 
 def m_rack(p):
@@ -367,7 +423,7 @@ def m_sofa(p):
     W, D, H = C["SOFA_W"], C["SOFA_D"], C["SOFA_H"]
     for su in (-1, 1):
         for sv in (-1, 1):
-            cone(p, su * (W / 2 - 0.09), 0.045, sv * (D / 2 - 0.09), 0.032, 0.024, 0.09, "woodDark", verts=12)
+            cone(p, su * (W / 2 - 0.09), 0.055, sv * (D / 2 - 0.09), 0.032, 0.024, 0.11, "woodDark", verts=12)
     box(p, 0, 0.26, 0, W - 0.16, 0.3, D - 0.1, "sofa", bev=0.045)
     box(p, -(W / 2 - 0.08), 0.52, 0, 0.16, 0.66, D, "sofa", bev=0.05)
     box(p, W / 2 - 0.08, 0.52, 0, 0.16, 0.66, D, "sofa", bev=0.05)
@@ -386,7 +442,7 @@ def m_bookshelf(p):
     box(p, W / 2 - 0.02, H / 2, 0, 0.04, H, D, "shelfWood", bev=0.006)
     box(p, 0, H / 2, -(D / 2 - 0.015), W - 0.08, H - 0.06, 0.03, "panel", bev=0.003)
     box(p, 0, 0.045, 0, W - 0.06, 0.09, D - 0.02, "shelfWood", bev=0.006)
-    box(p, 0, H - 0.025, 0, W + 0.04, 0.05, D + 0.03, "shelfWood", bev=0.008)
+    box(p, 0, H + 0.005, 0, W + 0.04, 0.05, D + 0.03, "shelfWood", bev=0.008)
     book_tints = ["bookRed", "bookBlue", "bookTan", "paperWhite"]
     for s in range(3):
         y = 0.32 + s * 0.38
@@ -417,8 +473,8 @@ def m_whiteboard(p):
     box(p, 0, cy, 0, W, H, 0.04, "boardWhite", bev=0.008)
     box(p, 0, cy + H / 2 + 0.02, 0, W + 0.06, 0.05, 0.055, "legMetal", bev=0.006)
     box(p, 0, cy - H / 2 - 0.02, 0, W + 0.06, 0.05, 0.055, "legMetal", bev=0.006)
-    box(p, -(W / 2 + 0.005), cy, 0, 0.05, H + 0.09, 0.055, "legMetal", bev=0.006)
-    box(p, W / 2 + 0.005, cy, 0, 0.05, H + 0.09, 0.055, "legMetal", bev=0.006)
+    box(p, -(W / 2 + 0.005), cy, 0, 0.05, H - 0.01, 0.055, "legMetal", bev=0.006)
+    box(p, W / 2 + 0.005, cy, 0, 0.05, H - 0.01, 0.055, "legMetal", bev=0.006)
     # Faint erased writing + a red diagram: the "someone worked here" read.
     box(p, -0.35, cy + 0.28, 0.022, 0.6, 0.028, 0.004, "keyDark")
     box(p, -0.45, cy + 0.16, 0.022, 0.35, 0.028, 0.004, "keyDark")
@@ -436,7 +492,7 @@ def m_bed(p):
     box(p, 0, 0.66, -(D / 2 - 0.075), W - 0.18, 0.82, 0.03, "woodMid", bev=0.01)
     for su in (-1, 1):
         for sv in (-1, 1):
-            box(p, su * (W / 2 - 0.06), 0.09, sv * (D / 2 - 0.07), 0.09, 0.18, 0.09, "bedFrame", bev=0.012)
+            box(p, su * (W / 2 - 0.06), 0.095, sv * (D / 2 - 0.07), 0.09, 0.19, 0.09, "bedFrame", bev=0.012)
     box(p, 0, 0.27, 0, W, 0.16, D, "bedFrame", bev=0.015)
     box(p, 0, 0.45, 0.02, W - 0.08, 0.22, D - 0.14, "mattress", bev=0.05)
     # Blanket across the foot, draping over the foot edge.
@@ -476,9 +532,13 @@ def m_toilet(p):
     box(p, 0, 0.6, -(D / 2 - 0.1), W, 0.34, 0.2, "porcelain", bev=0.025)
     box(p, 0, 0.78, -(D / 2 - 0.1), W + 0.02, 0.035, 0.22, "porcelain", bev=0.01)
     cyl(p, 0.12, 0.81, -(D / 2 - 0.1), 0.024, 0.016, "chrome", verts=14)
-    cone(p, 0, 0.2, 0.02, 0.17, 0.14, 0.4, "porcelain", verts=24)
-    sphere(p, 0, 0.43, 0.06, 0.19, "porcelain", scale=(W / 0.38, 0.72, 1.15))
-    torus(p, 0, 0.51, 0.07, 0.125, 0.032, "porcelain")
+    cone(p, 0, 0.16, 0.02, 0.17, 0.14, 0.32, "porcelain", verts=24)
+    bowl(p, 0, 0.06, [
+        (0.13, 0.15, 0.30), (W / 2, 0.225, 0.47),
+        (W / 2 - 0.015, 0.21, 0.51), (0.145, 0.155, 0.51),
+        (0.12, 0.13, 0.44), (0.075, 0.085, 0.36),
+    ], "porcelain")
+    cyl(p, 0, 0.368, 0.06, 0.075, 0.012, "mirror", verts=20)
     # Lid raised against the tank.
     box(p, 0, 0.62, -(D / 2 - 0.22), W - 0.04, 0.42, 0.05, "porcelain",
         bev=0.02, rot=(math.radians(-12), 0, 0))
@@ -489,9 +549,15 @@ def m_sink(p):
     box(p, 0, 0.37, 0, W - 0.05, 0.74, D - 0.04, "woodDark", bev=0.012)
     box(p, 0, 0.39, D / 2 - 0.012, W - 0.12, 0.6, 0.02, "woodMid", bev=0.005)
     sphere(p, 0.18, 0.5, D / 2 + 0.012, 0.016, "chrome")
-    box(p, 0, H - 0.05, 0, W, 0.1, D, "porcelain", bev=0.018)
-    torus(p, 0, H + 0.005, 0.02, 0.14, 0.028, "porcelain")
-    cyl(p, 0, H - 0.01, 0.02, 0.13, 0.014, "mirror", verts=24)
+    # Vessel basin sits above the counter: the old inset was entirely hidden
+    # inside a solid slab, so the sink rendered as a flat porcelain block.
+    box(p, 0, H - 0.10, 0, W, 0.06, D, "porcelain", bev=0.012)
+    bowl(p, 0, 0.02, [
+        (0.14, 0.105, H - 0.07), (0.25, 0.18, H + 0.018),
+        (0.25, 0.18, H + 0.035), (0.218, 0.15, H + 0.035),
+        (0.19, 0.125, H - 0.015), (0.12, 0.075, H - 0.048),
+    ], "porcelain")
+    cyl(p, 0, H - 0.039, 0.02, 0.019, 0.012, "chrome", verts=12)
     # Faucet: riser, spout, downturned nozzle.
     cyl(p, 0, H + 0.1, -(D / 2 - 0.08), 0.02, 0.2, "chrome", verts=12)
     cyl(p, 0, H + 0.2, -(D / 2 - 0.16), 0.015, 0.16, "chrome", axis="v", verts=12)
@@ -507,9 +573,19 @@ def m_sink(p):
 
 def m_tub(p):
     W, D, H = C["TUB_W"], C["TUB_D"], C["TUB_H"]
-    box(p, 0, H / 2 - 0.02, 0, W, H - 0.04, D, "porcelain", bev=0.06)
-    box(p, 0, H - 0.03, 0, W + 0.06, 0.07, D + 0.06, "porcelain", bev=0.025)
-    box(p, 0, H - 0.015, 0, W - 0.16, 0.03, D - 0.16, "mirror", bev=0.02)
+    # A recessed interior with actual side walls; no coplanar water/rim slab.
+    box(p, 0, 0.065, 0, W - 0.08, 0.13, D - 0.08, "porcelain", bev=0.025)
+    for side in (-1, 1):
+        box(p, 0, (H + 0.1) / 2, side * (D / 2 - 0.055),
+            W, H - 0.1, 0.11, "porcelain", bev=0.025)
+        box(p, side * (W / 2 - 0.055), (H + 0.1) / 2, 0,
+            0.11, H - 0.1, D - 0.16, "porcelain", bev=0.025)
+        box(p, 0, H - 0.015, side * (D / 2 - 0.035),
+            W + 0.06, 0.05, 0.13, "porcelain", bev=0.018)
+        box(p, side * (W / 2 - 0.035), H - 0.015, 0,
+            0.13, 0.05, D - 0.15, "porcelain", bev=0.018)
+    box(p, 0, 0.14, 0, W - 0.18, 0.035, D - 0.18, "porcelain", bev=0.014)
+    cyl(p, -(W / 2 - 0.26), 0.164, 0, 0.025, 0.012, "chrome", verts=12)
     # Tap pair at the wall-end corner.
     cyl(p, -(W / 2 - 0.12), H + 0.1, -(D / 2 - 0.1), 0.017, 0.18, "chrome", verts=12)
     cyl(p, -(W / 2 - 0.12), H + 0.17, -(D / 2 - 0.17), 0.013, 0.14, "chrome", axis="v", verts=12)
@@ -559,8 +635,8 @@ def m_fridge(p):
 
 def m_tv(p):
     W, D, H = C["TV_W"], C["TV_D"], C["TV_H"]
-    box(p, -(W / 2 - 0.1), 0.05, 0, 0.08, 0.1, D - 0.08, "legMetal", bev=0.008)
-    box(p, W / 2 - 0.1, 0.05, 0, 0.08, 0.1, D - 0.08, "legMetal", bev=0.008)
+    box(p, -(W / 2 - 0.1), 0.06, 0, 0.08, 0.12, D - 0.08, "legMetal", bev=0.008)
+    box(p, W / 2 - 0.1, 0.06, 0, 0.08, 0.12, D - 0.08, "legMetal", bev=0.008)
     box(p, 0, 0.31, 0, W, 0.38, D, "woodDark", bev=0.014)
     box(p, -0.35, 0.31, D / 2 + 0.006, 0.66, 0.28, 0.02, "woodMid", bev=0.005)
     box(p, 0.35, 0.31, D / 2 + 0.006, 0.66, 0.28, 0.02, "woodMid", bev=0.005)
@@ -575,7 +651,7 @@ def m_armchair(p):
     W, H = C["ARMCHAIR_W"], C["ARMCHAIR_H"]
     for su in (-1, 1):
         for sv in (-1, 1):
-            cone(p, su * (W / 2 - 0.08), 0.04, sv * (W / 2 - 0.08), 0.03, 0.022, 0.08, "woodDark", verts=12)
+            cone(p, su * (W / 2 - 0.08), 0.06, sv * (W / 2 - 0.08), 0.03, 0.022, 0.12, "woodDark", verts=12)
     box(p, 0, 0.27, 0, W - 0.14, 0.3, W - 0.1, "sofa", bev=0.045)
     box(p, -(W / 2 - 0.075), 0.52, 0, 0.15, 0.6, W - 0.02, "sofa", bev=0.05)
     box(p, W / 2 - 0.075, 0.52, 0, 0.15, 0.6, W - 0.02, "sofa", bev=0.05)
@@ -588,7 +664,7 @@ def m_armchair(p):
 
 def m_washer(p):
     W, H = C["WASHER_W"], C["WASHER_H"]
-    box(p, 0, 0.4, 0, W, 0.8, W, "applianceWhite", bev=0.02)
+    box(p, 0, (H - 0.03) / 2, 0, W, H - 0.03, W, "applianceWhite", bev=0.02)
     box(p, 0, H - 0.015, 0, W - 0.02, 0.03, W - 0.02, "applianceSteel", bev=0.006)
     box(p, 0, H - 0.1, W / 2 + 0.004, W - 0.08, 0.1, 0.015, "applianceSteel", bev=0.003)
     cyl(p, -0.17, H - 0.1, W / 2 + 0.016, 0.026, 0.02, "burner", axis="v", verts=14, smooth=False)
@@ -669,8 +745,8 @@ def build_all():
         h = max(zs) - min(zs)
         if w > ew + TOL or d > ed + TOL:
             raise RuntimeError(f"{name}: footprint {w:.3f}x{d:.3f} exceeds {ew:.3f}x{ed:.3f}+tol")
-        if h > eh + 0.05:
-            raise RuntimeError(f"{name}: height {h:.3f} exceeds {eh:.3f}")
+        if max(zs) > eh + 0.05:
+            raise RuntimeError(f"{name}: top {max(zs):.3f} exceeds {eh:.3f}")
         if min(zs) < -0.005:
             raise RuntimeError(f"{name}: dips below floor ({min(zs):.3f})")
 
@@ -685,7 +761,7 @@ def build_all():
             export_lights=False,
             export_skins=False,
             export_morph=False,
-            export_texcoords=True,
+            export_texcoords=False,
             export_normals=True,
             export_materials="EXPORT",
             **sel_kw,
@@ -697,7 +773,7 @@ def build_all():
     # Lay the joined models out in a grid for the source blend + preview.
     cols = 6
     for i, obj in enumerate(built):
-        obj.location = ((i % cols) * 2.6, -(i // cols) * 2.8, 0)
+        obj.location = ((i % cols) * 2.6, -(i // cols) * 3.8, 0)
     return built
 
 
@@ -705,8 +781,8 @@ def render_preview():
     scene = bpy.context.scene
     scene.render.engine = "CYCLES"
     scene.cycles.samples = 24
-    scene.render.resolution_x = 1500
-    scene.render.resolution_y = 980
+    scene.render.resolution_x = 1800
+    scene.render.resolution_y = 1350
     scene.render.filepath = PREVIEW_OUT
     scene.world = bpy.data.worlds.new("yr_world")
     scene.world.use_nodes = True
@@ -730,8 +806,8 @@ def render_preview():
     cam = bpy.context.active_object
     target = None
     from mathutils import Vector
-    target = Vector((6.5, -5.6, 0.7))
-    cam.location = (17.5, -19.5, 8.0)
+    target = Vector((6.5, -5.6, 0.8))
+    cam.location = (8.5, -25, 23)
     cam.rotation_euler = (target - cam.location).to_track_quat("-Z", "Y").to_euler()
     cam.data.type = "ORTHO"
     cam.data.ortho_scale = 18.5
@@ -749,6 +825,8 @@ def render_preview():
     print(f"[yr] preview -> {PREVIEW_OUT}")
 
 
+# Avoid overwriting tracked artist backups on a deterministic rebuild.
+bpy.context.preferences.filepaths.save_version = 0
 build_all()
 bpy.ops.wm.save_as_mainfile(filepath=BLEND_OUT, check_existing=False)
 print(f"[yr] blend -> {BLEND_OUT}")

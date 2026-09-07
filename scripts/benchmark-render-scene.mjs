@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 
 import { performance } from 'node:perf_hooks'
+import { readFile } from 'node:fs/promises'
 
 import * as THREE from 'three'
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { FURNITURE_MODEL_FILES, bakeFurnitureGeometry, disposeFurnitureModels } from '../src/render/furnitureModels.js'
 
 import { createExitPlacement } from '../src/core/exitPlacement.js'
 import { WORLD_DETAIL_ORDER } from '../src/core/graphics.js'
@@ -32,6 +35,7 @@ const MATERIAL_SEMANTICS = Object.freeze([
   'prop',
   'signGlow',
   'furniture',
+  'furnitureModel',
 ])
 
 const BUDGET_DEFINITIONS = Object.freeze({
@@ -81,6 +85,7 @@ Options:
   --family <${MAP_FAMILY_ORDER.join('|')}>  Map family (default: ${DEFAULT_FAMILY})
   --seed <text>                         Game seed text (default: ${DEFAULT_SEED_TEXT})
   --profile <${WORLD_DETAIL_ORDER.join('|')}>    World-detail profile (default: ${DEFAULT_PROFILE})
+  --models <procedural|glb>             Furniture path (default: procedural)
   --budget-loaded-chunks <number>       Optional resident-chunk ceiling
   --budget-visible-chunks <number>      Optional visibility-gated chunk ceiling
   --budget-mesh-batches <number>        Optional effective batch ceiling
@@ -133,6 +138,7 @@ function parseOptions(args) {
     family: DEFAULT_FAMILY,
     seedText: DEFAULT_SEED_TEXT,
     profile: DEFAULT_PROFILE,
+    models: 'procedural',
     budgets: new Map(),
     help: false,
   }
@@ -145,10 +151,15 @@ function parseOptions(args) {
       continue
     }
 
-    if (name === '--family' || name === '--seed' || name === '--profile') {
+    if (name === '--family' || name === '--seed' || name === '--profile' || name === '--models') {
       const read = readOptionValue(args, index, inlineValue, name)
       index = read.nextIndex
-      if (name === '--family') {
+      if (name === '--models') {
+        if (!['procedural', 'glb'].includes(read.value)) {
+          throw new Error('--models requires procedural or glb')
+        }
+        options.models = read.value
+      } else if (name === '--family') {
         const family = read.value.trim().toLowerCase()
         if (!MAP_FAMILY_ORDER.includes(family)) {
           throw new Error(`--family requires ${MAP_FAMILY_ORDER.join(', ')}`)
@@ -450,12 +461,43 @@ function evaluateBudgets(report, budgets) {
   return { thresholds, violations }
 }
 
-function benchmarkScene(options) {
+async function loadBenchmarkModels(mode) {
+  if (mode !== 'glb') return null
+  const library = { geometries: new Map(), loaded: true, failed: false }
+  const loader = new GLTFLoader()
+  try {
+    for (const [kind, name] of Object.entries(FURNITURE_MODEL_FILES)) {
+      const bytes = await readFile(new URL(`../public/models/furniture/${name}.glb`, import.meta.url))
+      const gltf = await loader.parseAsync(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), '')
+      try {
+        library.geometries.set(Number(kind), bakeFurnitureGeometry(gltf.scene))
+      } finally {
+        const geometries = new Set()
+        const materials = new Set()
+        gltf.scene.traverse((node) => {
+          if (node.geometry) geometries.add(node.geometry)
+          for (const material of [node.material].flat()) if (material) materials.add(material)
+        })
+        for (const geometry of geometries) geometry.dispose()
+        for (const material of materials) material.dispose()
+      }
+    }
+    return library
+  } catch (error) {
+    disposeFurnitureModels(library)
+    throw error
+  }
+}
+
+async function benchmarkScene(options) {
+  const modelStarted = performance.now()
+  const models = await loadBenchmarkModels(options.models)
+  const modelLoadMs = performance.now() - modelStarted
   const scene = new THREE.Scene()
   const materials = createBenchmarkMaterials()
   const geometries = createGeometries()
   const worldSeed = hashStr(`${options.seedText}#1`)
-  const manager = new ChunkManager(scene, worldSeed, materials, geometries)
+  const manager = new ChunkManager(scene, worldSeed, materials, geometries, models)
   manager.config = worldConfigForFamily(options.family)
   const exit = createExitPlacement(
     options.seedText,
@@ -513,6 +555,7 @@ function benchmarkScene(options) {
         seedDerivation: 'hashStr(`${seedText}#1`)',
         worldSeed,
         profile: options.profile,
+        models: options.models,
         spawn: { x: SPAWN_WORLD, cy: 0, z: SPAWN_WORLD },
         exit: {
           cx: exit.cx,
@@ -523,6 +566,13 @@ function benchmarkScene(options) {
         },
       },
       detailProfile,
+      modelLibrary: {
+        kinds: models?.geometries.size ?? 0,
+        loadAndBakeMs: round(modelLoadMs),
+        geometryBytes: models ? [...models.geometries.values()].reduce((sum, geometry) =>
+          sum + Object.values(geometry.attributes).reduce((n, attribute) => n + attribute.array.byteLength, 0)
+            + (geometry.index?.array.byteLength ?? 0), 0) : 0,
+      },
       prewarm: {
         elapsedMs: round(elapsedMs),
         evidence: 'Node CPU wall-clock only; environment-sensitive',
@@ -554,22 +604,23 @@ function benchmarkScene(options) {
     manager.reset()
     disposeGeometries(geometries)
     disposeMaterials(materials)
+    if (models) disposeFurnitureModels(models)
   }
 }
 
-function main() {
+async function main() {
   const options = parseOptions(process.argv.slice(2))
   if (options.help) {
     console.log(usage())
     return
   }
-  const report = benchmarkScene(options)
+  const report = await benchmarkScene(options)
   console.log(JSON.stringify(report, null, 2))
   if (report.budgets.supplied && !report.budgets.ok) process.exitCode = 1
 }
 
 try {
-  main()
+  await main()
 } catch (error) {
   console.error(`benchmark:render-scene: ${error.message}`)
   process.exitCode = 1

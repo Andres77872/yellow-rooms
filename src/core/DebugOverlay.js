@@ -14,9 +14,15 @@ export class DebugOverlay {
       white-space:pre;pointer-events:none;display:none;border-radius:3px`
     document.body.appendChild(el)
     this.el = el
-    addEventListener('keydown', (e) => {
+    this._onKeyDown = (e) => {
       if (e.code === 'Backquote') this.toggle()
-    })
+    }
+    addEventListener('keydown', this._onKeyDown)
+  }
+
+  dispose() {
+    removeEventListener('keydown', this._onKeyDown)
+    this.el.remove()
   }
 
   toggle() {

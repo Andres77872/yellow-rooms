@@ -77,6 +77,21 @@ describe('Husk', () => {
     expect(h.pos.z).toBe(0)
   })
 
+  it('turns gradually along the shortest arc, independent of frame rate', () => {
+    const slow = makeHusk()
+    const fast = makeHusk()
+    slow.mesh.rotation.y = fast.mesh.rotation.y = Math.PI - 0.05
+    const target = { x: -0.1, z: -10 }
+    slow._faceMesh(target, 1 / 30)
+    // Crossing the +/- pi boundary turns a few degrees, never a full circle.
+    expect(slow.mesh.rotation.y).toBeGreaterThan(Math.PI - 0.05)
+    expect(slow.mesh.rotation.y - (Math.PI - 0.05)).toBeLessThan(0.05)
+    for (let i = 1; i < 30; i++) slow._faceMesh(target, 1 / 30)
+    for (let i = 0; i < 120; i++) fast._faceMesh(target, 1 / 120)
+    expect(slow.mesh.rotation.y).toBeCloseTo(fast.mesh.rotation.y, 10)
+    expect(slow.pos.lengthSq()).toBe(0)
+  })
+
   it('dies instantly on touch and reports the death event', () => {
     const h = spawn(makeHusk())
     const r = h.update(0.1, { x: 15 - HUSK_TOUCH * 0.5, z: 0 }, camera)

@@ -62,6 +62,8 @@ function exactHardVoidPlane(plane) {
 // resources (stamina, flashlight battery).
 export class Controller {
   constructor(camera, dom, state) {
+    this._disposed = false
+    this._eventBindings = []
     this.camera = camera
     this.dom = dom
     this.state = state
@@ -114,38 +116,65 @@ export class Controller {
   }
 
   _bind() {
-    addEventListener('keydown', (e) => {
+    const listen = (target, type, listener) => {
+      target.addEventListener(type, listener)
+      this._eventBindings.push([target, type, listener])
+    }
+    listen(globalThis, 'keydown', (e) => {
       this.keys.add(e.code)
       if (e.code === 'KeyF') this._toggleFlashlight()
     })
-    addEventListener('keyup', (e) => this.keys.delete(e.code))
-    addEventListener('blur', () => {
+    listen(globalThis, 'keyup', (e) => this.keys.delete(e.code))
+    listen(globalThis, 'blur', () => {
       this.keys.clear()
       this.move.x = 0
       this.move.z = 0
       this.sprintTouch = false
     })
-    document.addEventListener('mousemove', (e) => {
+    listen(document, 'mousemove', (e) => {
       if (!this.isLocked || !this.inputEnabled) return
       this._look(e.movementX, e.movementY, this.sensitivity)
     })
-    document.addEventListener('pointerlockchange', () => {
+    listen(document, 'pointerlockchange', () => {
       this.isLocked = document.pointerLockElement === this.dom
       this.onLockChange?.(this.isLocked)
     })
     // Rejected/failed lock attempts surface here (see onLockError). Without a
     // listener the rejection is invisible to the engine.
-    document.addEventListener('pointerlockerror', () => this.onLockError?.())
+    listen(document, 'pointerlockerror', () => this.onLockError?.())
+  }
+
+  dispose() {
+    if (this._disposed) return
+    this._disposed = true
+    this.inputEnabled = false
+    for (const [target, type, listener] of this._eventBindings) {
+      target.removeEventListener(type, listener)
+    }
+    this._eventBindings.length = 0
+    this.keys.clear()
+    this.move.x = this.move.z = 0
+    this.sprintTouch = false
+    if (document.pointerLockElement === this.dom) this.unlock()
+    this.isLocked = false
+    this.onStep = this.onLand = this.onFloorChange = this.onVoidDeath = null
+    this.onLockChange = this.onLockError = this.onToggleFlashlight = null
   }
 
   lock() {
+    if (this._disposed) return
+    const reportError = () => {
+      if (!this._disposed) this.onLockError?.()
+    }
     // The promise form lets the failure callback fire even in engines that
     // deliver a rejected promise without dispatching pointerlockerror.
     try {
       const p = this.dom.requestPointerLock({ unadjustedMovement: true })
-      if (p && p.catch) p.catch(() => safeLock(this.dom))
+      if (p && p.catch) p.catch(() => {
+        if (!this._disposed) safeLock(this.dom, reportError)
+      })
     } catch {
-      safeLock(this.dom)
+      safeLock(this.dom, reportError)
     }
   }
   unlock() {
@@ -395,16 +424,14 @@ export class Controller {
   }
 }
 
-function safeLock(dom) {
+function safeLock(dom, reportError) {
   try {
     const p = dom.requestPointerLock()
-    // The spec fires pointerlockerror on rejection; synthesize it only for
-    // engines that reject the promise without dispatching the event, so
-    // Controller.onLockError reliably fires either way.
-    if (p && p.catch) {
-      p.catch(() => dom.dispatchEvent?.(new Event('pointerlockerror')))
-    }
+    // Some browsers reject without dispatching document.pointerlockerror.
+    // Notify the controller directly: a synthetic non-bubbling event on the
+    // canvas never reaches the document listener.
+    if (p && p.catch) p.catch(reportError)
   } catch {
-    /* ignore (e.g. called outside a user gesture) */
+    reportError()
   }
 }

@@ -57,11 +57,13 @@ def srgb(hexval):
 # --- Palette (linear; entity signature tints mirror render/gbufferMaterials.js) ---
 PALETTE = {
     "inkBody": srgb(0x16161C),    # Stalker body — near-black ink (old entity mat)
+    "inkCloth": srgb(0x24242A),   # lapels / seams catch a trace of lamplight
     "bonePale": srgb(0xC9C3B2),   # Stalker head/hands — featureless pale oval
     "bloodBody": srgb(0x3A0D0D),  # Pursuer mass — dark blood-red (old pursuer mat)
     "bloodLimb": srgb(0x240707),  # Pursuer limbs/jaw — darker
     "eyePale": srgb(0xE8E2D0),    # Pursuer eyes — pale pinpoints
     "ashBody": srgb(0x5C5847),    # Husk body — pale ash (old husk mat)
+    "ashRidge": srgb(0x716B58),   # exposed ridges around the hollow face
     "voidFace": srgb(0x0F0F0A),   # Husk face — hollow void
 }
 
@@ -85,10 +87,9 @@ def reset_data():
         bpy.data.objects.remove(obj)
     for mesh in [m for m in bpy.data.meshes if m.name.startswith("mesh_")]:
         bpy.data.meshes.remove(mesh)
-    for name in list(_MATS):
-        m = bpy.data.materials.get(name)
-        if m is not None:
-            bpy.data.materials.remove(m)
+    for material in list(bpy.data.materials):
+        if material.name.startswith("yr_enemy_"):
+            bpy.data.materials.remove(material)
     _MATS = {}
 
 
@@ -166,7 +167,7 @@ def box(parts, cu, cy, cv, su, sy, sv, key, bev=0.01, rot=None):
     return o
 
 
-def cyl(parts, cu, cy, cv, r, h, key, axis="y", verts=16, smooth=True):
+def cyl(parts, cu, cy, cv, r, h, key, axis="y", verts=12, smooth=True):
     rot = (0, 0, 0)
     if axis == "v":
         rot = (math.radians(90), 0, 0)
@@ -189,8 +190,9 @@ def cone(parts, cu, cy, cv, r1, r2, h, key, rot=None, verts=12, smooth=True):
     return o
 
 
-def sphere(parts, cu, cy, cv, r, key, scale=(1, 1, 1), rot=None, smooth=True):
-    bpy.ops.mesh.primitive_uv_sphere_add(segments=20, ring_count=12, radius=r,
+def sphere(parts, cu, cy, cv, r, key, scale=(1, 1, 1), rot=None, smooth=True,
+           segments=12, rings=8):
+    bpy.ops.mesh.primitive_uv_sphere_add(segments=segments, ring_count=rings, radius=r,
                                          location=(cu, -cv, cy))
     o = bpy.context.active_object
     o.scale = (scale[0], scale[2], scale[1])
@@ -203,19 +205,95 @@ def sphere(parts, cu, cy, cv, r, key, scale=(1, 1, 1), rot=None, smooth=True):
     return o
 
 
-def bone(parts, u1, y1, v1, u2, y2, v2, r, key, verts=14, smooth=True):
-    """Cylinder stretched between two game-frame points — angled limbs."""
+def bone(parts, u1, y1, v1, u2, y2, v2, r, key, verts=10, smooth=True, taper=0.8):
+    """Tapered limb between two game-frame points, thickest at the first."""
     a = Vector((u1, -v1, y1))
     b = Vector((u2, -v2, y2))
     d = b - a
-    bpy.ops.mesh.primitive_cylinder_add(vertices=verts, radius=r, depth=d.length,
-                                        location=(a + b) / 2)
+    bpy.ops.mesh.primitive_cone_add(vertices=verts, radius1=r, radius2=r * taper,
+                                    depth=d.length, location=(a + b) / 2)
     o = bpy.context.active_object
     o.rotation_mode = "QUATERNION"
     o.rotation_quaternion = d.to_track_quat("Z", "Y")
     finish(o, key, smooth=smooth)
     parts.append(o)
     return o
+
+
+def torso(parts, rings, key, segments=12):
+    """Continuous elliptical sections (height, half-width, half-depth, front).
+
+    Sharing the sections gives a curved silhouette without intersecting boxes
+    or subdivision. End caps stay inside the pelvis/neck connections.
+    """
+    vertices = []
+    for y, width, depth, front in rings:
+        for i in range(segments):
+            a = math.tau * i / segments
+            vertices.append((width * math.cos(a), -front + depth * math.sin(a), y))
+    faces = [tuple(reversed(range(segments)))]
+    for row in range(len(rings) - 1):
+        for i in range(segments):
+            a = row * segments + i
+            b = row * segments + (i + 1) % segments
+            faces.append((a, b, b + segments, a + segments))
+    faces.append(tuple((len(rings) - 1) * segments + i for i in range(segments)))
+    mesh = bpy.data.meshes.new("enemy_torso")
+    mesh.from_pydata(vertices, [], faces)
+    mesh.update()
+    obj = bpy.data.objects.new("enemy_torso", mesh)
+    COLLECTION.objects.link(obj)
+    finish(obj, key, smooth=True)
+    parts.append(obj)
+    return obj
+
+
+def hollow_head(parts):
+    """Open ash skull with a dark concave face, rather than a floating dot.
+
+    Rings run from the back of the head toward the viewer, then turn inward
+    at the lip. The dark bowl is physically recessed behind that lip.
+    """
+    segments = 16
+    vertices = []
+    # half-width, half-height, front depth
+    rings = [(0.025, 0.04, -0.08), (0.105, 0.15, -0.025),
+             (0.117, 0.157, 0.05), (0.084, 0.112, 0.115),
+             (0.072, 0.098, 0.116), (0.055, 0.073, 0.069)]
+    for width, height, front in rings:
+        for i in range(segments):
+            a = math.tau * i / segments
+            # Bowed forward; a slight sideways lean breaks mannequin symmetry.
+            y = height * math.sin(a)
+            x = width * math.cos(a) - y * 0.08
+            v = front - y * 0.24
+            vertices.append((x, -(0.085 + v), 1.60 + y))
+    vertices.append((0, -(0.085 + 0.05), 1.60))
+    faces = [tuple(reversed(range(segments)))]
+    for row in range(len(rings) - 1):
+        for i in range(segments):
+            a = row * segments + i
+            b = row * segments + (i + 1) % segments
+            faces.append((a, b, b + segments, a + segments))
+    for i in range(segments):
+        faces.append(((len(rings) - 1) * segments + i,
+                      (len(rings) - 1) * segments + (i + 1) % segments,
+                      len(vertices) - 1))
+    mesh = bpy.data.meshes.new("enemy_hollow_head")
+    mesh.from_pydata(vertices, [], faces)
+    mesh.update()
+    obj = bpy.data.objects.new("enemy_hollow_head", mesh)
+    COLLECTION.objects.link(obj)
+    finish(obj, "ashBody", smooth=True)
+    mesh.materials.append(mat("ashRidge"))
+    mesh.materials.append(mat("voidFace"))
+    for polygon in mesh.polygons:
+        # Lip ring gets the ash highlight; the inward wall and bowl are dark.
+        if polygon.index >= 1 + 4 * segments:
+            polygon.material_index = 2
+        elif polygon.index >= 1 + 3 * segments:
+            polygon.material_index = 1
+    parts.append(obj)
 
 
 # --- The three entities --------------------------------------------------------
@@ -229,16 +307,25 @@ def m_stalker(p):
     hips; the pale oval head is the only thing that catches lamplight."""
     K, PALE = "inkBody", "bonePale"
     for su in (-1, 1):
-        cyl(p, su * 0.11, 0.53, 0.0, 0.075, 1.0, K)                      # leg
+        bone(p, su * 0.11, 1.05, 0.0, su * 0.11, 0.05, 0.0, 0.076, K)  # tapered leg
         box(p, su * 0.11, 0.035, 0.06, 0.12, 0.07, 0.26, K, bev=0.015)   # foot
-        bone(p, su * 0.24, 1.72, 0.01, su * 0.26, 1.38, 0.02, 0.055, K)  # upper arm
-        bone(p, su * 0.26, 1.38, 0.02, su * 0.27, 1.02, 0.05, 0.048, K)  # forearm
-        box(p, su * 0.27, 0.90, 0.06, 0.07, 0.24, 0.10, PALE, bev=0.02)  # hand
-    box(p, 0, 1.10, 0.0, 0.30, 0.20, 0.18, K, bev=0.03)                  # hips
-    box(p, 0, 1.47, 0.01, 0.34, 0.66, 0.20, K, bev=0.05,
-        rot=(math.radians(4), 0, 0))                                     # torso (slight hunch)
-    box(p, 0, 1.76, 0.0, 0.48, 0.13, 0.20, K, bev=0.04,
-        rot=(math.radians(4), 0, 0))                                     # shoulders
+        sphere(p, su * 0.215, 1.735, 0.01, 0.075, K, rings=6)            # attached shoulder
+        bone(p, su * 0.23, 1.73, 0.01, su * 0.26, 1.36, 0.02, 0.06, K)
+        sphere(p, su * 0.26, 1.36, 0.02, 0.045, K, segments=8, rings=6)
+        bone(p, su * 0.26, 1.37, 0.02, su * 0.28, 1.00, 0.055, 0.048, K)
+        sphere(p, su * 0.28, 0.955, 0.06, 0.046, PALE, scale=(0.8, 1.65, 0.65), rings=6)
+        # Two broad finger silhouettes survive the game's outline and fog.
+        for finger in (-1, 1):
+            bone(p, su * 0.28 + finger * 0.017, 0.92, 0.06,
+                 su * 0.285 + finger * 0.020, 0.79 + 0.025 * finger, 0.07,
+                 0.014, PALE, verts=6, taper=0.55)
+        bone(p, su * 0.265, 0.975, 0.075, su * 0.245, 0.91, 0.095,
+             0.015, PALE, verts=6)                                     # thumb
+        bone(p, su * 0.065, 1.79, 0.105, su * 0.027, 1.49, 0.124,
+             0.018, "inkCloth", verts=6)                               # narrow lapel
+    torso(p, [(1.01, 0.19, 0.115, 0.0), (1.19, 0.19, 0.115, 0.0),
+              (1.36, 0.125, 0.095, 0.018), (1.65, 0.20, 0.12, 0.015),
+              (1.77, 0.23, 0.095, 0.0), (1.82, 0.07, 0.065, 0.015)], K)
     cyl(p, 0, 1.86, 0.02, 0.05, 0.16, K)                                 # neck
     sphere(p, 0, 2.10, 0.05, 0.145, PALE, scale=(0.92, 1.38, 1.0),
            rot=(math.radians(6), 0, 0))                                  # blank oval head
@@ -249,44 +336,56 @@ def m_pursuer(p):
     than the shoulders; pale eyes sit low on the forward-thrust head."""
     B, L, E = "bloodBody", "bloodLimb", "eyePale"
     for su in (-1, 1):
+        sphere(p, su * 0.285, 0.56, 0.26, 0.12, B, scale=(1, 1.12, 1.22))
         bone(p, su * 0.33, 0.55, 0.30, su * 0.44, 0.30, 0.42, 0.07, B)   # upper arm
+        sphere(p, su * 0.44, 0.30, 0.42, 0.058, L, segments=8, rings=6)
         bone(p, su * 0.44, 0.30, 0.42, su * 0.44, 0.08, 0.34, 0.06, L)   # forearm
         box(p, su * 0.44, 0.06, 0.34, 0.17, 0.12, 0.22, L, bev=0.03)     # knuckle fist
+        for finger in (-1, 1):
+            bone(p, su * 0.44 + finger * 0.043, 0.045, 0.41,
+                 su * 0.44 + finger * 0.05, 0.02, 0.50, 0.027, L, verts=6, taper=0.3)
         bone(p, su * 0.26, 0.68, -0.30, su * 0.30, 0.34, -0.52, 0.075, B)  # thigh
+        sphere(p, su * 0.30, 0.34, -0.52, 0.060, L, segments=8, rings=6)
         bone(p, su * 0.30, 0.34, -0.52, su * 0.30, 0.08, -0.34, 0.055, L)  # shin
         box(p, su * 0.30, 0.045, -0.28, 0.14, 0.09, 0.26, L, bev=0.02)   # hind foot
-        sphere(p, su * 0.095, 0.53, 0.76, 0.028, E)                      # eye (pinpoint)
-    box(p, 0, 0.52, 0.30, 0.62, 0.36, 0.42, B, bev=0.06)                 # shoulders/chest
-    box(p, 0, 0.72, -0.28, 0.50, 0.30, 0.40, B, bev=0.06)                # raised hips
-    box(p, 0, 0.66, 0.0, 0.50, 0.24, 0.70, B, bev=0.05,
-        rot=(math.radians(-12), 0, 0))                                   # saddle
+        sphere(p, su * 0.095, 0.53, 0.771, 0.039, L, scale=(1.3, 0.85, 0.65), segments=8, rings=6)
+        sphere(p, su * 0.095, 0.53, 0.790, 0.020, E, scale=(1.05, 0.7, 0.6), segments=8, rings=6)
+    sphere(p, 0, 0.55, 0.25, 0.30, B, scale=(1.0, 0.8, 0.85))           # barrel chest
+    sphere(p, 0, 0.72, -0.25, 0.27, B, scale=(1.0, 0.68, 1.0))          # raised haunches
+    sphere(p, 0, 0.70, -0.02, 0.28, B, scale=(0.90, 0.64, 1.5),
+           rot=(math.radians(-12), 0, 0))                              # continuous hunched back
     for i, cv in enumerate((0.15, -0.05, -0.25)):
         cone(p, 0, 0.86 + 0.05 * i, cv, 0.05, 0.008, 0.14, L,
              rot=(math.radians(-15), 0, 0))                              # spine spikes
     sphere(p, 0, 0.46, 0.64, 0.17, B, scale=(1.05, 0.85, 1.15))          # head
-    box(p, 0, 0.30, 0.74, 0.26, 0.11, 0.26, L, bev=0.03)                 # jaw/muzzle
+    sphere(p, 0, 0.41, 0.56, 0.11, L, scale=(1.0, 0.85, 1.2))          # throat joins head to chest
+    sphere(p, 0, 0.335, 0.725, 0.125, L, scale=(1.1, 0.43, 1.0))        # connected jaw
 
 
 def m_husk(p):
     """The Husk — a ~1.75u frail standing remnant. Head bowed, arms dangling,
     a hollow dark void where the face used to be. It only ever stands."""
-    A, V = "ashBody", "voidFace"
+    A = "ashBody"
     for su in (-1, 1):
-        cyl(p, su * 0.09, 0.42, 0.0, 0.055, 0.78, A)                     # leg
+        bone(p, su * 0.09, 0.84, 0.0, su * 0.09, 0.035, 0.0, 0.055, A)
         box(p, su * 0.09, 0.03, 0.05, 0.10, 0.06, 0.22, A, bev=0.012)    # foot
+        sphere(p, su * 0.175, 1.425, 0.02, 0.06, A, segments=8, rings=6)
         bone(p, su * 0.20, 1.42, 0.02, su * 0.215, 1.12, 0.05, 0.045, A)  # upper arm
+        sphere(p, su * 0.215, 1.12, 0.05, 0.035, "ashRidge", segments=8, rings=6)
         bone(p, su * 0.215, 1.12, 0.05, su * 0.225, 0.86, 0.06, 0.038, A)  # forearm
-        box(p, su * 0.225, 0.76, 0.07, 0.055, 0.16, 0.075, A, bev=0.015)  # hand
-    box(p, 0, 0.88, 0.0, 0.24, 0.16, 0.14, A, bev=0.02)                  # hips
-    box(p, 0, 1.18, 0.01, 0.26, 0.52, 0.15, A, bev=0.03,
-        rot=(math.radians(7), 0, 0))                                     # torso (slumped)
-    box(p, 0, 1.44, 0.02, 0.36, 0.10, 0.14, A, bev=0.03,
-        rot=(math.radians(10), 0, 0))                                    # shoulders
+        sphere(p, su * 0.225, 0.82, 0.07, 0.032, A, scale=(0.8, 1.6, 0.7), segments=8, rings=6)
+        for finger in (-1, 1):
+            bone(p, su * 0.225 + finger * 0.012, 0.79, 0.07,
+                 su * 0.23 + finger * 0.015, 0.69 + finger * 0.013, 0.09,
+                 0.01, "ashRidge", verts=6, taper=0.6)
+        for y in (1.24, 1.31, 1.38):
+            bone(p, su * 0.025, y, 0.117, su * 0.11, y + 0.018, 0.076,
+                 0.014, "ashRidge", verts=6)                           # subtle rib ridges
+    torso(p, [(0.81, 0.15, 0.09, 0.0), (0.95, 0.15, 0.09, 0.0),
+              (1.1, 0.085, 0.055, 0.025), (1.35, 0.135, 0.085, 0.035),
+              (1.435, 0.18, 0.065, 0.018), (1.49, 0.055, 0.045, 0.035)], A)
     cyl(p, 0, 1.50, 0.04, 0.042, 0.10, A)                                # neck
-    sphere(p, 0, 1.60, 0.09, 0.125, A, scale=(0.9, 1.15, 0.95),
-           rot=(math.radians(24), 0, 0))                                 # bowed head
-    sphere(p, 0, 1.585, 0.185, 0.075, V, scale=(0.72, 0.95, 0.42),
-           rot=(math.radians(24), 0, 0))                                 # hollow face
+    hollow_head(p)
 
 
 # (builder, footprint budget u x v, height budget) — mirrored by the vitest
@@ -316,6 +415,7 @@ def build_all():
     for name, fn, ew, ed, eh in MODELS:
         parts = []
         fn(parts)
+        bpy.ops.object.select_all(action="DESELECT")
         for o in parts:
             o.select_set(True)
         bpy.context.view_layer.objects.active = parts[0]
@@ -342,6 +442,10 @@ def build_all():
             raise RuntimeError(f"{name}: height {h:.3f} exceeds {eh:.3f}")
         if min(zs) < -0.005:
             raise RuntimeError(f"{name}: dips below floor ({min(zs):.3f})")
+        obj.data.calc_loop_triangles()
+        triangles = len(obj.data.loop_triangles)
+        if triangles > 3000:
+            raise RuntimeError(f"{name}: {triangles} triangles exceeds the 3000-triangle budget")
 
         path = os.path.join(OUT_DIR, name + ".glb")
         activate(obj)
@@ -354,13 +458,15 @@ def build_all():
             export_lights=False,
             export_skins=False,
             export_morph=False,
-            export_texcoords=True,
+            # These figures use flat part colors; UV seams duplicate vertices
+            # and the G-buffer never samples a texture for enemy materials.
+            export_texcoords=False,
             export_normals=True,
             export_materials="EXPORT",
             **sel_kw,
         )
         kb = os.path.getsize(path) / 1024
-        print(f"[yr] {name:<8} {w:.2f}x{d:.2f}x{h:.2f}  verts={len(obj.data.vertices):<5} {kb:.0f} KiB")
+        print(f"[yr] {name:<8} {w:.2f}x{d:.2f}x{h:.2f}  tris={triangles:<5} {kb:.0f} KiB")
         built.append(obj)
 
     # Line the joined models up for the source blend + contact sheet.
@@ -426,9 +532,11 @@ def main():
     reset_data()
     make_scene()
     build_all()
+    # Source assets are reproducible: don't leave Blender backup files in git.
+    bpy.context.preferences.filepaths.save_version = 0
+    render_preview()
     bpy.ops.wm.save_as_mainfile(filepath=BLEND_OUT, check_existing=False)
     print(f"[yr] blend -> {BLEND_OUT}")
-    render_preview()
     print("[yr] done")
 
 

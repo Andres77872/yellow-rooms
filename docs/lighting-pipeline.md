@@ -283,6 +283,7 @@ in the pipeline's most expensive inner loop.
 
 ```bash
 npm run benchmark:render-scene -- --family office --profile high
+npm run benchmark:render-scene -- --family office --profile high --models glb
 ```
 
 This headless probe reports Node CPU prewarm time, loaded/effectively visible
@@ -291,6 +292,22 @@ by semantic material, and static-matrix state. Its effective counts apply
 Three ancestor/child visibility only. They exclude camera-frustum and occlusion
 culling, rasterized work, GPU timings, browser frame time, and any production
 performance guarantee.
+
+The default `--models procedural` preserves the historical fallback scene.
+`--models glb` loads and bakes all 23 checked-in furniture models before
+prewarming, using the same instanced model geometry as gameplay. The
+`modelLibrary` block reports that separate load/bake time and geometry buffer
+bytes; prewarm time excludes loading. This mode is necessary when evaluating
+model topology changes.
+
+The September 2026 lifecycle pass disables automatic clears after the G-buffer:
+every subsequent opaque fullscreen triangle overwrites its complete target.
+Renderer clear state, scene background and timing queries are restored even
+when a pass throws. Teardown releases all 13 fullscreen shader materials as
+well as targets and shared fullscreen geometry. Family texture caches belong
+to their renderer and stay alive until its last G-buffer material set leaves.
+Instanced normals use the inverse-transpose rotation/scale transform so
+nonuniform scale preserves lighting on curved and beveled surfaces.
 
 Without `--budget-*` arguments the JSON is report-only. Explicit ceilings make
 the command fail when exceeded; CPU timing remains host-sensitive even when a

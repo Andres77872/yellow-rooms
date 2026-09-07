@@ -40,6 +40,8 @@ export class AudioBus {
     camera.add(this.listener)
     this.ctx = this.listener.context
     this.started = false
+    this._disposed = false
+    this._nodes = new Set()
     this.voices = 0
     this.tension = 0
     this._heartT = 0
@@ -49,14 +51,14 @@ export class AudioBus {
     this.family = MAP_FAMILY_OFFICE
 
     const ctx = this.ctx
-    this.master = ctx.createGain()
+    this.master = this._node(ctx.createGain())
     this.master.gain.value = 0
     // Sub-rumble/DC guard ahead of the limiter: the brown bed and the low
     // stingers otherwise eat headroom below anything a speaker reproduces.
-    this.masterHP = ctx.createBiquadFilter()
+    this.masterHP = this._node(ctx.createBiquadFilter())
     this.masterHP.type = 'highpass'
     this.masterHP.frequency.value = 28
-    this.limiter = ctx.createDynamicsCompressor()
+    this.limiter = this._node(ctx.createDynamicsCompressor())
     this.limiter.threshold.value = -6
     this.limiter.ratio.value = 12
     this.limiter.attack.value = 0.003
@@ -65,10 +67,10 @@ export class AudioBus {
     this.masterHP.connect(this.limiter)
     this.limiter.connect(ctx.destination)
 
-    this.bedGain = ctx.createGain()
-    this.humGain = ctx.createGain()
-    this.droneGain = ctx.createGain()
-    this.sfxGain = ctx.createGain()
+    this.bedGain = this._node(ctx.createGain())
+    this.humGain = this._node(ctx.createGain())
+    this.droneGain = this._node(ctx.createGain())
+    this.sfxGain = this._node(ctx.createGain())
     this.bedGain.gain.value = 0.2 // low HVAC background underlay
     this.humGain.gain.value = 0.5
     this.droneGain.gain.value = 0.0
@@ -77,7 +79,7 @@ export class AudioBus {
     // proximity multiplier (silent until the player is near a lit lamp) before
     // reaching the master — see setHumProximity. The flicker LFO and
     // flickerDrop keep writing humGain directly; they're just scaled by this.
-    this.humProx = ctx.createGain()
+    this.humProx = this._node(ctx.createGain())
     this.humProx.gain.value = 0
     this.humProx.connect(this.master)
     this.humGain.connect(this.humProx)
@@ -87,16 +89,46 @@ export class AudioBus {
     // Convolution reverb on the SFX bus only (footsteps, thumps, stingers,
     // distant events). The beds are already "the room"; sending them too would
     // wash the mix. The impulse is regenerated per family — see _applySpace.
-    this.convolver = ctx.createConvolver()
-    this.revTone = ctx.createBiquadFilter()
+    this.convolver = this._node(ctx.createConvolver())
+    this.revTone = this._node(ctx.createBiquadFilter())
     this.revTone.type = 'lowpass'
     this.revTone.frequency.value = 2600
-    this.revWet = ctx.createGain()
+    this.revWet = this._node(ctx.createGain())
     this.revWet.gain.value = 0
     this.sfxGain.connect(this.convolver)
     this.convolver.connect(this.revTone)
     this.revTone.connect(this.revWet)
     this.revWet.connect(this.master)
+  }
+
+  _node(node) {
+    this._nodes.add(node)
+    return node
+  }
+
+  dispose() {
+    if (this._disposed) return
+    this._disposed = true
+    this.started = false
+    // Three shares its AudioContext across listeners. Stop only this bus's
+    // sources; closing the context would break a replacement engine's audio.
+    for (const node of this._nodes) {
+      node.onended = null
+      if (typeof node.stop === 'function') {
+        try {
+          node.stop()
+        } catch {
+          /* a scheduled one-shot may already have ended */
+        }
+      }
+      node.disconnect()
+    }
+    this._nodes.clear()
+    this.voices = 0
+    this.whiteBuf = null
+    this.convolver.buffer = null
+    this.listener.gain.disconnect()
+    this.listener.removeFromParent()
   }
 
   _noise(seconds, type) {
@@ -151,7 +183,7 @@ export class AudioBus {
   }
 
   async start() {
-    if (this.started) return
+    if (this.started || this._disposed) return
     // Flag first: a second tap during the resume() await must not double-build
     // the oscillator banks (they'd sum, permanently doubling the hum).
     this.started = true
@@ -161,14 +193,15 @@ export class AudioBus {
     } catch {
       /* ignore */
     }
+    if (this._disposed) return
     this.whiteBuf = this._noise(1.0, 'white')
 
     // HVAC brown-noise rumble bed.
     const brown = this._noise(3.0, 'brown')
-    const bedSrc = ctx.createBufferSource()
+    const bedSrc = this._node(ctx.createBufferSource())
     bedSrc.buffer = brown
     bedSrc.loop = true
-    const bedLP = ctx.createBiquadFilter()
+    const bedLP = this._node(ctx.createBiquadFilter())
     bedLP.type = 'lowpass'
     bedLP.frequency.value = 320
     bedSrc.connect(bedLP)
@@ -178,35 +211,35 @@ export class AudioBus {
     // Signature fluorescent hum: mains harmonics + filtered fizz + flicker LFO.
     const freqs = [120, 240, 360, 480]
     const amps = [0.5, 0.28, 0.16, 0.09]
-    const humSum = ctx.createGain()
+    const humSum = this._node(ctx.createGain())
     humSum.gain.value = 0.12
     freqs.forEach((f, i) => {
-      const o = ctx.createOscillator()
+      const o = this._node(ctx.createOscillator())
       o.type = i === 0 ? 'sawtooth' : 'sine'
       o.frequency.value = f
-      const g = ctx.createGain()
+      const g = this._node(ctx.createGain())
       g.gain.value = amps[i]
       o.connect(g)
       g.connect(humSum)
       o.start()
     })
-    const fizzSrc = ctx.createBufferSource()
+    const fizzSrc = this._node(ctx.createBufferSource())
     fizzSrc.buffer = this.whiteBuf
     fizzSrc.loop = true
-    const fizzBP = ctx.createBiquadFilter()
+    const fizzBP = this._node(ctx.createBiquadFilter())
     fizzBP.type = 'bandpass'
     fizzBP.frequency.value = 2600
     fizzBP.Q.value = 6
-    const fizzG = ctx.createGain()
+    const fizzG = this._node(ctx.createGain())
     fizzG.gain.value = 0.06
     fizzSrc.connect(fizzBP)
     fizzBP.connect(fizzG)
     fizzG.connect(humSum)
     fizzSrc.start()
     // flicker LFO on hum amplitude
-    const lfo = ctx.createOscillator()
+    const lfo = this._node(ctx.createOscillator())
     lfo.frequency.value = 0.15
-    const lfoG = ctx.createGain()
+    const lfoG = this._node(ctx.createGain())
     lfoG.gain.value = 0.03
     lfo.connect(lfoG)
     lfoG.connect(this.humGain.gain)
@@ -216,12 +249,12 @@ export class AudioBus {
     // Liminal drone: detuned low sines + slow detune drift (rises with tension).
     const dronePair = [55, 82.4]
     dronePair.forEach((f) => {
-      const o = ctx.createOscillator()
+      const o = this._node(ctx.createOscillator())
       o.type = 'sine'
       o.frequency.value = f
-      const drift = ctx.createOscillator()
+      const drift = this._node(ctx.createOscillator())
       drift.frequency.value = 0.05
-      const driftG = ctx.createGain()
+      const driftG = this._node(ctx.createGain())
       driftG.gain.value = 1.5
       drift.connect(driftG)
       driftG.connect(o.detune)
@@ -285,7 +318,10 @@ export class AudioBus {
     this.voices++
     primary.onended = () => {
       this.voices--
-      for (const n of nodes) n.disconnect()
+      for (const n of nodes) {
+        n.disconnect()
+        this._nodes.delete(n)
+      }
     }
   }
 
@@ -296,14 +332,14 @@ export class AudioBus {
   _noiseVoice({ vol, dur, attack = 0.004, rate = 1, filters = [], pan = 0, at = 0 }) {
     if (!this.started || !this.whiteBuf || this.voices >= MAX_VOICES || vol <= 0) return
     const ctx = this.ctx
-    const src = ctx.createBufferSource()
+    const src = this._node(ctx.createBufferSource())
     src.buffer = this.whiteBuf
     src.loop = true
     src.playbackRate.value = rate
     const nodes = [src]
     let head = src
     for (const f of filters) {
-      const biq = ctx.createBiquadFilter()
+      const biq = this._node(ctx.createBiquadFilter())
       biq.type = f.type
       biq.frequency.value = f.freq
       if (f.q !== undefined) biq.Q.value = f.q
@@ -311,12 +347,12 @@ export class AudioBus {
       head = biq
       nodes.push(biq)
     }
-    const g = ctx.createGain()
+    const g = this._node(ctx.createGain())
     head.connect(g)
     head = g
     nodes.push(g)
     if (pan && ctx.createStereoPanner) {
-      const p = ctx.createStereoPanner()
+      const p = this._node(ctx.createStereoPanner())
       p.pan.value = Math.max(-1, Math.min(1, pan))
       head.connect(p)
       head = p
@@ -339,12 +375,12 @@ export class AudioBus {
     if (!this.started || this.voices >= MAX_VOICES) return
     const ctx = this.ctx
     const t = ctx.currentTime + at
-    const sum = ctx.createGain()
+    const sum = this._node(ctx.createGain())
     sum.gain.value = 1
     const nodes = [sum]
     let head = sum
     if (filter) {
-      const biq = ctx.createBiquadFilter()
+      const biq = this._node(ctx.createBiquadFilter())
       biq.type = filter.type
       biq.frequency.value = filter.freq
       if (filter.q !== undefined) biq.Q.value = filter.q
@@ -353,7 +389,7 @@ export class AudioBus {
       nodes.push(biq)
     }
     if (pan && ctx.createStereoPanner) {
-      const p = ctx.createStereoPanner()
+      const p = this._node(ctx.createStereoPanner())
       p.pan.value = Math.max(-1, Math.min(1, pan))
       head.connect(p)
       head = p
@@ -362,11 +398,11 @@ export class AudioBus {
     head.connect(this.sfxGain)
     let primary = null
     freqs.forEach((f, i) => {
-      const o = ctx.createOscillator()
+      const o = this._node(ctx.createOscillator())
       o.type = type
       o.frequency.setValueAtTime(f, t)
       if (glide) o.frequency.exponentialRampToValueAtTime(Math.max(1, f * glide), t + attack + dur)
-      const g = ctx.createGain()
+      const g = this._node(ctx.createGain())
       const vol = vols[i] ?? vols[0]
       g.gain.setValueAtTime(0, t)
       g.gain.linearRampToValueAtTime(vol, t + attack)
@@ -589,10 +625,10 @@ export class AudioBus {
     const ctx = this.ctx
     const t = ctx.currentTime
     const thump = (at, f) => {
-      const o = ctx.createOscillator()
+      const o = this._node(ctx.createOscillator())
       o.type = 'sine'
       o.frequency.value = f
-      const g = ctx.createGain()
+      const g = this._node(ctx.createGain())
       o.connect(g)
       g.connect(this.sfxGain)
       g.gain.setValueAtTime(0.0001, at)
@@ -603,6 +639,8 @@ export class AudioBus {
       o.onended = () => {
         o.disconnect()
         g.disconnect()
+        this._nodes.delete(o)
+        this._nodes.delete(g)
       }
     }
     thump(t, 60)

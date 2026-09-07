@@ -59,7 +59,12 @@ const VERT_INSTANCED = /* glsl */ `
   out vec3 vTint;
   void main(){
     vUv = uv;
-    vec3 iNormal = mat3(instanceMatrix) * normal;
+    // Inverse-transpose for the orthogonal rotation/scale instance basis.
+    // Multiplying normals by the position matrix bends the lighting across
+    // bevels whenever a model is stretched along only one axis.
+    mat3 basis = mat3(instanceMatrix);
+    vec3 scaleSq = vec3(dot(basis[0], basis[0]), dot(basis[1], basis[1]), dot(basis[2], basis[2]));
+    vec3 iNormal = basis * (normal / max(scaleSq, vec3(1e-8)));
     vViewNormal = normalize(normalMatrix * iNormal);
     // Per-instance albedo multiplier (door-leaf tones, panel tube identity).
     // Only enabled on materials whose meshes ALWAYS setColorAt — an unbound
@@ -162,11 +167,17 @@ function emissiveMaterial(colorLinear, instanced, tinted = false) {
 // One canvas-texture set per family, built lazily and kept for the renderer's
 // lifetime (a handful of 256² canvases — cheaper than regenerating on every
 // family switch at the title screen).
-const TEXTURE_CACHE = new Map()
+const TEXTURE_CACHE = new WeakMap()
+const MATERIAL_OWNERS = new WeakMap()
 
 function familyTextures(renderer, family) {
   const aniso = renderer.capabilities.getMaxAnisotropy()
-  let set = TEXTURE_CACHE.get(family)
+  let owner = TEXTURE_CACHE.get(renderer)
+  if (!owner) {
+    owner = { sets: new Map(), references: 0 }
+    TEXTURE_CACHE.set(renderer, owner)
+  }
+  let set = owner.sets.get(family)
   if (!set) {
     const pal = familyPalette(family)
     set = {
@@ -174,7 +185,7 @@ function familyTextures(renderer, family) {
       wall: wallTexture(aniso, pal.wall),
       ceiling: ceilingTexture(aniso, pal.ceiling),
     }
-    TEXTURE_CACHE.set(family, set)
+    owner.sets.set(family, set)
   }
   return set
 }
@@ -236,18 +247,29 @@ export function createGBufferMaterials(renderer, family = MAP_FAMILY_OFFICE) {
   // mesh.js picks this path once the model library has loaded.
   const furnitureModel = flatMaterial(lin(0xffffff), 0, true, true, true)
 
-  return { carpet, ceiling, wallpaper, panel, panelDead, entity, pursuer, husk, entityModel, exit, doorFrame, doorLeaf, prop, signGlow, furniture, furnitureModel }
+  const materials = { carpet, ceiling, wallpaper, panel, panelDead, entity, pursuer, husk, entityModel, exit, doorFrame, doorLeaf, prop, signGlow, furniture, furnitureModel }
+  const owner = TEXTURE_CACHE.get(renderer)
+  owner.references++
+  MATERIAL_OWNERS.set(materials, owner)
+  return materials
 }
 
 export function disposeGBufferMaterials(mats) {
-  // Texture sets are shared via TEXTURE_CACHE (a material's current map is
-  // always one of them), so dispose the cache once instead of per material.
-  for (const set of TEXTURE_CACHE.values()) {
-    set.floor.dispose()
-    set.wall.dispose()
-    set.ceiling.dispose()
+  // Release only this renderer's cache, once its last material set leaves.
+  // Disposing a second engine/preview must not invalidate a live world's
+  // textures, and devices can have different anisotropy limits.
+  const owner = MATERIAL_OWNERS.get(mats)
+  if (owner) {
+    MATERIAL_OWNERS.delete(mats)
+    if (--owner.references === 0) {
+      for (const set of owner.sets.values()) {
+        set.floor.dispose()
+        set.wall.dispose()
+        set.ceiling.dispose()
+      }
+      owner.sets.clear()
+    }
   }
-  TEXTURE_CACHE.clear()
   for (const m of Object.values(mats)) {
     if (!m) continue
     m.dispose?.()

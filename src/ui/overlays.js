@@ -27,6 +27,7 @@ export class UI {
     const style = document.createElement('style')
     style.textContent = UI_CSS
     document.head.appendChild(style)
+    this.style = style
 
     const root = document.createElement('div')
     root.id = 'ui'
@@ -100,6 +101,13 @@ export class UI {
     this._cache()
     this._wire()
     this.refreshSettings()
+  }
+
+  dispose() {
+    this.root.remove()
+    this.style.remove()
+    this.onStart = this.onResume = this.onRestart = this.onQuit = null
+    this.onSetting = this.onResetSettings = this.onHudHide = null
   }
 
   _cache() {

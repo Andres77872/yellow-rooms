@@ -73,6 +73,8 @@ const IDLE_RENDER_INTERVAL_MS = 1000 / 30
 
 export class Engine {
   constructor(app) {
+    this._disposed = false
+    this._eventBindings = []
     this.settings = new Settings()
     this.state = new GameState()
     this.touch = IS_TOUCH
@@ -157,13 +159,15 @@ export class Engine {
     // Kick the furniture GLB fetch; resident chunks swap box batches for the
     // Blender models when it resolves (each load failure keeps the fallback).
     loadFurnitureModels(this.furnitureModels).then((lib) => {
-      if (lib.loaded && this._running) this.cm.upgradeFurnitureModels(lib)
+      if (this._disposed) disposeFurnitureModels(lib)
+      else if (lib.loaded) this.cm.upgradeFurnitureModels(lib)
     })
 
     // Same upgrade path for the entities: capsule silhouettes until the
     // Blender enemy GLBs arrive, then swap geometry + material in place.
     loadEnemyModels(this.enemyModels).then((lib) => {
-      if (lib.loaded && this._running) {
+      if (this._disposed) disposeEnemyModels(lib)
+      else if (lib.loaded) {
         upgradeEnemyModels(
           lib,
           { stalker: this.stalker, pursuer: this.pursuer, husk: this.husk },
@@ -186,13 +190,13 @@ export class Engine {
       })
       // Mobile app-switch / tab-hide: pointer lock never fires here, so pause
       // off visibility instead.
-      document.addEventListener('visibilitychange', () => {
+      this._listen(document, 'visibilitychange', () => {
         if (document.hidden) this.pause()
       })
       // Landscape enforcement: where orientation.lock isn't granted (iOS), a
       // blocking "rotate device" overlay + pause is the fallback.
       this._portraitMq = matchMedia('(orientation: portrait)')
-      this._portraitMq.addEventListener('change', () => this._checkOrientation())
+      this._listen(this._portraitMq, 'change', () => this._checkOrientation())
       this._checkOrientation()
     }
 
@@ -202,7 +206,7 @@ export class Engine {
     this._applyAllSettings()
 
     // M toggles the minimap in-game and stays in sync with the pause checkbox.
-    addEventListener('keydown', (e) => {
+    this._listen(globalThis, 'keydown', (e) => {
       if (e.code !== 'KeyM' || this.state.phase !== Phase.PLAYING) return
       if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) return
       this._applySetting('minimap', !this.settings.get('minimap'))
@@ -219,7 +223,7 @@ export class Engine {
       // browser swallows the Esc that exits the lock, then _onLock pauses).
       // The _pauseT guard covers engines that also deliver the unlocking Esc's
       // keyup — without it that same press would instantly re-resume.
-      addEventListener('keyup', (e) => {
+      this._listen(globalThis, 'keyup', (e) => {
         if (e.code !== 'Escape' || this.state.phase !== Phase.PAUSED) return
         // Esc pressed to dismiss a focused pause-menu control (a settings
         // <select> dropdown, a slider blur) must not also resume the game —
@@ -233,7 +237,7 @@ export class Engine {
       // Esc-initiated unlock, so an early Esc-resume can leave the game PLAYING
       // with the mouse free (dead look, and lock loss can't re-trigger pause
       // because there is no lock to lose). Any click re-captures the pointer.
-      addEventListener('click', () => {
+      this._listen(globalThis, 'click', () => {
         if (this.state.phase !== Phase.PLAYING || this.controller.isLocked) return
         if (this.debugMode?.active) return
         this.controller.lock()
@@ -272,12 +276,17 @@ export class Engine {
     this.exitTarget = new THREE.Vector3()
     this.exitInfo = null
 
-    addEventListener('resize', () => this._onResize())
+    this._listen(globalThis, 'resize', () => this._onResize())
     // First paint needs only the fog-visible neighbourhood. The title loop's
     // first update immediately starts filling the normal box within the
     // streaming count/time budget.
     this.cm.prewarmTitleBackdrop(SPAWN, SPAWN)
     this._animate = this._animate.bind(this)
+  }
+
+  _listen(target, type, listener) {
+    target.addEventListener(type, listener)
+    this._eventBindings.push([target, type, listener])
   }
 
   _surfaceUnderPlayer() {
@@ -320,7 +329,12 @@ export class Engine {
   }
 
   _applyAllSettings() {
-    for (const k of Object.keys(this.settings.data)) this._runSetting(k, this.settings.get(k))
+    // Applying the preset resolves every advanced graphics key together.
+    // Repeating that pass for its seven owned keys needlessly resizes the
+    // backing canvas and revisits the complete deferred pipeline at boot/reset.
+    for (const k of Object.keys(this.settings.data)) {
+      if (!GRAPHICS_KEYS.includes(k)) this._runSetting(k, this.settings.get(k))
+    }
   }
 
   // Retarget every family-driven visual to `family` in place: surface
@@ -377,7 +391,7 @@ export class Engine {
   }
 
   start() {
-    if (this._running) return
+    if (this._running || this._disposed) return
     this._running = true
     const urlSeed = new URLSearchParams(location.search).get('seed')
     if (urlSeed) this.ui.setSeedInput(urlSeed)
@@ -533,11 +547,20 @@ export class Engine {
   quitToTitle() {
     if (this.state.phase !== Phase.PAUSED) return
     this.state.phase = Phase.TITLE
+    this._pausedFrom = null
     this.audio.setTension(0)
     this.controller.unlock()
     // The TITLE backdrop writes position/rotation each frame but never fov —
     // quitting mid-sprint must not leave it rendering at the kicked FOV.
     this.controller.resetCameraFx()
+    // The title camera returns to floor 0 even when the player quit upstairs.
+    // Drop the previous stair/floor light and visibility inputs before the
+    // backdrop streams, or its solid spawn floor can stay completely hidden.
+    this._transitStair = null
+    this.cm.updateVisibility(0, null)
+    this.lightField.reset()
+    this.deferred.lightUniforms.uFlashOn.value = 0
+    this.deferred.grade.dead.value = 0
     this.touchControls?.reset()
     this.ui.showTitle()
     this._checkOrientation()
@@ -607,7 +630,16 @@ export class Engine {
   _tick(dt) {
     const { controller, cm, stalker, state, audio } = this
     const steps = 5
-    for (let i = 0; i < steps; i++) controller.step(dt / steps, cm)
+    for (let i = 0; i < steps; i++) {
+      controller.step(dt / steps, cm)
+      // An authored void can end play during any physics substep. Keep the
+      // camera matrices valid, but stop gameplay immediately: later substeps and
+      // enemy/audio/HUD updates must not mutate the just-frozen death state.
+      if (state.phase !== Phase.PLAYING) {
+        this._updateCameraMatrices()
+        return
+      }
+    }
     controller.applyFrame(dt)
     this._updateCameraMatrices()
     cm.update(controller.pos.x, controller.pos.z, controller.floor)
@@ -841,6 +873,7 @@ export class Engine {
   }
 
   _animate() {
+    if (this._disposed) return
     if (this._running) this._raf = requestAnimationFrame(this._animate)
     const now = performance.now()
     const dt = Math.min((now - this._last) / 1000, 0.05)
@@ -902,17 +935,34 @@ export class Engine {
   }
 
   dispose() {
+    if (this._disposed) return
+    this._disposed = true
     this._running = false
     if (this._raf != null) {
       globalThis.cancelAnimationFrame?.(this._raf)
       this._raf = null
     }
+    for (const [target, type, listener] of this._eventBindings) {
+      target.removeEventListener(type, listener)
+    }
+    this._eventBindings.length = 0
     this.debugMode.dispose()
+    this.debug.dispose()
+    this.controller.dispose?.()
+    this.touchControls?.dispose?.()
+    this.ui.dispose?.()
+    this.audio.dispose?.()
+    // Per-chunk instance buffers belong to residents, not the shared geometry
+    // library. Release residents before disposing the resources they reference.
+    this.cm.reset()
+    this.cm.root?.removeFromParent()
+    this.camera.removeFromParent?.()
     disposeGBufferMaterials(this.materials)
     disposeGeometries(this.geom)
     disposeFurnitureModels(this.furnitureModels)
     disposeEnemyModels(this.enemyModels)
     this.deferred.dispose()
     this.renderer.dispose()
+    this.renderer.domElement.remove?.()
   }
 }

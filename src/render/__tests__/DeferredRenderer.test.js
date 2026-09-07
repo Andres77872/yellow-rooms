@@ -34,6 +34,54 @@ describe('DeferredRenderer render-target lifecycle', () => {
     deferred.dispose()
   })
 
+  it('keeps full-resolution attachments valid in a collapsed viewport', () => {
+    const renderer = makeRenderer(0, 0, 0.5)
+    const deferred = makeDeferred(renderer)
+    deferred.setSize()
+    expect([deferred.gBuffer.width, deferred.gBuffer.height]).toEqual([1, 1])
+    expect(deferred.outlineUniforms.uTexel.value.toArray()).toEqual([1, 1])
+    expect(deferred.fxaaUniforms.uTexel.value.toArray()).toEqual([1, 1])
+    deferred.dispose()
+  })
+
+  it('clears geometry but avoids redundant clears on opaque fullscreen passes', () => {
+    const renderer = makeRenderer()
+    renderer.autoClear = true
+    const deferred = makeDeferred(renderer)
+    vi.spyOn(deferred, '_clearRT').mockImplementation(() => {})
+    const clears = []
+    renderer.render.mockImplementation(() => clears.push(renderer.autoClear))
+
+    deferred.render(0)
+    expect(clears.length).toBeGreaterThan(5)
+    expect(clears[0]).toBe(true)
+    expect(clears.slice(1).every((clear) => clear === false)).toBe(true)
+    expect(renderer.autoClear).toBe(true)
+
+    deferred.setDebugView(5)
+    deferred.render(1)
+    expect(renderer.autoClear).toBe(true)
+    deferred.dispose()
+  })
+
+  it('restores renderer, scene and timing state if a pass throws', () => {
+    const renderer = makeRenderer()
+    renderer.autoClear = false
+    const deferred = makeDeferred(renderer)
+    const background = new THREE.Color(0x887744)
+    deferred.scene.background = background
+    deferred.timingEnabled = true
+    deferred.timer = { frameStart: vi.fn(), begin: vi.fn(), end: vi.fn(), frameEnd: vi.fn(), dispose: vi.fn() }
+    renderer.render.mockImplementation(() => { throw new Error('lost context') })
+
+    expect(() => deferred.render(0)).toThrow('lost context')
+    expect(deferred.scene.background).toBe(background)
+    expect(renderer.autoClear).toBe(false)
+    expect(deferred.timer.end).toHaveBeenCalledOnce()
+    expect(deferred.timer.frameEnd).toHaveBeenCalledOnce()
+    deferred.dispose()
+  })
+
   it('keeps depth only on the G-buffer', () => {
     const deferred = makeDeferred()
 
@@ -329,5 +377,16 @@ describe('DeferredRenderer render-target lifecycle', () => {
     expect(litDispose).toHaveBeenCalledOnce()
     expect(sceneDispose).toHaveBeenCalledOnce()
     expect(deferred._effectScratchRTs.size).toBe(0)
+  })
+
+  it('releases every post-process shader material once on repeated teardown', () => {
+    const deferred = makeDeferred()
+    const disposals = Object.values(deferred)
+      .filter((value) => value?.material?.isRawShaderMaterial)
+      .map((quad) => vi.spyOn(quad.material, 'dispose'))
+    expect(disposals).toHaveLength(13)
+    deferred.dispose()
+    deferred.dispose()
+    for (const dispose of disposals) expect(dispose).toHaveBeenCalledOnce()
   })
 })

@@ -130,6 +130,12 @@ export class TouchControls {
     this.btnLight.classList.toggle('on', on)
   }
 
+  dispose() {
+    this.reset()
+    this.onMove = this.onLook = null
+    for (const node of [this.zoneL, this.zoneR, this.btnLight, this.btnPause]) node.remove()
+  }
+
   // Drop any held pointers and zero movement — called on every phase exit so a
   // finger held through pause/death can't leak input into the next phase.
   reset() {

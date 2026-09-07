@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -8,6 +8,9 @@ import {
   FURNITURE_MODEL_FILES,
   bakeFurnitureGeometry,
   createFurnitureModelLibrary,
+  loadFurnitureModels,
+  disposeFurnitureModels,
+  disposeModelScene,
 } from '../furnitureModels.js'
 import {
   CHAIR_W,
@@ -77,6 +80,13 @@ function positionBounds(json) {
   return { mn, mx }
 }
 
+async function readModel(name) {
+  const buffer = readFileSync(path.join(MODELS_DIR, `${name}.glb`))
+  return new GLTFLoader().parseAsync(
+    buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength), ''
+  )
+}
+
 describe('furniture GLB exports (Blender pipeline contract)', () => {
   it('exports exactly one GLB per furniture kind', () => {
     const kinds = Object.keys(FURNITURE_MODEL_FILES)
@@ -89,11 +99,65 @@ describe('furniture GLB exports (Blender pipeline contract)', () => {
       for (const mesh of json.meshes) {
         for (const prim of mesh.primitives) {
           expect(prim.material).toBeTypeOf('number')
+          expect(prim.attributes.TEXCOORD_0).toBeUndefined()
         }
       }
       expect(json.cameras ?? []).toHaveLength(0)
       expect(json.extensionsRequired ?? []).toHaveLength(0)
     }
+  })
+
+  it('keeps the full set within transfer and triangle budgets', () => {
+    let bytes = 0, triangles = 0
+    for (const name of Object.values(FURNITURE_MODEL_FILES)) {
+      bytes += readFileSync(path.join(MODELS_DIR, `${name}.glb`)).byteLength
+      const json = glbJson(`${name}.glb`)
+      for (const mesh of json.meshes) {
+        for (const primitive of mesh.primitives) triangles += json.accessors[primitive.indices].count / 3
+      }
+    }
+    expect(bytes).toBeLessThan(650_000)
+    expect(triangles).toBeLessThan(20_000)
+  })
+
+  it('exports usable normals and nondegenerate, correctly wound triangles for every kind', async () => {
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3()
+    const normal = new THREE.Vector3()
+    for (const name of Object.values(FURNITURE_MODEL_FILES)) {
+      const { scene } = await readModel(name)
+      const geometry = bakeFurnitureGeometry(scene)
+      const positions = geometry.attributes.position
+      const normals = geometry.attributes.normal
+      for (let i = 0; i < positions.count; i++) {
+        expect(Number.isFinite(positions.getX(i) + positions.getY(i) + positions.getZ(i))).toBe(true)
+        expect(normal.fromBufferAttribute(normals, i).length()).toBeCloseTo(1, 4)
+      }
+      for (let i = 0; i < geometry.index.count; i += 3) {
+        const ia = geometry.index.getX(i)
+        a.fromBufferAttribute(positions, ia)
+        b.fromBufferAttribute(positions, geometry.index.getX(i + 1)).sub(a)
+        c.fromBufferAttribute(positions, geometry.index.getX(i + 2)).sub(a)
+        b.cross(c)
+        expect(b.lengthSq(), name).toBeGreaterThan(1e-16)
+        expect(b.normalize().dot(normal.fromBufferAttribute(normals, ia)), name).toBeGreaterThan(-0.001)
+      }
+      geometry.dispose()
+      disposeModelScene(scene)
+    }
+  })
+
+  it.each([
+    ['tub', 0, 0, 0.2],
+    ['sink', 0, 0.02, 0.83],
+    ['toilet', 0, 0.06, 0.4],
+  ])('%s has a recessed basin opening instead of a solid cap', async (name, x, z, maxHeight) => {
+    const { scene } = await readModel(name)
+    scene.updateMatrixWorld(true)
+    const ray = new THREE.Raycaster(new THREE.Vector3(x, 3, z), new THREE.Vector3(0, -1, 0))
+    const intersections = ray.intersectObject(scene, true)
+    expect(intersections.length).toBeGreaterThan(0)
+    expect(intersections[0].point.y).toBeLessThan(maxHeight)
+    disposeModelScene(scene)
   })
 
   it.each(Object.entries(FURNITURE_MODEL_FILES))(
@@ -132,7 +196,9 @@ describe('bakeFurnitureGeometry', () => {
     expect(geo.attributes.position.count).toBe(48) // two indexed boxes
     expect(geo.attributes.color).toBeDefined()
     expect(geo.attributes.normal).toBeDefined()
-    expect(geo.attributes.uv).toBeDefined()
+    expect(geo.attributes.uv).toBeUndefined()
+    expect(geo.attributes.color.array).toBeInstanceOf(Uint16Array)
+    expect(geo.attributes.color.normalized).toBe(true)
     // First box red, second green — in bake order.
     expect(geo.attributes.color.getX(0)).toBeCloseTo(1, 5)
     expect(geo.attributes.color.getY(0)).toBeCloseTo(0, 5)
@@ -155,6 +221,53 @@ describe('bakeFurnitureGeometry', () => {
 
   it('returns null for an empty subtree', () => {
     expect(bakeFurnitureGeometry(new THREE.Group())).toBeNull()
+  })
+
+  it('preserves authored vertex colors and merges mixed triangle indexing', () => {
+    const root = new THREE.Group()
+    const mesh = coloredBox(0xffffff, 0, 0, 0)
+    mesh.material.color.setRGB(0.5, 0.25, 1)
+    mesh.material.vertexColors = true
+    const colors = new Float32Array(mesh.geometry.attributes.position.count * 3).fill(0.5)
+    mesh.geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+    root.add(mesh)
+    const unindexed = coloredBox(0xffffff, 2, 0, 0)
+    unindexed.geometry = unindexed.geometry.toNonIndexed()
+    root.add(unindexed)
+    const geometry = bakeFurnitureGeometry(root)
+    expect(geometry.index.count).toBe(72)
+    expect(geometry.attributes.color.getX(0)).toBeCloseTo(0.25, 2)
+    expect(geometry.attributes.color.getY(0)).toBeCloseTo(0.125, 2)
+    expect(geometry.attributes.color.getZ(0)).toBeCloseTo(0.5, 2)
+    expect(geometry.boundingBox.max.x).toBeCloseTo(2.5)
+  })
+
+  it('preserves near-black linear palette channels without clipping them to zero', () => {
+    const mesh = coloredBox(0xffffff, 0, 0, 0)
+    mesh.material.color.setRGB(0.0009, 0.00212, 0.00304)
+    const geometry = bakeFurnitureGeometry(mesh)
+    expect(geometry.attributes.color.getX(0)).toBeCloseTo(0.0009, 4)
+    expect(geometry.attributes.color.getY(0)).toBeCloseTo(0.00212, 4)
+    expect(geometry.attributes.color.getZ(0)).toBeCloseTo(0.00304, 4)
+  })
+
+  it.each([true, false])('keeps mirrored front faces aligned with normals (authored normals: %s)', (authoredNormals) => {
+    const mesh = coloredBox(0xffffff, 0, 0, 0)
+    mesh.scale.x = -1
+    if (!authoredNormals) mesh.geometry.deleteAttribute('normal')
+    const geometry = bakeFurnitureGeometry(mesh)
+    const position = geometry.attributes.position
+    const normal = geometry.attributes.normal
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3()
+    const n = new THREE.Vector3()
+    for (let i = 0; i < geometry.index.count; i += 3) {
+      const ia = geometry.index.getX(i)
+      a.fromBufferAttribute(position, ia)
+      b.fromBufferAttribute(position, geometry.index.getX(i + 1))
+      c.fromBufferAttribute(position, geometry.index.getX(i + 2))
+      n.fromBufferAttribute(normal, ia)
+      expect(b.sub(a).cross(c.sub(a)).normalize().dot(n)).toBeGreaterThan(0.99)
+    }
   })
 
   it('loads a real exported GLB through GLTFLoader into one tinted geometry', async () => {
@@ -185,6 +298,91 @@ describe('bakeFurnitureGeometry', () => {
     const lib = createFurnitureModelLibrary()
     expect(lib.loaded).toBe(false)
     expect(lib.geometries.size).toBe(0)
+  })
+})
+
+describe('furniture model loading lifecycle', () => {
+  it('keeps malformed and missing kinds on fallback while loading the rest', async () => {
+    const library = createFurnitureModelLibrary()
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const loader = { loadAsync: async (url) => {
+      if (url.endsWith('/desk.glb')) return { scene: {} }
+      if (url.endsWith('/chair.glb')) throw new Error('missing asset')
+      return { scene: new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial()) }
+    } }
+    try {
+      await expect(loadFurnitureModels(library, { loader })).resolves.toBe(library)
+      expect(library.geometries.size).toBe(21)
+      expect(library.geometries.has(FURN_DESK)).toBe(false)
+      expect(library.geometries.has(FURN_CHAIR)).toBe(false)
+      expect(library.loaded).toBe(true)
+      expect(library.failed).toBe(false)
+      expect(warning).toHaveBeenCalledTimes(2)
+    } finally {
+      warning.mockRestore()
+      disposeFurnitureModels(library)
+    }
+  })
+
+  it('disposes shared source geometry, materials and textures exactly once', () => {
+    const root = new THREE.Group()
+    const geometry = new THREE.BoxGeometry()
+    const texture = new THREE.Texture()
+    const material = new THREE.MeshStandardMaterial({ map: texture, roughnessMap: texture })
+    root.add(new THREE.Mesh(geometry, material), new THREE.Mesh(geometry, [material]))
+    const geometryDispose = vi.spyOn(geometry, 'dispose')
+    const materialDispose = vi.spyOn(material, 'dispose')
+    const textureDispose = vi.spyOn(texture, 'dispose')
+    disposeModelScene(root)
+    expect(geometryDispose).toHaveBeenCalledTimes(1)
+    expect(materialDispose).toHaveBeenCalledTimes(1)
+    expect(textureDispose).toHaveBeenCalledTimes(1)
+  })
+
+  it('deduplicates loading, bounds concurrency, and releases loaded source scenes', async () => {
+    const library = createFurnitureModelLibrary()
+    let active = 0, peak = 0
+    const disposal = []
+    const loader = { loadAsync: vi.fn(async () => {
+      active++
+      peak = Math.max(peak, active)
+      await Promise.resolve()
+      active--
+      const scene = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial())
+      disposal.push(vi.spyOn(scene.geometry, 'dispose'))
+      return { scene }
+    }) }
+    const first = loadFurnitureModels(library, { loader })
+    expect(loadFurnitureModels(library, { loader })).toBe(first)
+    await first
+    expect(peak).toBe(4)
+    expect(library.geometries.size).toBe(23)
+    expect(library.loaded).toBe(true)
+    expect(loader.loadAsync).toHaveBeenCalledTimes(23)
+    for (const dispose of disposal) expect(dispose).toHaveBeenCalledTimes(1)
+    await loadFurnitureModels(library, { loader })
+    expect(loader.loadAsync).toHaveBeenCalledTimes(23)
+    disposeFurnitureModels(library)
+  })
+
+  it('does not resurrect a disposed library when queued requests finish', async () => {
+    const library = createFurnitureModelLibrary()
+    const completions = []
+    const scenes = []
+    const loader = { loadAsync: vi.fn(() => new Promise((resolve) => {
+      const scene = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial())
+      scenes.push(vi.spyOn(scene.geometry, 'dispose'))
+      completions.push(() => resolve({ scene }))
+    })) }
+    const pending = loadFurnitureModels(library, { loader })
+    disposeFurnitureModels(library)
+    for (const complete of completions) complete()
+    await pending
+    expect(loader.loadAsync).toHaveBeenCalledTimes(4)
+    expect(library.geometries.size).toBe(0)
+    expect(library.loaded).toBe(false)
+    expect(library.failed).toBe(false)
+    for (const dispose of scenes) expect(dispose).toHaveBeenCalledTimes(1)
   })
 })
 

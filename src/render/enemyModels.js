@@ -1,4 +1,4 @@
-import { bakeFurnitureGeometry } from './furnitureModels.js'
+import { bakeFurnitureGeometry, disposeModelScene } from './furnitureModels.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 
 // Blender-built enemy models (scripts/blender/build_enemies.py exports one GLB
@@ -23,27 +23,49 @@ export const ENEMY_MODEL_FILES = Object.freeze({
 // procedural capsule silhouettes until the GLBs arrive (or after a failed
 // load), so the game never waits on the network.
 export function createEnemyModelLibrary() {
-  return { geometries: new Map(), loaded: false, failed: false }
+  return { geometries: new Map(), loaded: false, failed: false, _revision: 0, _pending: null }
 }
 
 // Fetch and bake every entity's GLB. Resolves (never rejects): a missing or
 // malformed model simply leaves that entity on the capsule fallback.
-export async function loadEnemyModels(library, { loader, baseUrl } = {}) {
-  const base = baseUrl ?? `${import.meta.env?.BASE_URL ?? '/'}models/enemies/`
+export function loadEnemyModels(library, { loader, baseUrl } = {}) {
+  if (library._pending) return library._pending
+  if (library.loaded) return Promise.resolve(library)
+  const url = baseUrl ?? `${import.meta.env?.BASE_URL ?? '/'}models/enemies/`
+  const base = url.endsWith('/') ? url : `${url}/`
   const gltf = loader ?? new GLTFLoader()
+  const revision = library._revision
   const jobs = Object.entries(ENEMY_MODEL_FILES).map(async ([key, name]) => {
+    let asset
     try {
-      const asset = await gltf.loadAsync(`${base}${name}.glb`)
+      asset = await gltf.loadAsync(`${base}${name}.glb`)
+      // A stopped engine can still have fetches in flight. Never repopulate a
+      // disposed library (or replace a subsequent load) with stale results.
+      if (revision !== library._revision) return
       const geometry = bakeFurnitureGeometry(asset.scene)
-      if (geometry) library.geometries.set(key, geometry)
+      if (geometry) {
+        library.geometries.get(key)?.dispose()
+        library.geometries.set(key, geometry)
+      }
     } catch (err) {
-      console.warn(`[yellow-rooms] enemy model "${name}" failed to load; capsule fallback`, err)
+      if (revision === library._revision) {
+        console.warn(`[yellow-rooms] enemy model "${name}" failed to load; capsule fallback`, err)
+      }
+    } finally {
+      // Only the merged geometry survives; release the original primitives,
+      // materials and textures, including results received after disposal.
+      if (asset?.scene) disposeModelScene(asset.scene)
     }
   })
-  await Promise.all(jobs)
-  library.loaded = library.geometries.size > 0
-  library.failed = library.geometries.size === 0
-  return library
+  library._pending = Promise.all(jobs).then(() => {
+    if (revision === library._revision) {
+      library.loaded = library.geometries.size > 0
+      library.failed = library.geometries.size === 0
+      library._pending = null
+    }
+    return library
+  })
+  return library._pending
 }
 
 // Swap each entity's silhouette for its loaded model (skips whatever failed
@@ -58,6 +80,8 @@ export function upgradeEnemyModels(library, entities, material) {
 }
 
 export function disposeEnemyModels(library) {
+  library._revision++
+  library._pending = null
   for (const g of library.geometries.values()) g.dispose()
   library.geometries.clear()
   library.loaded = false

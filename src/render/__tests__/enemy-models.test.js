@@ -8,9 +8,13 @@ import { bakeFurnitureGeometry } from '../furnitureModels.js'
 import {
   ENEMY_MODEL_FILES,
   createEnemyModelLibrary,
+  loadEnemyModels,
+  disposeEnemyModels,
   upgradeEnemyModels,
 } from '../enemyModels.js'
 import { Husk } from '../../entities/Husk.js'
+import { Stalker } from '../../entities/Stalker.js'
+import { Pursuer } from '../../entities/Pursuer.js'
 
 // The Blender pipeline (scripts/blender/build_enemies.py) exports one GLB per
 // entity. These tests lock the export contract the runtime relies on: origin
@@ -71,6 +75,16 @@ describe('enemy GLB exports (Blender pipeline contract)', () => {
       }
       expect(json.cameras ?? []).toHaveLength(0)
       expect(json.extensionsRequired ?? []).toHaveLength(0)
+      expect(json.textures ?? []).toHaveLength(0)
+      let triangles = 0
+      for (const mesh of json.meshes) {
+        for (const primitive of mesh.primitives) {
+          expect(primitive.attributes.TEXCOORD_0).toBeUndefined()
+          triangles += json.accessors[primitive.indices].count / 3
+        }
+      }
+      expect(triangles).toBeLessThanOrEqual(3000)
+      expect(readFileSync(path.join(MODELS_DIR, `${ENEMY_MODEL_FILES[key]}.glb`)).length).toBeLessThan(90_000)
     }
   })
 
@@ -112,6 +126,8 @@ describe('enemy GLB exports (Blender pipeline contract)', () => {
       const geo = bakeFurnitureGeometry(scene)
       expect(geo).not.toBeNull()
       expect(geo.boundingBox.min.y).toBeGreaterThanOrEqual(-0.005)
+      expect(geo.attributes.uv).toBeUndefined()
+      expect(geo.groups).toHaveLength(0) // one draw call through the shared material
       // Per-part tints survive the bake as distinct vertex-color runs.
       const distinct = new Set()
       for (let i = 0; i < geo.attributes.color.count; i++) {
@@ -142,6 +158,23 @@ describe('upgradeEnemyModels', () => {
     geo.dispose()
   })
 
+  it.each([Husk, Stalker, Pursuer])('places a frozen %s at its feet in the upgrade frame', (Entity) => {
+    const entity = new Entity({ add() {} }, {}, {}, {})
+    entity.active = true
+    entity.frozen = true
+    entity.pos.set(7, 3.6, -2)
+    entity.mesh.position.set(7, 3.6 + entity.meshYOffset, -2)
+    entity.mesh.rotation.y = 0.72
+    entity.mesh.visible = true
+    const geometry = new THREE.BoxGeometry(1, 1, 1)
+    entity.upgradeModel(geometry, {})
+    expect(entity.mesh.position.equals(entity.pos)).toBe(true)
+    expect(entity.mesh.rotation.y).toBe(0.72)
+    expect(entity.mesh.visible).toBe(true)
+    expect(entity.active).toBe(true)
+    geometry.dispose()
+  })
+
   it('upgrades only entities with a loaded geometry', () => {
     const lib = createEnemyModelLibrary()
     const geo = new THREE.BoxGeometry(1, 1, 1)
@@ -163,5 +196,116 @@ describe('upgradeEnemyModels', () => {
     lib.geometries.set('stalker', new THREE.BoxGeometry(1, 1, 1))
     upgradeEnemyModels(lib, { stalker }, null)
     expect(stalker.upgradeModel).not.toHaveBeenCalled()
+  })
+})
+
+function sourceAsset() {
+  const geometry = new THREE.BoxGeometry(1, 1, 1)
+  const material = new THREE.MeshStandardMaterial({ color: 0x776644 })
+  const scene = new THREE.Group()
+  scene.add(new THREE.Mesh(geometry, material))
+  return { scene, geometry, material }
+}
+
+describe('enemy model loading lifecycle', () => {
+  it('shares in-flight work and releases source resources after baking', async () => {
+    const library = createEnemyModelLibrary()
+    const assets = []
+    const loader = { loadAsync: vi.fn(async () => {
+      const asset = sourceAsset()
+      vi.spyOn(asset.geometry, 'dispose')
+      vi.spyOn(asset.material, 'dispose')
+      assets.push(asset)
+      return asset
+    }) }
+    const first = loadEnemyModels(library, { loader, baseUrl: '/models' })
+    expect(loadEnemyModels(library, { loader })).toBe(first)
+    await first
+    expect(loader.loadAsync).toHaveBeenCalledTimes(3)
+    expect(loader.loadAsync).toHaveBeenCalledWith('/models/stalker.glb')
+    expect(library.loaded).toBe(true)
+    expect(library.failed).toBe(false)
+    expect(library.geometries.size).toBe(3)
+    await loadEnemyModels(library, { loader })
+    expect(loader.loadAsync).toHaveBeenCalledTimes(3) // resident assets are reused
+    for (const asset of assets) {
+      expect(asset.geometry.dispose).toHaveBeenCalledOnce()
+      expect(asset.material.dispose).toHaveBeenCalledOnce()
+      expect([...library.geometries.values()]).not.toContain(asset.geometry)
+    }
+    disposeEnemyModels(library)
+  })
+
+  it('discards delayed results after disposal without reviving the library', async () => {
+    const library = createEnemyModelLibrary()
+    const pending = []
+    const loader = { loadAsync: () => new Promise((resolve) => pending.push(resolve)) }
+    const loading = loadEnemyModels(library, { loader })
+    disposeEnemyModels(library)
+    const assets = pending.map((resolve) => {
+      const asset = sourceAsset()
+      vi.spyOn(asset.geometry, 'dispose')
+      vi.spyOn(asset.material, 'dispose')
+      resolve(asset)
+      return asset
+    })
+    await loading
+    expect(library.geometries.size).toBe(0)
+    expect(library.loaded).toBe(false)
+    expect(library.failed).toBe(false)
+    for (const asset of assets) {
+      expect(asset.geometry.dispose).toHaveBeenCalledOnce()
+      expect(asset.material.dispose).toHaveBeenCalledOnce()
+    }
+  })
+
+  it('an old load cannot overwrite a new library generation', async () => {
+    const library = createEnemyModelLibrary()
+    const pending = []
+    const first = loadEnemyModels(library, {
+      loader: { loadAsync: () => new Promise((resolve) => pending.push(resolve)) },
+    })
+    disposeEnemyModels(library)
+    await loadEnemyModels(library, { loader: { loadAsync: async () => sourceAsset() } })
+    const current = [...library.geometries.values()]
+    for (const resolve of pending) resolve(sourceAsset())
+    await first
+    expect([...library.geometries.values()]).toEqual(current)
+    expect(library.loaded).toBe(true)
+    disposeEnemyModels(library)
+  })
+
+  it('keeps successful enemies when another file fails', async () => {
+    const library = createEnemyModelLibrary()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await loadEnemyModels(library, { loader: { loadAsync: async (url) => {
+        if (url.endsWith('pursuer.glb')) throw new Error('missing asset')
+        return sourceAsset()
+      } } })
+      expect([...library.geometries.keys()]).toEqual(['stalker', 'husk'])
+      expect(library.loaded).toBe(true)
+      expect(library.failed).toBe(false)
+      expect(warn).toHaveBeenCalledOnce()
+    } finally {
+      warn.mockRestore()
+      disposeEnemyModels(library)
+    }
+  })
+
+  it('resolves to the capsule fallback when every scene is malformed', async () => {
+    const library = createEnemyModelLibrary()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await expect(loadEnemyModels(library, {
+        loader: { loadAsync: async () => ({ scene: {} }) },
+      })).resolves.toBe(library)
+      expect(library.loaded).toBe(false)
+      expect(library.failed).toBe(true)
+      expect(library.geometries.size).toBe(0)
+    } finally {
+      warn.mockRestore()
+      disposeEnemyModels(library)
+    }
   })
 })

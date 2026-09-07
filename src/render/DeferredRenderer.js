@@ -249,9 +249,11 @@ export class DeferredRenderer {
   _pass(name, fn) {
     if (!this.timingEnabled) return fn()
     this.timer.begin(name)
-    const out = fn()
-    this.timer.end()
-    return out
+    try {
+      return fn()
+    } finally {
+      this.timer.end()
+    }
   }
 
   // Retarget the lighting environment to a map-family palette
@@ -560,7 +562,7 @@ export class DeferredRenderer {
   _dims() {
     const pr = this.renderer.getPixelRatio()
     const size = this.renderer.getSize(new THREE.Vector2())
-    return { dw: Math.floor(size.x * pr), dh: Math.floor(size.y * pr) }
+    return { dw: Math.max(1, Math.floor(size.x * pr)), dh: Math.max(1, Math.floor(size.y * pr)) }
   }
 
   setOutline(on) {
@@ -672,8 +674,11 @@ export class DeferredRenderer {
     const prevBg = scene.background
     scene.background = null
     r.setRenderTarget(this.gBuffer)
-    r.render(scene, camera)
-    scene.background = prevBg
+    try {
+      r.render(scene, camera)
+    } finally {
+      scene.background = prevBg
+    }
   }
 
   _renderSSAO() {
@@ -817,10 +822,25 @@ export class DeferredRenderer {
   }
 
   render(time) {
+    const autoClear = this.renderer.autoClear
+    try {
+      // Only the geometry pass needs a clear. Every post pass covers its
+      // complete viewport with an opaque fullscreen triangle; clearing those
+      // attachments first repeats bandwidth work up to thirteen times/frame.
+      this.renderer.autoClear = true
+      this._renderFrame(time)
+    } finally {
+      this.renderer.autoClear = autoClear
+      if (this.timingEnabled) this.timer.frameEnd()
+    }
+  }
+
+  _renderFrame(time) {
     // 1. G-buffer  2. SSAO  3. shadow mask  4. lighting  5. volumetrics  6. bloom  7. composite
     if (this.timingEnabled) this.timer.frameStart()
     this._updateFrame() // proj-inverse + stable visible lamp compaction / char.w fold
     this._pass('gbuffer', () => this._renderGBuffer())
+    this.renderer.autoClear = false
     // A pass can be skipped for two reasons: its quality tier disables it, or
     // its result is provably constant this frame (no lamps loaded -> shadow
     // mask is 1 everywhere; no lamps and no flashlight -> shafts are black).
@@ -845,7 +865,6 @@ export class DeferredRenderer {
     // Debug: blit a single pipeline channel to screen, skip grade/FXAA.
     if (this.debugView) {
       this._renderDebug()
-      if (this.timingEnabled) this.timer.frameEnd()
       return
     }
 
@@ -858,11 +877,14 @@ export class DeferredRenderer {
     } else {
       this._pass('grade', () => this._renderGrade(time, graded, null))
     }
-    if (this.timingEnabled) this.timer.frameEnd()
   }
 
   dispose() {
+    if (this._disposed) return
+    this._disposed = true
     if (this.timer) this.timer.dispose()
+    this.timer = null
+    this.timingEnabled = false
     this.gBuffer.dispose()
     this.litRT.dispose()
     for (const scaledPool of this._effectScratchRTs.values()) {
@@ -876,18 +898,14 @@ export class DeferredRenderer {
     this.bloomRT.dispose()
     this.sceneRT.dispose()
     this.gradeRT.dispose()
+    // FullScreenQuad.dispose() only releases its shared triangle geometry;
+    // shader materials have separate ownership and must also be released.
+    for (const quad of [
+      this.lightQuad, this.aoQuad, this.aoBlurQuad, this.shadowQuad,
+      this.shadowBlurQuad, this.volQuad, this.bloomPreQuad, this.bloomBlurQuad,
+      this.compositeQuad, this.outlineQuad, this.gradeQuad, this.fxaaQuad, this.debugQuad,
+    ]) quad.material.dispose()
     this.lightQuad.dispose()
-    this.aoQuad.dispose()
-    this.aoBlurQuad.dispose()
-    this.shadowQuad.dispose()
-    this.shadowBlurQuad.dispose()
-    this.volQuad.dispose()
-    this.bloomPreQuad.dispose()
-    this.bloomBlurQuad.dispose()
-    this.compositeQuad.dispose()
-    this.outlineQuad.dispose()
-    this.gradeQuad.dispose()
-    this.fxaaQuad.dispose()
-    this.debugQuad.dispose()
+    this._identityRT.clear()
   }
 }

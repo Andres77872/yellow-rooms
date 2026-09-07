@@ -61,7 +61,9 @@ export const GRADE_FRAG = /* glsl */ `
       float vq = pow(clamp(floor((vg + vd) * levels), 0.0, levels) / levels, 2.2);
       col *= vq / v;
     }
-    float vig = smoothstep(1.0, 0.25, length(d));
+    // GLSL leaves smoothstep undefined for reversed edges. Invert the valid
+    // ascending ramp so vignette shading stays consistent across GPU drivers.
+    float vig = 1.0 - smoothstep(0.25, 1.0, length(d));
     col *= mix(1.0, vig, vignette);
     col += (hash(uv * vec2(1280.0, 720.0) + time) - 0.5) * grain;
     float st = hash(uv * vec2(640.0, 480.0) + time * 57.0);

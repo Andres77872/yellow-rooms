@@ -10,6 +10,7 @@ import {
   MAX_BUILDS_PER_FRAME,
   STREAM_BUILD_BUDGET_MS,
   UNLOAD_RADIUS,
+  UNLOAD_RADIUS_Y,
   chunkKey3,
 } from '../constants.js'
 import { DEFAULT_WORLD_CONFIG } from '../config.js'
@@ -330,6 +331,30 @@ function makeLatticeManager(seed, config) {
 }
 
 describe('ChunkManager streaming queue', () => {
+  it('validates tall-structure retention only for slabs beyond ordinary Y hysteresis', () => {
+    const { cm } = makeManager()
+    cm.prewarm(0, 0)
+    const ownership = vi.spyOn(cm, '_chunkSharesStructure')
+
+    cm._unloadOutsideStreamingBounds(0, 0, 0)
+    expect(ownership).not.toHaveBeenCalled()
+    expect(cm.loadedCount).toBe(LOAD_COUNT)
+
+    const farCy = UNLOAD_RADIUS_Y + 1
+    const key = chunkKey3(0, farCy, 0)
+    const far = {
+      cx: 0, cy: farCy, cz: 0,
+      apertures: [], dispose: vi.fn(),
+    }
+    cm.chunks.set(key, far)
+    cm._unloadOutsideStreamingBounds(0, 0, 0)
+
+    expect(ownership).toHaveBeenCalledOnce()
+    expect(ownership).toHaveBeenCalledWith(far, 0)
+    expect(far.dispose).toHaveBeenCalledOnce()
+    expect(cm.chunks.has(key)).toBe(false)
+  })
+
   it('does not stack more builds after one chunk exhausts the frame budget', () => {
     const { cm, built } = makeManager()
     const times = [100, 100 + STREAM_BUILD_BUDGET_MS]

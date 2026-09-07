@@ -3,6 +3,27 @@ import { Engine } from '../Engine.js'
 import { Phase } from '../GameState.js'
 import { WORLD_GEN_VERSION, ZONE_SEWER } from '../../world/constants.js'
 import { hashStr } from '../../world/core/hash.js'
+import { disposeFurnitureModels } from '../../render/furnitureModels.js'
+import { disposeEnemyModels, upgradeEnemyModels } from '../../render/enemyModels.js'
+
+const pendingModels = vi.hoisted(() => ({ furniture: [], enemies: [] }))
+
+vi.mock('../../render/furnitureModels.js', () => ({
+  createFurnitureModelLibrary: () => ({ geometries: new Map(), loaded: false }),
+  loadFurnitureModels: (library) => new Promise((resolve) => {
+    pendingModels.furniture.push({ library, resolve })
+  }),
+  disposeFurnitureModels: vi.fn(),
+}))
+
+vi.mock('../../render/enemyModels.js', () => ({
+  createEnemyModelLibrary: () => ({ geometries: new Map(), loaded: false }),
+  loadEnemyModels: (library) => new Promise((resolve) => {
+    pendingModels.enemies.push({ library, resolve })
+  }),
+  disposeEnemyModels: vi.fn(),
+  upgradeEnemyModels: vi.fn(),
+}))
 
 vi.mock('three', () => {
   class WebGLRenderer {
@@ -104,6 +125,7 @@ vi.mock('../../world/ChunkManager.js', () => ({
         this.exit = { cx, cy, cz, lx, lz }
       })
       this.reset = vi.fn()
+      this.upgradeFurnitureModels = vi.fn()
       this.setRenderDetailProfile = vi.fn()
       this.updateVisibility = vi.fn()
       this.update = vi.fn()
@@ -312,6 +334,11 @@ vi.mock('../exitPlacement.js', () => ({
 const fakeLocation = { search: '' }
 
 beforeEach(() => {
+  pendingModels.furniture.length = 0
+  pendingModels.enemies.length = 0
+  disposeFurnitureModels.mockClear()
+  disposeEnemyModels.mockClear()
+  upgradeEnemyModels.mockClear()
   vi.stubGlobal('devicePixelRatio', 1)
   vi.stubGlobal('innerWidth', 1280)
   vi.stubGlobal('innerHeight', 720)
@@ -430,6 +457,14 @@ describe('startRun family plumbing', () => {
 })
 
 describe('world-detail quality plumbing', () => {
+  it('applies stored graphics once on construction and once after settings reset', () => {
+    const engine = createEngine()
+
+    expect(engine.deferred.applyQuality).toHaveBeenCalledOnce()
+    engine.ui.onResetSettings()
+    expect(engine.deferred.applyQuality).toHaveBeenCalledTimes(2)
+  })
+
   it('applies the preset-owned profile and keeps custom edits explicit', () => {
     const engine = createEngine()
 
@@ -440,6 +475,94 @@ describe('world-detail quality plumbing', () => {
     expect(engine.settings.get('preset')).toBe('custom')
     expect(engine.settings.get('worldDetail')).toBe('ultra')
     expect(engine.cm.setRenderDetailProfile).toHaveBeenLastCalledWith('ultra')
+  })
+})
+
+describe('engine resource lifetime', () => {
+  it('restores floor-zero backdrop visibility and lighting when quitting from an upstairs transition', () => {
+    const engine = createEngine()
+    engine.state.phase = Phase.PAUSED
+    engine._pausedFrom = Phase.TRANSITION
+    engine.controller.floor = 7
+    engine._transitStair = { baseCy: 6 }
+    engine.deferred.lightUniforms.uFlashOn.value = 1
+    engine.deferred.grade.dead.value = 0.5
+
+    engine.quitToTitle()
+
+    expect(engine.state.phase).toBe(Phase.TITLE)
+    expect(engine._pausedFrom).toBeNull()
+    expect(engine._transitStair).toBeNull()
+    expect(engine.cm.updateVisibility).toHaveBeenLastCalledWith(0, null)
+    expect(engine.lightField.reset).toHaveBeenCalledOnce()
+    expect(engine.deferred.lightUniforms.uFlashOn.value).toBe(0)
+    expect(engine.deferred.grade.dead.value).toBe(0)
+  })
+
+  it('upgrades models that finish before the first start', async () => {
+    const engine = createEngine()
+    expect(engine._running).toBe(false)
+
+    for (const { library, resolve } of [...pendingModels.furniture, ...pendingModels.enemies]) {
+      library.loaded = true
+      resolve(library)
+    }
+    await Promise.resolve()
+
+    expect(engine.cm.upgradeFurnitureModels).toHaveBeenCalledWith(engine.furnitureModels)
+    expect(upgradeEnemyModels).toHaveBeenCalledWith(
+      engine.enemyModels,
+      { stalker: engine.stalker, pursuer: engine.pursuer, husk: engine.husk },
+      engine.materials.entityModel
+    )
+  })
+
+  it('releases residents, listeners and subsystem resources once and cannot restart disposed GPU state', () => {
+    vi.stubGlobal('requestAnimationFrame', vi.fn())
+    const engine = createEngine()
+    engine.controller.dispose = vi.fn()
+    engine.audio.dispose = vi.fn()
+    engine.ui.dispose = vi.fn()
+    engine.renderer.domElement.remove = vi.fn()
+    const registered = addEventListener.mock.calls.map(([type, listener]) => [type, listener])
+
+    engine.dispose()
+    engine.dispose()
+    engine.start()
+    engine._animate()
+
+    for (const [type, listener] of registered) {
+      expect(removeEventListener).toHaveBeenCalledWith(type, listener)
+    }
+    expect(engine.cm.reset).toHaveBeenCalledOnce()
+    expect(engine.debug.dispose).toHaveBeenCalledOnce()
+    expect(engine.controller.dispose).toHaveBeenCalledOnce()
+    expect(engine.audio.dispose).toHaveBeenCalledOnce()
+    expect(engine.ui.dispose).toHaveBeenCalledOnce()
+    expect(engine.renderer.domElement.remove).toHaveBeenCalledOnce()
+    expect(engine.deferred.dispose).toHaveBeenCalledOnce()
+    expect(disposeFurnitureModels).toHaveBeenCalledOnce()
+    expect(disposeEnemyModels).toHaveBeenCalledOnce()
+    expect(requestAnimationFrame).not.toHaveBeenCalled()
+    expect(engine.deferred.render).not.toHaveBeenCalled()
+  })
+
+  it('disposes models completing after teardown without remeshing the retired scene', async () => {
+    const engine = createEngine()
+    engine.dispose()
+    disposeFurnitureModels.mockClear()
+    disposeEnemyModels.mockClear()
+
+    for (const { library, resolve } of [...pendingModels.furniture, ...pendingModels.enemies]) {
+      library.loaded = true
+      resolve(library)
+    }
+    await Promise.resolve()
+
+    expect(engine.cm.upgradeFurnitureModels).not.toHaveBeenCalled()
+    expect(upgradeEnemyModels).not.toHaveBeenCalled()
+    expect(disposeFurnitureModels).toHaveBeenCalledWith(engine.furnitureModels)
+    expect(disposeEnemyModels).toHaveBeenCalledWith(engine.enemyModels)
   })
 })
 
