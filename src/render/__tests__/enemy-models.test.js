@@ -80,6 +80,9 @@ describe('enemy GLB exports (Blender pipeline contract)', () => {
       for (const mesh of json.meshes) {
         for (const primitive of mesh.primitives) {
           expect(primitive.attributes.TEXCOORD_0).toBeUndefined()
+          // Painted vertex shading multiplier (scripts/blender/yr_shading.py).
+          expect(json.accessors[primitive.attributes.COLOR_0])
+            .toMatchObject({ componentType: 5121, normalized: true, type: 'VEC4' })
           triangles += json.accessors[primitive.indices].count / 3
         }
       }

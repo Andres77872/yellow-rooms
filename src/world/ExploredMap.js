@@ -4,6 +4,8 @@ import {
   MAP_REVEAL_R,
   COL_HALF,
   MONUMENTAL_COL_HALF,
+  UNLOAD_RADIUS,
+  UNLOAD_RADIUS_Y,
   cIdx,
   chunkKey3,
   worldToCell,
@@ -28,6 +30,15 @@ import { COLUMN_FURNITURE, COLUMN_MONUMENTAL, wallFeatureSeesThrough } from './m
 // v8: everything is keyed per FLOOR (cx, cy, cz). Each floor keeps its own
 // reveal mask, so climbing a stair swaps the minimap to that floor's fog and
 // the old floor's map is preserved for the player's return.
+//
+// Memory: the 196-byte reveal mask is kept for the whole level, but the full
+// ChunkData (+ stair descriptors) is only pinned near the player. Far entries
+// drop it and re-hydrate on demand — otherwise a long walk through an infinite
+// level would keep every explored chunk's typed arrays alive, including the
+// ones ChunkManager already unloaded.
+const KEEP_DATA_CHUNKS = UNLOAD_RADIUS + 1
+const KEEP_DATA_FLOORS = UNLOAD_RADIUS_Y + 1
+
 export class ExploredMap {
   constructor(cm) {
     this.cm = cm
@@ -35,6 +46,9 @@ export class ExploredMap {
     this.lastCX = null
     this.lastCZ = null
     this.lastCY = null
+    this._pinCX = null // chunk the data-retention window was last centred on
+    this._pinCZ = null
+    this._pinCY = null
   }
 
   // Drop all fog (called per level/seed change so nothing leaks between runs).
@@ -43,6 +57,9 @@ export class ExploredMap {
     this.lastCX = null
     this.lastCZ = null
     this.lastCY = null
+    this._pinCX = null
+    this._pinCZ = null
+    this._pinCY = null
   }
 
   // Reveal pass: mark cells in a disc around the player that have line of sight
@@ -55,6 +72,7 @@ export class ExploredMap {
     this.lastCX = gx
     this.lastCZ = gz
     this.lastCY = pcy
+    this._releaseFarData(Math.floor(gx / CHUNK), pcy, Math.floor(gz / CHUNK))
 
     this._mark(gx, gz, pcy) // own cell (LOS would pass anyway; cheap guard)
     const R = MAP_REVEAL_R
@@ -183,15 +201,34 @@ export class ExploredMap {
     const key = chunkKey3(cx, cy, cz)
     let e = this.chunks.get(key)
     if (!e) {
-      const data = this._dataFor(cx, cy, cz)
-      e = {
-        data,
-        cells: data ? buildStairCells(data, cx, cy, cz) : null,
-        revealed: new Uint8Array(CHUNK * CHUNK),
-      }
+      e = { cx, cy, cz, hydrated: false, data: null, cells: null, revealed: new Uint8Array(CHUNK * CHUNK) }
       this.chunks.set(key, e)
     }
+    if (!e.hydrated) {
+      e.data = this._dataFor(cx, cy, cz)
+      e.cells = e.data ? buildStairCells(e.data, cx, cy, cz) : null
+      e.hydrated = true
+    }
     return e
+  }
+
+  // Unpin ChunkData outside the retention window once per chunk/floor change.
+  // Reveal masks are never dropped; a later query re-hydrates deterministically.
+  _releaseFarData(pcx, pcy, pcz) {
+    if (pcx === this._pinCX && pcz === this._pinCZ && pcy === this._pinCY) return
+    this._pinCX = pcx
+    this._pinCZ = pcz
+    this._pinCY = pcy
+    for (const e of this.chunks.values()) {
+      if (!e.hydrated) continue
+      const far =
+        Math.max(Math.abs(e.cx - pcx), Math.abs(e.cz - pcz)) > KEEP_DATA_CHUNKS ||
+        Math.abs(e.cy - pcy) > KEEP_DATA_FLOORS
+      if (!far) continue
+      e.data = null
+      e.cells = null
+      e.hydrated = false
+    }
   }
 
   // The exact ChunkData the player walked through: prefer the live (loaded)

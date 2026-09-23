@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { describe, expect, it, vi } from 'vitest'
 import { DeferredRenderer } from '../DeferredRenderer.js'
+import { SPEC_REACH } from '../../world/constants.js'
 
 function makeRenderer(width = 320, height = 180, pixelRatio = 1) {
   const size = { width, height, pixelRatio }
@@ -102,7 +103,8 @@ describe('DeferredRenderer lamp influence-frustum culling', () => {
     setSourceLamp(deferred, 0, new THREE.Vector3(25, 0, -10), [1, 1, 1, 1])
     const lamp = deferred.lamps.uLampPos.value[0]
     deferred.lamps.uLampCount.value = 1
-    deferred.lightUniforms.uLampRange.value = 1
+    // The lighting pass reaches SPEC_REACH x its range (glossy highlights).
+    deferred.lightUniforms.uLampRange.value = 1 / SPEC_REACH
     deferred.shadowUniforms.uLampRange.value = 1
     deferred.volUniforms.uLampRange.value = 20
 
@@ -130,7 +132,9 @@ describe('DeferredRenderer lamp influence-frustum culling', () => {
 
   it('uses the visible count for pass skips and restores a source lamp after a camera turn', () => {
     const deferred = makeDeferred()
-    const sourcePosition = new THREE.Vector3(30, 0, 0)
+    // Far enough to the side that even the glossy-highlight reach
+    // (LIGHT_RANGE x SPEC_REACH) cannot touch the initial view.
+    const sourcePosition = new THREE.Vector3(60, 0, 0)
     setSourceLamp(deferred, 0, sourcePosition, [0.8, 0.7, 0.6, 0.5], 0.9)
     deferred.lamps.uLampCount.value = 1
     const sourcePositionRef = deferred.lamps.uLampPos.value[0]
@@ -170,7 +174,7 @@ describe('DeferredRenderer lamp influence-frustum culling', () => {
     expect(clear).not.toHaveBeenCalledWith(deferred.volRT, 0x000000)
     expect(deferred.lamps.uLampCount.value).toBe(1)
     expect(deferred.lamps.uLampPos.value[0]).toBe(sourcePositionRef)
-    expect(deferred.lamps.uLampPos.value[0].toArray()).toEqual([30, 0, 0])
+    expect(deferred.lamps.uLampPos.value[0].toArray()).toEqual([60, 0, 0])
     expect(deferred.lamps.uLampChar.value[0].toArray()).toEqual([0.8, 0.7, 0.6, 0.5])
 
     deferred.dispose()

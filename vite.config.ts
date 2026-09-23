@@ -26,10 +26,22 @@ function editorRoute(): Plugin {
 export default defineConfig({
   plugins: [editorRoute()],
   build: {
-    rollupOptions: {
+    // The isolated three.js vendor chunk is ~610 kB minified on its own; the
+    // limit sits just above it so the warning still flags app-code growth.
+    chunkSizeWarningLimit: 650,
+    rolldownOptions: {
       input: {
         main: resolve(__dirname, 'index.html'),
         editor: resolve(__dirname, 'editor.html'),
+      },
+      output: {
+        // Three.js is ~half of the shared payload and changes only on a
+        // dependency bump. A dedicated vendor chunk keeps it browser-cached
+        // across game/editor deploys instead of re-downloading it with every
+        // world-gen change folded into the same file.
+        codeSplitting: {
+          groups: [{ name: 'three', test: /[\\/]node_modules[\\/]three[\\/]/ }],
+        },
       },
     },
   },

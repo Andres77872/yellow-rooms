@@ -156,18 +156,24 @@ export class LightTool {
     this._f(lit, 'lamp intensity', L.uLampIntensity, 0, 6, 0.05)
     // wrap + range feed lighting, volumetrics AND the shadow weight, so edit all
     // so the shadow mask stays contribution-matched to the lit pass while tuning.
-    this._fMulti(lit, 'lamp wrap', [L.uLampWrap, S.uLampWrap], 0, 1, 0.01)
+    this._f(lit, 'lamp wrap', L.uLampWrap, 0, 1, 0.01) // shadow pass shares it
     this._fMulti(lit, 'lamp range', [L.uLampRange, V.uLampRange, S.uLampRange], 1, 40, 0.5, 1)
-    this._c(lit, 'lamp color', [L.uLampColor, V.uLampColor], PANEL_COLOR)
-    this._c(lit, 'ambient sky', [L.uAmbSky], AMBIENT_SKY)
-    this._c(lit, 'ambient ground', [L.uAmbGround], AMBIENT_GROUND)
+    this._c(lit, 'lamp color', [L.uLampColor], PANEL_COLOR, 'panel') // volumetrics share it
+    this._c(lit, 'ambient sky', [L.uAmbSky], AMBIENT_SKY, 'ambientSky')
+    this._c(lit, 'ambient ground', [L.uAmbGround], AMBIENT_GROUND, 'ambientGround')
     this._f(lit, 'rim', L.uRim, 0, 1, 0.01)
-    this._c(lit, 'rim color', [L.uRimColor], RIM_COLOR)
+    this._c(lit, 'rim color', [L.uRimColor], RIM_COLOR, 'rim')
     this._c(lit, 'entity rim', [L.uEntityRim], ENTITY_RIM)
+    // Semi-realistic anime terms (lighting.js): painted terminator edge,
+    // one-bounce fill and the gloss-scaled lamp highlight.
+    this._f(lit, 'terminator', L.uTermStrength, 0, 1.5, 0.01)
+    this._f(lit, 'bounce', L.uBounce, 0, 0.5, 0.005, 3)
+    this._f(lit, 'spec strength', L.uSpecStrength, 0, 2, 0.01)
+    this._f(lit, 'spec power', L.uSpecPower, 4, 256, 1, 0)
     this._f(lit, 'shadow thickness', S.uShadowThickness, 0, 3, 0.05)
     this._f(lit, 'shadow strength', L.uShadowStrength, 0, 1, 0.01)
     this._f(lit, 'shadow soften', d.shadowBlurUniforms.uDepthSigma, 0.05, 2, 0.01)
-    this._c(lit, 'fog color', [L.uFogColor], FOG_COLOR)
+    this._c(lit, 'fog color', [L.uFogColor], FOG_COLOR, 'fog')
     this._f(lit, 'fog density', L.uFogDensity, 0, 0.1, 0.001, 3)
 
     // --- Flashlight -----------------------------------------------------
@@ -194,6 +200,9 @@ export class LightTool {
     this._f(vb, 'vol max dist', V.uMaxDist, 5, 120, 1, 0)
     this._f(vb, 'vol intensity', d.compositeUniforms.uVolIntensity, 0, 3, 0.05)
     this._f(vb, 'bloom intensity', d.compositeUniforms.uBloomIntensity, 0, 4, 0.05)
+    this._f(vb, 'bloom wide', d.compositeUniforms.uBloomWide, 0, 3, 0.05)
+    this._f(vb, 'bloom threshold', d.bloomPreUniforms.uThreshold, 0, 4, 0.05)
+    this._f(vb, 'bloom surface', d.bloomPreUniforms.uSurface, 0, 1, 0.01)
 
     // --- Outline --------------------------------------------------------
     const ol = section('outline')
@@ -208,6 +217,8 @@ export class LightTool {
     this._f(ol, 'fade near', O.uFadeNear, 0, 1, 0.005, 3)
     this._f(ol, 'fade far', O.uFadeFar, 0, 1, 0.005, 3)
     this._c(ol, 'ink color', [O.uInk], OUTLINE_INK)
+    this._f(ol, 'ink tint', O.uInkTint, 0, 1, 0.01)
+    this._f(ol, 'ink opacity', O.uInkOpacity, 0, 1, 0.01)
 
     // --- Grade (needs freeze) ------------------------------------------
     const gr = section('grade (freeze sim)')
@@ -215,7 +226,8 @@ export class LightTool {
     const G = d.grade
     this._f(gr, 'exposure', G.exposure, 0.2, 2, 0.01)
     this._f(gr, 'saturation', G.sat, 0, 2, 0.01)
-    this._f(gr, 'levels', G.levels, 2, 32, 1, 0)
+    this._f(gr, 'levels', G.levels, 2, 64, 1, 0)
+    this._f(gr, 'shadow lift', G.lift, 0, 0.1, 0.001, 3)
     this._fVec(gr, 'tint R', G.tint.value, 'x', 0, 2, 0.01)
     this._fVec(gr, 'tint G', G.tint.value, 'y', 0, 2, 0.01)
     this._fVec(gr, 'tint B', G.tint.value, 'z', 0, 2, 0.01)
@@ -252,10 +264,18 @@ export class LightTool {
     this._export.push({ label, get: () => vec[comp] })
   }
 
-  _c(sec, label, us, defHex) {
-    const w = colorPicker({ label, value: defHex, onInput: (h) => this._setColors(us, h) })
+  // `def` is the palette key whose ACTIVE family value is the default (reset
+  // must not stamp Office colors over a sewer run); `fallback` covers a
+  // renderer that has not received a palette yet.
+  _c(sec, label, us, fallback, def) {
+    const defHex = () => this.d.palette?.[def] ?? fallback
+    const w = colorPicker({ label, value: defHex(), onInput: (h) => this._setColors(us, h) })
     sec.body.appendChild(w.el)
-    this._reset.push(() => (this._setColors(us, defHex), w.set(defHex)))
+    this._reset.push(() => {
+      const hex = defHex()
+      this._setColors(us, hex)
+      w.set(hex)
+    })
     this._export.push({ label, get: () => '#' + us[0].value.getHexString() })
   }
 

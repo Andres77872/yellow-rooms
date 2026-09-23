@@ -149,6 +149,7 @@ vi.mock('../../audio/AudioBus.js', () => ({
   AudioBus: class {
     constructor() {
       this.setVolume = vi.fn()
+      this.silence = vi.fn()
       this.resetLevel = vi.fn()
       this.start = vi.fn()
       this.setTension = vi.fn()

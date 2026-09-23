@@ -9,10 +9,9 @@ import {
   ENEMY_STAIR_SPEED,
   GROUND_SNAP,
   FLOOR_SWITCH_Y,
-  PLAYER_R,
   layerY,
 } from './constants.js'
-import { moveAndCollide, hasLineOfSight } from '../player/collision.js'
+import { moveAndCollide, cellBlocked, hasWalkableCorridor } from '../player/collision.js'
 import { groundHeightAt } from '../player/ground.js'
 
 // Grid A* over the thin-wall model, shared by every enemy AI. Walls live on cell
@@ -55,15 +54,9 @@ export function edgeOpen(cm, gx, gz, cy, dir) {
   }
 }
 
-// May a graph node occupy cell (gx,gz) on layer cy? Columns block, and so do
-// stair run cells (the ramp) and hole cells (open slab) — the ONE walkability
-// rule shared by the expansion, the retarget, steering and the debug flood.
-export function cellBlocked(cm, gx, gz, cy) {
-  if (cm.columnAt(gx, gz, cy)) return true
-  if (cm.floorHoleAt?.(gx, gz, cy)) return true
-  const s = cm.stairAt(gx, gz, cy)
-  return !!s && (s.part === 'run' || s.part === 'hole')
-}
+// May a graph node occupy cell (gx,gz) on layer cy? Defined beside the
+// walk-mode line test (collision.js) so both share the ONE walkability rule.
+export { cellBlocked }
 
 // Closure form for floodReachable()/tests: may you step from cell A to 4-adjacent
 // cell B on layer cy? One validator, no drift.
@@ -576,22 +569,6 @@ function reconstruct(targetLocal, out, collapse) {
 const _follow = { i: 0, movedSq: 0, done: false, stair: false }
 const _wp = { x: 0, y: 0, z: 0, set(x, y, z) { this.x = x; this.y = y; this.z = z; return this } }
 
-// Is the straight segment walkable for a body of PLAYER_R half-width (not just
-// a zero-width ray)? Centre ray plus two parallel rays offset by the radius.
-function corridorClear(cm, x0, z0, x1, z1, cy) {
-  const dx = x1 - x0
-  const dz = z1 - z0
-  const d = Math.hypot(dx, dz)
-  if (d < 1e-4) return true
-  const px = (-dz / d) * PLAYER_R
-  const pz = (dx / d) * PLAYER_R
-  return (
-    hasLineOfSight(cm, x0, z0, x1, z1, cy) &&
-    hasLineOfSight(cm, x0 + px, z0 + pz, x1 + px, z1 + pz, cy) &&
-    hasLineOfSight(cm, x0 - px, z0 - pz, x1 - px, z1 - pz, cy)
-  )
-}
-
 export function followPath(cm, ent, path, i, step, opts = {}) {
   const pos = ent.pos
   const n = path ? ((path.length / 3) | 0) : 0
@@ -633,7 +610,7 @@ export function followPath(cm, ent, path, i, step, opts = {}) {
   }
   for (let j = jMax; j > i; j--) {
     cm.cellCenter(path[j * 3], path[j * 3 + 1], path[j * 3 + 2], _wp)
-    if (corridorClear(cm, pos.x, pos.z, _wp.x, _wp.z, ent.cy)) {
+    if (hasWalkableCorridor(cm, pos.x, pos.z, _wp.x, _wp.z, ent.cy)) {
       i = j
       break
     }

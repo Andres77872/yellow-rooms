@@ -203,7 +203,7 @@ export class DebugMode {
     e.deferred.setOutline(this._savedOutline)
     e.deferred.scene = e.scene
     e.deferred.camera = e.camera
-    e.lightField.reset()
+    e._refreshLamps()
     e.controller.inputEnabled = true
     e.stalker.recordCandidates = false
     // Reset AI-tab toggles that write to persistent objects, else they leak into
@@ -245,6 +245,15 @@ export class DebugMode {
   enterLightRoom(on) {
     const e = this.engine
     if (on) {
+      if (this.lightRoomActive) return
+      // LightRoom.applyLamps writes its own intensity/range into the shared
+      // lighting uniforms every frame; snapshot the live values so leaving the
+      // room cannot leak the room's tuning into gameplay.
+      const L = e.deferred.lightUniforms
+      this._roomSaved = {
+        intensity: L.uLampIntensity.value,
+        volRange: e.deferred.volUniforms?.uLampRange.value,
+      }
       if (!this.lightRoom) this.lightRoom = new LightRoom(e)
       this.lightRoom.config = this.lightRoomCfg
       this.lightRoom.rebuildLamps()
@@ -258,13 +267,19 @@ export class DebugMode {
       addEventListener('pointerup', this._onRoomUp)
       c.addEventListener('wheel', this._onRoomWheel, { passive: false })
     } else {
+      if (!this.lightRoomActive) return
       this.lightRoomActive = false
+      if (this._roomSaved) {
+        e.deferred.lightUniforms.uLampIntensity.value = this._roomSaved.intensity
+        if (e.deferred.volUniforms) e.deferred.volUniforms.uLampRange.value = this._roomSaved.volRange
+        this._roomSaved = null
+      }
       const c = e.renderer.domElement
       c.removeEventListener('pointerdown', this._onRoomDown)
       removeEventListener('pointermove', this._onRoomMove)
       removeEventListener('pointerup', this._onRoomUp)
       c.removeEventListener('wheel', this._onRoomWheel)
-      e.lightField.reset()
+      e._refreshLamps()
     }
   }
 

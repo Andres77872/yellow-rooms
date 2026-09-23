@@ -4,6 +4,12 @@ import { VIEW_RECON } from './common.js'
 // SAME exp^2 fog transmittance the lighting pass applies to surfaces (plus a
 // wide smoothstep safety envelope), so lines die exactly when the surface
 // melts into the haze — never ghost-wireframes floating on fog.
+//
+// World lines are COLOUR-TRACED (iro-tore): the ink is a darkened, more
+// saturated version of the surface's own albedo, blended with the flat ink by
+// uInkTint and drawn at uInkOpacity, so line art sits inside the painting
+// instead of caging it in black. Thresholds are soft (smoothstep) so lines
+// anti-alias and thin out on weak edges. Entities keep full flat ink.
 export const OUTLINE_FRAG = /* glsl */ `
   precision highp float;
   in vec2 vUv;
@@ -18,6 +24,8 @@ export const OUTLINE_FRAG = /* glsl */ `
   uniform vec2 uTexel;
   uniform float uThickness, uDepthThresh, uNormalThresh, uFadeNear, uFadeFar;
   uniform vec3 uInk;
+  uniform float uInkTint;        // 0 = flat ink, 1 = ink traced from the albedo
+  uniform float uInkOpacity;     // world line strength (entities always 1)
   ${VIEW_RECON}
   // Normalized [0,1] linear depth. viewZAt is the shared symmetric-perspective
   // reconstruction (two MADs and a divide); the Sobel used to run a full mat4
@@ -50,9 +58,19 @@ export const OUTLINE_FRAG = /* glsl */ `
     float fogT = exp(-uFogDensity * uFogDensity * rdist * rdist);
     // Entities (matID 2) keep a crisp ink silhouette at ANY distance — a black
     // outline lingering in the haze long after the body melts is the point.
-    float matID = texture(tColor, vUv).a;
-    float fade = (matID > 1.5 && matID < 2.5) ? 1.0 : distFade * fogT;
-    float edge = clamp(step(uDepthThresh, dd) + step(uNormalThresh, nd), 0.0, 1.0) * fade;
-    outColor = vec4(mix(base, uInk, edge), 1.0);
+    vec4 g = texture(tColor, vUv);
+    bool entity = g.a > 1.5 && g.a < 2.5;
+    float fade = entity ? 1.0 : distFade * fogT * uInkOpacity;
+    float edge = clamp(
+      smoothstep(uDepthThresh * 0.6, uDepthThresh * 1.4, dd) +
+      smoothstep(uNormalThresh * 0.7, uNormalThresh * 1.3, nd), 0.0, 1.0) * fade;
+    // Traced ink: the albedo (clamped — emissive albedo is HDR) darkened and
+    // pushed ~40% more saturated, never lighter than the flat ink's intent.
+    vec3 alb = min(g.rgb, vec3(1.0));
+    vec3 traced = alb * 0.3;
+    float ty = dot(traced, vec3(0.2126, 0.7152, 0.0722));
+    traced = max(mix(vec3(ty), traced, 1.4), 0.0);
+    vec3 ink = entity ? uInk : mix(uInk, traced, uInkTint);
+    outColor = vec4(mix(base, ink, edge), 1.0);
   }
 `

@@ -80,7 +80,9 @@ const WIRE = [
   ['invY', 'change', 'invertY', (el) => el.checked],
   ['invX', 'change', 'invertX', (el) => el.checked],
   ['preset', 'change', 'preset', (el) => el.value],
-  ['rscale', 'input', 'renderScale', (el) => parseFloat(el.value)],
+  // Commit on release: every render-scale step reallocates the complete
+  // deferred target set, so dragging only previews the label (see below).
+  ['rscale', 'change', 'renderScale', (el) => parseFloat(el.value)],
   ['worldDetail', 'change', 'worldDetail', (el) => el.value],
   ['ao', 'change', 'aoQuality', (el) => el.value],
   ['shadow', 'change', 'shadowQuality', (el) => el.value],
@@ -104,6 +106,9 @@ export class SettingsBlock {
     for (const [k, evt, setting, read] of WIRE) {
       this.el[k].addEventListener(evt, () => onSetting(setting, read(this.el[k])))
     }
+    this.el.rscale.addEventListener('input', () => {
+      this.el.rscaleVal.value = `${Math.round(parseFloat(this.el.rscale.value) * 100)}%`
+    })
     this.el.advToggle.addEventListener('click', () => this.toggleAdvanced())
     this.el.reset.addEventListener('click', () => onReset?.())
   }

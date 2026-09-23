@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { moveAndCollide, hasLineOfSight } from '../../player/collision.js'
+import {
+  moveAndCollide,
+  hasLineOfSight,
+  hasWalkableCorridor,
+  hasWalkableLine,
+} from '../../player/collision.js'
 import { ChunkData } from '../ChunkData.js'
 import {
   CELL,
@@ -10,6 +15,7 @@ import {
   WALL_COL_HALF,
 } from '../constants.js'
 import {
+  COLUMN_FURNITURE,
   COLUMN_MONUMENTAL,
   PASSAGE_WALL,
   WALL_RAIL,
@@ -153,6 +159,49 @@ describe('collision: line of sight', () => {
       data.setV(7, 7, 1)
       expect(hasLineOfSight(cm, 2.5 * CELL, z, 8.5 * CELL, z)).toBe(false)
     }
+  })
+})
+
+// Enemies used to beeline whenever they could SEE the player, grinding against
+// rails, observation windows and desks that sight passes but bodies cannot.
+describe('walkable line (enemy beeline gate)', () => {
+  const withStairs = (cm) => ({ ...cm, stairAt: () => null })
+
+  it('is blocked by see-through barriers that still block movement', () => {
+    for (const feature of [WALL_WINDOW, WALL_RAIL]) {
+      const data = new ChunkData(0, 0, 0, 0)
+      data.setV(5, 7, 1, PASSAGE_WALL, feature)
+      const cm = withStairs(mockCM(data))
+      const z = 7.5 * CELL
+      expect(hasLineOfSight(cm, 2.5 * CELL, z, 8.5 * CELL, z)).toBe(true)
+      expect(hasWalkableLine(cm, 2.5 * CELL, z, 8.5 * CELL, z)).toBe(false)
+    }
+  })
+
+  it('is blocked by furniture cells that low sight lines pass over', () => {
+    const data = new ChunkData(0, 0, 0, 0)
+    data.setCol(5, 7, COLUMN_FURNITURE)
+    const base = mockCM(data)
+    // Mirror ChunkManager: furniture carries no square occluder half.
+    const cm = withStairs({ ...base, columnHalfAt: () => 0 })
+    const z = 7.5 * CELL
+    expect(hasLineOfSight(cm, 2.5 * CELL, z, 8.5 * CELL, z)).toBe(true)
+    expect(hasWalkableLine(cm, 2.5 * CELL, z, 8.5 * CELL, z)).toBe(false)
+  })
+
+  it('checks the full body width, not just the centre ray', () => {
+    const data = new ChunkData(0, 0, 0, 0)
+    data.setCol(5, 8, COLUMN_FURNITURE)
+    const cm = withStairs(mockCM(data))
+    // Centre ray runs just inside row 7, grazing row 8 within PLAYER_R.
+    const z = 8 * CELL - PLAYER_R * 0.5
+    expect(hasWalkableLine(cm, 2.5 * CELL, z, 8.5 * CELL, z)).toBe(true)
+    expect(hasWalkableCorridor(cm, 2.5 * CELL, z, 8.5 * CELL, z)).toBe(false)
+  })
+
+  it('is clear across open floor', () => {
+    const cm = withStairs(mockCM(new ChunkData(0, 0, 0, 0)))
+    expect(hasWalkableCorridor(cm, 3, 3, 30, 12)).toBe(true)
   })
 })
 

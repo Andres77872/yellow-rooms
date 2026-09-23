@@ -5,14 +5,17 @@ export const COMPOSITE_FRAG = /* glsl */ `
   out vec4 outColor;
   uniform sampler2D tInput;
   uniform sampler2D tVol;
-  uniform sampler2D tBloom;
+  uniform sampler2D tBloom;      // tight halo (half res)
+  uniform sampler2D tBloomWide;  // wide veil (quarter res)
   uniform float uVolIntensity;
   uniform float uBloomIntensity;
+  uniform float uBloomWide;
   void main(){
     outColor = vec4(
       texture(tInput, vUv).rgb
         + texture(tVol, vUv).rgb * uVolIntensity
-        + texture(tBloom, vUv).rgb * uBloomIntensity,
+        + texture(tBloom, vUv).rgb * uBloomIntensity
+        + texture(tBloomWide, vUv).rgb * uBloomWide,
       1.0);
   }
 `

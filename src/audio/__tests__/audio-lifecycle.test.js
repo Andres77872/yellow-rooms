@@ -28,7 +28,7 @@ function audioContext() {
     const n = {
       connect: vi.fn(), disconnect: vi.fn(),
       gain: param(), frequency: param(), detune: param(), Q: param(),
-      threshold: param(), ratio: param(), attack: param(), release: param(),
+      threshold: param(), knee: param(), ratio: param(), attack: param(), release: param(),
       playbackRate: param(), pan: param(),
     }
     if (source) {
@@ -68,7 +68,7 @@ describe('AudioBus lifetime', () => {
     const bus = new AudioBus({ add: vi.fn() })
     await bus.start()
     const sources = shared.context.nodes.filter((node) => node.start)
-    expect(sources).toHaveLength(11)
+    expect(sources).toHaveLength(19)
     expect(sources.every((node) => node.start.mock.calls.length === 1)).toBe(true)
 
     bus.dispose()
@@ -122,5 +122,52 @@ describe('AudioBus lifetime', () => {
     expect(bus._nodes.size).toBe(0)
     expect(pending.every((node) => node.onended === null)).toBe(true)
     expect(completed.disconnect).toHaveBeenCalledOnce()
+  })
+
+  it('retargets a volume change made during the start fade-in instead of losing it', async () => {
+    const bus = new AudioBus({ add: vi.fn() })
+    await bus.start()
+    const gain = bus.master.gain
+    bus.setVolume(0)
+    expect(gain.cancelScheduledValues).toHaveBeenCalled()
+    expect(gain.setTargetAtTime).toHaveBeenLastCalledWith(0, 0, 0.1)
+  })
+
+  it('silences the mix and fades back in at the current volume on the next start', async () => {
+    const bus = new AudioBus({ add: vi.fn() })
+    await bus.start()
+    bus.setVolume(0.5)
+    bus.silence()
+    expect(bus.master.gain.setTargetAtTime).toHaveBeenLastCalledWith(0, 0, 0.3)
+    bus.setVolume(0.7) // stays muted while silenced
+    expect(bus.master.gain.setTargetAtTime).toHaveBeenLastCalledWith(0, 0, 0.1)
+    await bus.start()
+    expect(bus.master.gain.setTargetAtTime).toHaveBeenLastCalledWith(0.7, 0, 0.4)
+  })
+
+  it('re-resumes a suspended context on later starts and drops one-shots while stalled', async () => {
+    const bus = new AudioBus({ add: vi.fn() })
+    await bus.start()
+    shared.context.state = 'interrupted'
+    const before = bus._nodes.size
+    bus._noiseVoice({ vol: 0.1, dur: 0.2 })
+    bus._ringVoice({ freqs: [80], vols: [0.1], dur: 0.2 })
+    bus._heartbeat()
+    expect(bus._nodes.size).toBe(before)
+    expect(bus.voices).toBe(0)
+
+    await bus.start()
+    expect(shared.context.resume).toHaveBeenCalledTimes(2)
+  })
+
+  it('spends voice-budget slots on heartbeat thumps', async () => {
+    const bus = new AudioBus({ add: vi.fn() })
+    await bus.start()
+    bus._heartbeat()
+    expect(bus.voices).toBe(2)
+    bus.voices = 24
+    const before = bus._nodes.size
+    bus._heartbeat()
+    expect(bus._nodes.size).toBe(before)
   })
 })

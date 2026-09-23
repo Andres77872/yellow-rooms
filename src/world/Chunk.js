@@ -94,6 +94,8 @@ function structureApertureRegions(
 // the THREE meshes that render it. Generation and meshing are now separate
 // modules; this class just owns them and the per-chunk lifetime. v8: a chunk
 // is one floor slab of the layered world, keyed (cx, cy, cz).
+const modelCount = (models) => models?.geometries?.size ?? 0
+
 export class Chunk {
   constructor(cx, cy, cz, seed, materials, geom, exitCell, config, clearings, models = null) {
     this.cx = cx
@@ -102,6 +104,10 @@ export class Chunk {
     this._materials = materials
     this._geom = geom
     this._models = models
+    // How many GLB kinds the furniture batch was built with. The library is
+    // one mutable object filled in place when the fetch resolves, so identity
+    // cannot tell a box-batch chunk from an upgraded one; this count can.
+    this.furnitureModelCount = modelCount(models)
     this.data = generateChunk(seed, cx, cy, cz, config, exitCell, clearings)
 
     const mesh = buildChunkMeshes(
@@ -184,6 +190,7 @@ export class Chunk {
   // for instanced GLBs without touching generation or the other batches.
   refreshFurniture(models = this._models) {
     this._models = models
+    this.furnitureModelCount = modelCount(models)
     const oldPart = this.renderParts.furniture
     const nextPart = buildFurniturePart(this.data, this._geom, this._materials, this._models)
     disposeFurniturePart(oldPart) // also detaches from this.group
@@ -266,6 +273,10 @@ export class Chunk {
   }
 
   dispose() {
+    // _mesh.dispose() only knows the build-time furniture part; after a model
+    // upgrade the live batch is a different node whose instance buffers would
+    // otherwise never be released.
+    disposeFurniturePart(this.renderParts.furniture)
     this._mesh.dispose()
   }
 }

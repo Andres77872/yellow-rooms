@@ -24,13 +24,13 @@ vi.mock('../../player/collision.js', () => ({
     pos.z += dz
     return { x: false, z: false }
   }),
-  hasLineOfSight: vi.fn(() => true),
+  hasWalkableCorridor: vi.fn(() => true),
 }))
 
 import { Pursuer } from '../Pursuer.js'
 import { sightGate, findHiddenSpot } from '../sense.js'
 import { findPath, followPath } from '../../world/pathfind.js'
-import { moveAndCollide, hasLineOfSight } from '../../player/collision.js'
+import { moveAndCollide, hasWalkableCorridor } from '../../player/collision.js'
 
 const cm = { columnAt: () => false, stairAt: () => null, isBlocked: () => false }
 const scene = { add() {} }
@@ -52,7 +52,7 @@ beforeEach(() => {
     ent.pos.x += step
     return { i: i + 1, movedSq: step * step, done: false, stair: false }
   })
-  hasLineOfSight.mockReturnValue(true)
+  hasWalkableCorridor.mockReturnValue(true)
   moveAndCollide.mockImplementation((c, pos, dx, dz) => {
     pos.x += dx
     pos.z += dz
@@ -147,7 +147,7 @@ describe('Pursuer class', () => {
     const player = { x: 0, z: 0 }
 
     p.pos.set(20, 0, 0)
-    hasLineOfSight.mockReturnValue(true)
+    hasWalkableCorridor.mockReturnValue(true)
     const before = dist(p, player)
     const r = p.update(0.1, player, camera)
     expect(dist(p, player)).toBeLessThan(before) // closed the gap
@@ -166,7 +166,7 @@ describe('Pursuer class', () => {
     p.active = true
     const player = { x: 0, z: 0 }
     p.pos.set(30, 0, 0)
-    hasLineOfSight.mockReturnValue(false)
+    hasWalkableCorridor.mockReturnValue(false)
 
     findPath.mockReturnValue([10, 0, 0, 5, 0, 0, 0, 0, 0]) // a real route (triples)
     let x0 = p.pos.x
@@ -234,7 +234,7 @@ describe('Pursuer class', () => {
     p.cy = 0
     const player = { x: 0, y: LAYER_H, z: 0 } // one floor up
     p.pos.set(10, 0, 0)
-    hasLineOfSight.mockReturnValue(true) // even with 2D LOS true...
+    hasWalkableCorridor.mockReturnValue(true) // even with 2D LOS true...
     findPath.mockReturnValue([3, 0, 0, 3, 0, 1]) // route via a stair
     p.update(0.1, player, camera, { playerCy: 1 })
     // ...a cross-floor player must NOT be beelined at through the slab:
@@ -253,7 +253,7 @@ describe('Pursuer class', () => {
     p.cy = 0
     const player = { x: 0, y: LAYER_H, z: 0 }
     p.pos.set(10, 0, 0)
-    hasLineOfSight.mockReturnValue(true)
+    hasWalkableCorridor.mockReturnValue(true)
     findPath.mockReturnValue(null)
     const x0 = p.pos.x
     p.update(0.1, player, camera, { playerCy: 1 })
@@ -267,7 +267,7 @@ describe('Pursuer class', () => {
     p.active = true
     const player = { x: 0, z: 0 }
     p.pos.set(12, 0, 0)
-    hasLineOfSight.mockReturnValue(true)
+    hasWalkableCorridor.mockReturnValue(true)
     moveAndCollide.mockImplementation(() => ({ x: true, z: true })) // wall-stuck: no progress
     findHiddenSpot.mockReturnValue({ x: 60, z: 0, cy: 0 })
 

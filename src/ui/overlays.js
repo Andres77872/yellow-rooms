@@ -283,7 +283,8 @@ export class UI {
 
   updateHud(state, exit) {
     const c = this._hudCache
-    // Dedupe DOM writes: text/aria/width only change when the VALUE changes.
+    // Dedupe DOM writes: text/aria/width/style only change when the VALUE
+    // changes. (classList.toggle with an unchanged force is already a no-op.)
     const setText = (key, el, text) => {
       if (c[key] === text) return
       c[key] = text
@@ -296,6 +297,11 @@ export class UI {
       c[key] = pct
       el.style.width = `${pct}%`
       el.setAttribute('aria-valuenow', Math.round(pct))
+    }
+    const setStyle = (key, el, prop, value) => {
+      if (c[key] === value) return
+      c[key] = value
+      el.style[prop] = value
     }
 
     setText('level', this.el.level, `LEVEL ${state.level}`)
@@ -339,11 +345,16 @@ export class UI {
       // spot a slab away reads as a bug. The dimmed compass + a ▼/▲ floor
       // count tell the player to find stairs.
       const df = exit.floorDelta ?? 0
-      this.el.compass.style.opacity = df === 0 ? '0.85' : '0.45'
+      setStyle('compassOp', this.el.compass, 'opacity', df === 0 ? '0.85' : '0.45')
       // relAngle is CCW-positive in world space (left of the view is +), but
       // CSS rotate() is clockwise-positive — negate or left/right come out
-      // mirrored.
-      this.el.compassArrow.style.transform = `rotate(${-exit.relAngle}rad)`
+      // mirrored. Millirad precision keeps a still player from rewriting it.
+      setStyle(
+        'compassRot',
+        this.el.compassArrow,
+        'transform',
+        `rotate(${(-exit.relAngle).toFixed(3)}rad)`
+      )
       setText(
         'dist',
         this.el.dist,
@@ -352,7 +363,7 @@ export class UI {
           : `${Math.round(exit.dist)}m ${df < 0 ? '▼' : '▲'}${Math.abs(df)}`
       )
     } else {
-      this.el.compass.style.opacity = '0.25'
+      setStyle('compassOp', this.el.compass, 'opacity', '0.25')
       setText('dist', this.el.dist, '—')
     }
   }

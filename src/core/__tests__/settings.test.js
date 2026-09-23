@@ -41,6 +41,18 @@ describe('Settings', () => {
     expect(saved(store).invertY).toBe(true)
   })
 
+  it('setMany coerces every key and persists once', () => {
+    const store = stubStorage()
+    const s = new Settings()
+    const setItem = vi.spyOn(globalThis.localStorage, 'setItem')
+    s.setMany({ volume: 7, invertX: true, renderScale: 0.1 })
+    expect(setItem).toHaveBeenCalledOnce()
+    expect(s.get('volume')).toBe(1)
+    expect(s.get('invertX')).toBe(true)
+    expect(s.get('renderScale')).toBe(0.5)
+    expect(saved(store).invertX).toBe(true)
+  })
+
   it('survives a corrupt blob', () => {
     vi.stubGlobal('localStorage', {
       getItem: () => '{not json',

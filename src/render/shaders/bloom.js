@@ -1,4 +1,4 @@
-// --- Emissive bloom: selective by matID (only lamps/exit), blurred ---------
+// --- Bloom: emissives in full + the soft-kneed HDR excess of lit surfaces ---
 export const BLOOM_PREFILTER_FRAG = /* glsl */ `
   precision highp float;
   in vec2 vUv;
@@ -6,15 +6,26 @@ export const BLOOM_PREFILTER_FRAG = /* glsl */ `
   uniform sampler2D tLit;
   uniform sampler2D tColor;
   uniform sampler2D tDepth;
+  uniform float uThreshold;   // HDR level where lit surfaces start to glow
+  uniform float uKnee;        // soft-knee width around the threshold
+  uniform float uSurface;     // weight of the lit-surface excess vs emissives
   void main(){
     // The G-buffer clears with alpha=1 (matID 1 == emissive), so uncovered void
     // pixels would wrongly bloom the fog color. Gate on depth so only real
-    // emissive geometry (lamps/exit) contributes.
+    // geometry contributes.
     float depth = texture(tDepth, vUv).x;
+    if (depth >= 1.0) { outColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
     float matID = texture(tColor, vUv).a;
     vec3 c = texture(tLit, vUv).rgb;
-    bool emissive = depth < 1.0 && matID > 0.5 && matID < 1.5;
-    outColor = vec4(emissive ? c : vec3(0.0), 1.0);
+    // Emissives (lamps/exit/signs) glow in full; lit surfaces contribute only
+    // their soft-kneed excess over the threshold, so a pool centre or a
+    // flashlit wall halos faintly and mid-tones never haze the frame.
+    if (matID > 0.5 && matID < 1.5) { outColor = vec4(c, 1.0); return; }
+    float peak = max(c.r, max(c.g, c.b));
+    float soft = clamp(peak - uThreshold + uKnee, 0.0, 2.0 * uKnee);
+    soft = soft * soft / (4.0 * uKnee + 1e-4);
+    float w = max(soft, peak - uThreshold) / max(peak, 1e-4);
+    outColor = vec4(c * (w * uSurface), 1.0);
   }
 `
 

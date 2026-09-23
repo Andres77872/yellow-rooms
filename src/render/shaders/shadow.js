@@ -1,4 +1,4 @@
-import { CEL_BAND, IGN, LAMP_ATT, VIEW_PROJ, VIEW_RECON, glslFloat } from './common.js'
+import { CEL_BAND, IGN, LAMP_ATT, LIT_RAMP, VIEW_PROJ, VIEW_RECON, glslFloat } from './common.js'
 import { LIGHT_MAX, SHADOW_STEPS_MAX, SHADOW_BIAS, SHADOW_MAX_DARK } from '../../world/constants.js'
 
 // --- Screen-space lamp shadows (half-res) ----------------------------------
@@ -37,6 +37,7 @@ export const SHADOW_FRAG = /* glsl */ `
   ${VIEW_RECON}
   ${VIEW_PROJ}
   ${CEL_BAND}
+  ${LIT_RAMP}
   float wrapNL(float ndl){ return clamp((ndl + uLampWrap) / (1.0 + uLampWrap), 0.0, 1.0); }
 
   // March the depth buffer from P toward a lamp; return contact-hardened
@@ -82,7 +83,11 @@ export const SHADOW_FRAG = /* glsl */ `
       float d = length(toL);
       if (d > uLampRange) continue;
       float ndl = wrapNL(dot(N, toL / max(d, 1e-4)));
-      float contrib = uLampChar[i].a * band(ndl) * lampAtt(d, uLampRange);
+      // Weight by the fixture's tint LUMINANCE too: the lit pass multiplies
+      // each lamp by its colour-temperature tint (0.72..1.14), so a scalar
+      // mask matches its brightness mix, not each channel exactly.
+      float tintY = dot(uLampChar[i].rgb, vec3(0.2126, 0.7152, 0.0722));
+      float contrib = tintY * uLampChar[i].a * surfaceRamp(ndl, 0.0) * lampAtt(d, uLampRange);
       float vis = 1.0;
       if (contrib > 0.08 && shadowed < uMaxLamps) { vis = march(P, Lv, jitter); shadowed++; }
       wsum += contrib;

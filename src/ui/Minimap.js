@@ -264,8 +264,10 @@ export class Minimap {
     for (let cz = c0z; cz <= c1z; cz++) {
       for (let cx = c0x; cx <= c1x; cx++) {
         const e = store.chunks.get(chunkKey3(cx, floor, cz))
-        if (!e || !e.data) continue
-        for (const l of e.data.lamps) {
+        // Explored-but-far entries release their data; dataAt re-hydrates.
+        const data = e && (e.data ?? store.dataAt?.(cx, floor, cz))
+        if (!data) continue
+        for (const l of data.lamps) {
           if (!l.lit) continue
           const gx = cx * CHUNK + l.lx
           const gz = cz * CHUNK + l.lz

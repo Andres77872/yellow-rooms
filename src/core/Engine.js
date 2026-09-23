@@ -8,11 +8,6 @@ import {
   CHUNK,
   CELL,
   SPAWN_WORLD,
-  PROXIMITY_SLOW_RADIUS,
-  PROXIMITY_SLOW_MAX,
-  STARE_LIMIT_BASE,
-  STARE_SANITY_DRAIN,
-  STARE_RECOVER,
   STALKER_AMBIENT,
   PANEL_GLOW,
   worldToCell,
@@ -49,6 +44,7 @@ import {
   enterImmersive,
 } from './device.js'
 import { DebugOverlay } from './DebugOverlay.js'
+import { isEditableFocused } from './input.js'
 import { LazyDebugMode } from './LazyDebugMode.js'
 import { UI } from '../ui/overlays.js'
 import { TouchControls } from '../ui/TouchControls.js'
@@ -58,6 +54,13 @@ import { hashStr } from '../world/core/hash.js'
 import { worldConfigForFamilyOrOffice } from '../world/mapFamily.js'
 import { MAP_FAMILY_OFFICE } from '../world/mapTypes.js'
 import { createExitPlacement, evaluateExit } from './exitPlacement.js'
+import {
+  proximitySpeedMul,
+  stareLimit,
+  survivalGrade,
+  updateSanity,
+  updateStare,
+} from './survival.js'
 
 // Make color management explicit (it defaults to true in three r0.185). With it
 // on, `new THREE.Color(hex)` already converts the sRGB hex into the linear
@@ -78,6 +81,7 @@ export class Engine {
     this.settings = new Settings()
     this.state = new GameState()
     this.touch = IS_TOUCH
+    this._fx = { vignette: 0, grain: 0, aberration: 0 } // reused survivalGrade output
 
     const renderer = new THREE.WebGLRenderer({
       antialias: false,
@@ -89,14 +93,13 @@ export class Engine {
     // overlays reporting only the final fullscreen pass instead of the frame.
     // Reset explicitly once per engine frame so every pass accumulates.
     renderer.info.autoReset = false
-    renderer.setPixelRatio(
-      computeEffectivePixelRatio(innerWidth, innerHeight, devicePixelRatio, MAX_DPR, 1)
-    )
+    this.renderer = renderer
+    this._renderScale = 1
+    this._applyPixelRatio()
     renderer.setSize(innerWidth, innerHeight)
     renderer.toneMapping = THREE.NoToneMapping
     renderer.setClearColor(FOG_COLOR, 1)
     app.appendChild(renderer.domElement)
-    this.renderer = renderer
 
     const scene = new THREE.Scene()
     // No three.js fog/background: the deferred pass nulls the background during
@@ -149,6 +152,7 @@ export class Engine {
     this.stalker = new Stalker(scene, this.materials, this.geom, this.cm)
     this.pursuer = new Pursuer(scene, this.materials, this.geom, this.cm)
     this.husk = new Husk(scene, this.materials, this.geom, this.cm)
+    this.enemies = [this.stalker, this.pursuer, this.husk]
 
     this.deferred = new DeferredRenderer(renderer, scene, camera)
     this.lightField = new LightField(this.deferred.lamps)
@@ -188,11 +192,6 @@ export class Engine {
         onFlashlight: () => this.controller.toggleFlashlight(),
         onPause: () => this.pause(),
       })
-      // Mobile app-switch / tab-hide: pointer lock never fires here, so pause
-      // off visibility instead.
-      this._listen(document, 'visibilitychange', () => {
-        if (document.hidden) this.pause()
-      })
       // Landscape enforcement: where orientation.lock isn't granted (iOS), a
       // blocking "rotate device" overlay + pause is the fallback.
       this._portraitMq = matchMedia('(orientation: portrait)')
@@ -200,15 +199,34 @@ export class Engine {
       this._checkOrientation()
     }
 
+    // App-switch / tab-hide pauses on every tier. Touch never holds a pointer
+    // lock to lose, and a desktop player whose re-lock was refused is PLAYING
+    // with a free cursor — alt-tabbing then would leave the run unattended.
+    // (visibilitychange bubbles from document to window.)
+    this._listen(globalThis, 'visibilitychange', () => {
+      if (globalThis.document?.hidden) this.pause()
+    })
+    // (Like lock loss, blur is exempt while F2 owns the cursor — clicking into
+    // devtools must not drop a menu under the debug panel.)
+    if (!this.touch) {
+      this._listen(globalThis, 'blur', () => {
+        if (!this.debugMode?.active) this.pause()
+      })
+    }
+
     this.minimap = new Minimap(this.ui.el.minimap)
     // Every consumer of a setting exists by now, so push the stored values in
     // one pass instead of scattering `settings.get` calls through construction.
+    // The panel was populated before the preset expanded over stale stored
+    // advanced keys, so re-read it; the title grade honours NOISE from boot.
     this._applyAllSettings()
+    this.ui.refreshSettings()
+    this._applyFX(0)
 
     // M toggles the minimap in-game and stays in sync with the pause checkbox.
     this._listen(globalThis, 'keydown', (e) => {
-      if (e.code !== 'KeyM' || this.state.phase !== Phase.PLAYING) return
-      if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) return
+      if (e.code !== 'KeyM' || e.repeat || this.state.phase !== Phase.PLAYING) return
+      if (isEditableFocused()) return
       this._applySetting('minimap', !this.settings.get('minimap'))
       this.ui.refreshSettings()
     })
@@ -227,8 +245,8 @@ export class Engine {
         if (e.code !== 'Escape' || this.state.phase !== Phase.PAUSED) return
         // Esc pressed to dismiss a focused pause-menu control (a settings
         // <select> dropdown, a slider blur) must not also resume the game —
-        // the M key gate at the top of this constructor follows the same rule.
-        if (/^(INPUT|TEXTAREA|SELECT)$/.test(globalThis.document?.activeElement?.tagName)) return
+        // the M key gate above follows the same rule.
+        if (isEditableFocused()) return
         if (this.debugMode?.active) return
         if (performance.now() - (this._pauseT ?? 0) < 400) return
         this.resume()
@@ -237,9 +255,13 @@ export class Engine {
       // Esc-initiated unlock, so an early Esc-resume can leave the game PLAYING
       // with the mouse free (dead look, and lock loss can't re-trigger pause
       // because there is no lock to lose). Any click re-captures the pointer.
-      this._listen(globalThis, 'click', () => {
+      this._listen(globalThis, 'click', (e) => {
         if (this.state.phase !== Phase.PLAYING || this.controller.isLocked) return
         if (this.debugMode?.active) return
+        // ENTER/RESUME/TRY AGAIN already requested the lock inside this same
+        // click; the async grant hasn't landed yet, so a second request would
+        // race it (some engines reject the duplicate -> spurious relock hint).
+        if (e?.target?.closest?.('#ui')) return
         this.controller.lock()
       })
     }
@@ -355,15 +377,17 @@ export class Engine {
     else if (k === 'volume') this.audio.setVolume(v)
     else if (k === 'bob') this.controller.setBobEnabled(v)
     else if (k === 'cameraFx') this.controller.setCameraFxEnabled(v)
-    else if (k === 'noise') this._noiseMode = v
+    else if (k === 'noise') {
+      this._noiseMode = v
+      // Outside PLAYING nothing else re-derives the grade (title/pause).
+      if (this.state.phase !== Phase.PLAYING) this._applyFX(0)
+    }
     else if (k === 'outline') this.deferred.setOutline(v)
     else if (k === 'minimap') this.minimap.setVisible(v)
     else if (k === 'preset') {
       // A named preset pins every advanced graphics key; 'custom' pins nothing
       // (the stored advanced values already ARE the truth).
-      if (v !== 'custom') {
-        for (const [gk, gv] of Object.entries(GRAPHICS_PRESETS[v])) this.settings.set(gk, gv)
-      }
+      if (v !== 'custom') this.settings.setMany(GRAPHICS_PRESETS[v])
       this._applyGraphics()
     } else if (GRAPHICS_KEYS.includes(k)) this._applyGraphics()
   }
@@ -375,15 +399,7 @@ export class Engine {
   _applyGraphics() {
     const q = resolveGraphics(this.settings)
     this._renderScale = q.renderScale
-    this.renderer.setPixelRatio(
-      computeEffectivePixelRatio(
-        innerWidth,
-        innerHeight,
-        devicePixelRatio,
-        MAX_DPR,
-        q.renderScale
-      )
-    )
+    this._applyPixelRatio()
     this.deferred.setSize()
     this.deferred.applyQuality(q)
     this.cm.setRenderDetailProfile(q.worldDetail)
@@ -448,6 +464,7 @@ export class Engine {
     const intoTransition = this._pausedFrom === Phase.TRANSITION
     this._pausedFrom = null
     this._setRelock(false) // a fresh lock attempt replaces the stale error state
+    this.audio.start() // re-opens a context suspended while paused (iOS)
     this.state.phase = intoTransition ? Phase.TRANSITION : Phase.PLAYING
     if (intoTransition) this.ui.showTransition(this.state.level + 1)
     else this.ui.showHud()
@@ -479,14 +496,19 @@ export class Engine {
     this.explored.reset() // fresh fog per level/seed (cm.seed/exit/clearings are set above)
     const yaw = Math.atan2(-(this.exitTarget.x - SPAWN), -(this.exitTarget.z - SPAWN))
     this.controller.teleport(SPAWN, SPAWN, 0, yaw)
-    this.stalker.reset(lvl, this.controller.pos)
-    this.pursuer.reset(lvl, this.controller.pos)
-    this.husk.reset(lvl, this.controller.pos)
+    for (const enemy of this.enemies) enemy.reset(lvl, this.controller.pos)
     // Synchronous prewarm behind the title/transition overlay: the whole load
     // ring exists before the player can look, instead of visibly assembling
     // in the first ~0.7s of play.
     cm.prewarm(SPAWN, SPAWN)
-    this.lightField.reset()
+    // Present the new level immediately: a level advance renders in the same
+    // RAF callback, before any _tick() has moved the camera off the old exit or
+    // gathered a lamp set, which drew one unlit frame from the wrong place.
+    this.camera.position.set(SPAWN, EYE_H, SPAWN)
+    this.camera.rotation.set(0, yaw, 0, 'YXZ')
+    this._updateCameraMatrices()
+    this._refreshLamps()
+    this._resetPresentation()
     // resetLevel() clears flashlightOn without the toggle callback firing.
     this.touchControls?.setFlashlight(state.flashlightOn)
   }
@@ -503,12 +525,7 @@ export class Engine {
     // TRANSITION case, losing the lock mid-transition (Esc / alt-tab) leaves the
     // next level in PLAYING with the pointer unlocked and mouse-look dead, with no
     // in-game way to re-lock. Pausing lets the Resume button re-lock via a gesture.
-    if (this.state.phase === Phase.PLAYING || this.state.phase === Phase.TRANSITION) {
-      this._pausedFrom = this.state.phase // resume() must restore TRANSITION, not force PLAYING
-      this._pauseT = performance.now()
-      this.state.phase = Phase.PAUSED
-      this.ui.showPause(this.state)
-    }
+    this.pause()
   }
 
   // A rejected requestPointerLock (Chrome refuses re-locks for ~1.3s after an
@@ -549,6 +566,7 @@ export class Engine {
     this.state.phase = Phase.TITLE
     this._pausedFrom = null
     this.audio.setTension(0)
+    this.audio.silence() // the boot title is silent; so is the one after a run
     this.controller.unlock()
     // The TITLE backdrop writes position/rotation each frame but never fov —
     // quitting mid-sprint must not leave it rendering at the kicked FOV.
@@ -559,8 +577,14 @@ export class Engine {
     this._transitStair = null
     this.cm.updateVisibility(0, null)
     this.lightField.reset()
-    this.deferred.lightUniforms.uFlashOn.value = 0
-    this.deferred.grade.dead.value = 0
+    // The backdrop must not keep the quit frame's low-sanity/stare grade
+    // (heavy vignette, grain, aberration) or frozen enemies standing near the
+    // spawn. Reset the run's survival state first so the grade re-derives the
+    // calm baseline; startRun() resets all of it again anyway.
+    this.state.resetLevel()
+    this.controller.speedMul = 1
+    for (const enemy of this.enemies) enemy.reset(this.state.level, this.controller.pos)
+    this._resetPresentation()
     this.touchControls?.reset()
     this.ui.showTitle()
     this._checkOrientation()
@@ -595,7 +619,7 @@ export class Engine {
     // ChunkManager, visibility, transit, entity, lighting, and Controller state.
     state.resetLevel()
     this._setupLevel()
-    this.deferred.grade.dead.value = 0
+    this.audio.start()
     state.phase = Phase.PLAYING
     this.ui.showHud()
     if (!this.touch) this.controller.lock()
@@ -617,9 +641,33 @@ export class Engine {
     this.state.level++
     this.state.resetLevel()
     this._setupLevel()
-    this.deferred.grade.dead.value = 0
     this.state.phase = Phase.PLAYING
     this.ui.showHud()
+  }
+
+  // Run-neutral screen state: no flashlight cone, no death static, and the
+  // baseline grade derived from the (already reset) GameState. Shared by every
+  // level entry and by quit-to-title so none of them can drift apart.
+  _resetPresentation() {
+    this.deferred.lightUniforms.uFlashOn.value = 0
+    this._applyFX(0) // grade.dead follows state.deadAmount (0 after resetLevel)
+  }
+
+  // Replace the lamp set with the one for whatever the camera presents now
+  // (the title backdrop at spawn, otherwise the player). Needed wherever the
+  // source lamp uniforms were cleared or overwritten outside the frame loop
+  // (level setup, the debug light room), or a paused/dead backdrop stays dark.
+  _refreshLamps() {
+    const c = this.controller
+    const title = this.state.phase === Phase.TITLE
+    this.lightField.reset()
+    this.lightField.update(
+      0,
+      title ? SPAWN : c.pos.x,
+      title ? SPAWN : c.pos.z,
+      title ? 0 : c.floor,
+      this.cm
+    )
   }
 
   _updateCameraMatrices() {
@@ -666,10 +714,10 @@ export class Engine {
 
     // The flashlight freezes the entity, but only until the player has stared
     // too long (exposure past the level-scaled limit) — then the freeze fails.
-    const stareLimit = this._stareLimit()
+    const limit = this._stareLimit()
     const ctx = {
       flashlightOn: state.flashlightOn,
-      canFreeze: state.exposure < stareLimit,
+      canFreeze: state.exposure < limit,
       playerCy: controller.floor,
     }
     const res = stalker.update(dt, controller.pos, this.camera, ctx)
@@ -700,8 +748,10 @@ export class Engine {
     } else {
       this._thumpT = 0
     }
-    this._updateProximity(merged)
-    this._updateStare(dt, res, stareLimit) // beam/exposure is the Stalker's alone
+    // Closer enemy => slower player; consumed by Controller.step next frame
+    // (a one-frame lag is imperceptible).
+    controller.speedMul = proximitySpeedMul(merged.dist)
+    updateStare(state, dt, res.inBeam, limit) // beam/exposure is the Stalker's alone
     audio.setTension(merged.tension)
     // Fluorescent hum follows the lights: silent in the dark, swelling as the
     // player nears a lit lamp. Remap lightAt's 0.1..1 to a clean 0..1.
@@ -709,7 +759,7 @@ export class Engine {
     audio.setHumProximity(
       Math.min(1, Math.max(0, (lightHere - STALKER_AMBIENT) / (1 - STALKER_AMBIENT)))
     )
-    this._updateSanity(dt, merged)
+    updateSanity(state, dt, merged)
     this._updateFlicker(dt)
     audio.update(dt, { seen: merged.seen, realVerticalCue })
     this._updateExit()
@@ -733,42 +783,10 @@ export class Engine {
     else if (state.sanity <= 0 && !inv) this.die('lost')
   }
 
-  _updateSanity(dt, res) {
-    const s = this.state
-    if (res.seen) s.sanity -= dt * 0.15
-    else if (res.tension > 0.45) s.sanity -= dt * 0.05
-    else s.sanity = Math.min(1, s.sanity + dt * 0.07)
-    s.sanity = Math.max(0, s.sanity)
-  }
-
   // Seconds the player may hold the flashlight on the entity before the freeze
-  // fails; shrinks with the level (floor 1s) so higher levels punish staring.
+  // fails at the current level (see survival.js).
   _stareLimit() {
-    return Math.max(1.0, STARE_LIMIT_BASE - this.state.level * 0.12)
-  }
-
-  // Closer enemy => slower player. Drives controller.speedMul, consumed by
-  // Controller.step on the next frame (a one-frame lag is imperceptible).
-  _updateProximity(res) {
-    let mul = 1
-    // res.dist is the closest of either enemy; dormant ones report Infinity, so
-    // no active-gate is needed (the Pursuer's proximity now counts too).
-    if (res.dist < PROXIMITY_SLOW_RADIUS) {
-      const t = (PROXIMITY_SLOW_RADIUS - res.dist) / PROXIMITY_SLOW_RADIUS // 0..1
-      mul = 1 - Math.min(1, Math.max(0, t)) * PROXIMITY_SLOW_MAX
-    }
-    this.controller.speedMul = mul
-  }
-
-  // Flashlight "stare" backlash: beaming the entity charges exposure; past the
-  // limit the freeze has already failed (see stalker ctx.canFreeze) and the
-  // player's sanity crashes.
-  _updateStare(dt, res, stareLimit) {
-    const s = this.state
-    if (res.inBeam) s.exposure += dt
-    else s.exposure = Math.max(0, s.exposure - STARE_RECOVER * dt)
-    if (s.exposure > stareLimit) s.sanity = Math.max(0, s.sanity - STARE_SANITY_DRAIN * dt)
-    s.stareCharge = Math.min(1, s.exposure / stareLimit)
+    return stareLimit(this.state.level)
   }
 
   _updateFlicker(dt) {
@@ -805,20 +823,20 @@ export class Engine {
   }
 
   _applyFX(tension = 0) {
-    const st = this.state
-    const s = st.sanity
-    // Stare charge (0..1): ramps the grade as the freeze nears failure.
-    const e = Math.min(1, st.exposure / this._stareLimit())
     const g = this.deferred.grade
-    g.vignette.value = 0.16 + (1 - s) * 0.5 + e * 0.12
-    // NOISE setting: 'always' keeps the constant grain floor, 'danger' fades a
-    // slightly stronger floor in with enemy tension (a calm frame is clean),
-    // 'off' silences grain entirely — the sanity/stare terms included, so the
-    // toggle is a real accessibility escape, not just a floor removal.
-    const grainFloor = this._noiseMode === 'always' ? 0.022 : 0.03 * tension
-    g.grain.value = this._noiseMode === 'off' ? 0 : grainFloor + (1 - s) * 0.5 + e * 0.18
-    g.aberration.value = 0.0026 + (1 - s) * 0.007 + e * 0.006
-    g.dead.value = st.deadAmount
+    const fx = survivalGrade(this.state, tension, this._noiseMode, this._stareLimit(), this._fx)
+    g.vignette.value = fx.vignette
+    g.grain.value = fx.grain
+    g.aberration.value = fx.aberration
+    g.dead.value = this.state.deadAmount
+  }
+
+  // Backing-store scale = render scale x DPR clamp x 4K-equivalent pixel
+  // ceiling. Every input can change at runtime (settings, zoom, monitor move).
+  _applyPixelRatio() {
+    this.renderer.setPixelRatio(
+      computeEffectivePixelRatio(innerWidth, innerHeight, devicePixelRatio, MAX_DPR, this._renderScale)
+    )
   }
 
   _onResize() {
@@ -826,15 +844,7 @@ export class Engine {
     this.camera.updateProjectionMatrix()
     // Re-apply the DPR, graphics scale, and backing-pixel ceiling: browser zoom
     // or moving the window between monitors can change every input here.
-    this.renderer.setPixelRatio(
-      computeEffectivePixelRatio(
-        innerWidth,
-        innerHeight,
-        devicePixelRatio,
-        MAX_DPR,
-        this._renderScale ?? 1
-      )
-    )
+    this._applyPixelRatio()
     this.renderer.setSize(innerWidth, innerHeight)
     this.deferred.setSize()
     this.debugMode.resize(innerWidth, innerHeight)
@@ -897,7 +907,7 @@ export class Engine {
       this.deferred.grade.dead.value = THREE.MathUtils.lerp(
         this.deferred.grade.dead.value,
         0.55,
-        dt * 2.5
+        1 - Math.exp(-2.5 * dt) // frame-rate independent fade
       )
       this._transT -= dt
       this._updateFlicker(dt)

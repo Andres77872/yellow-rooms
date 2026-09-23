@@ -14,10 +14,16 @@ import { deepFreeze } from './mapFamily.js'
 // Anime-backrooms rules carried over from textures.js: clean flat fields,
 // sparse tone-on-tone detail, mood from light + grade rather than paint.
 //
-// These six keys (fog, ambientSky, ambientGround, rim, gradeTint, gradeSat)
-// OVERRIDE their constants.js namesakes at family-apply time — see
-// DeferredRenderer.applyFamily. constants.js holds the office defaults for the
-// pre-family boot path; this file is what you actually see. Change both.
+// These seven keys (fog, ambientSky, ambientGround, rim, gradeTint, gradeSat,
+// exposure) OVERRIDE their constants.js namesakes (GRADE_EXPOSURE for
+// exposure) at family-apply time — see DeferredRenderer.applyPalette.
+// constants.js holds the office defaults for the pre-family boot path; this
+// file is what you actually see. Change both. `floor.base` also tints the
+// renderer's one-bounce lamp fill, and each surface `style` picks its gloss
+// (gbufferMaterials.js SURFACE_GLOSS).
+//
+// Exposure is per family because the families' surface albedos differ by
+// more than a stop: tower's white tile needs less than the sewer's wet brick.
 //
 // A family is recognisable in one screenshot because of its SHADOW colour, not
 // its lamp colour — four of the five ship a warm-white fixture. Tune ambientSky
@@ -59,7 +65,8 @@ export const FAMILY_PALETTES = deepFreeze({
     ambientGround: 0x2a2740,
     rim: 0xcfe0ff,
     gradeTint: [1.06, 1.0, 0.88],
-    gradeSat: 1.34,
+    gradeSat: 1.12,
+    exposure: 0.66,
   },
 
   [MAP_FAMILY_SEWER]: {
@@ -93,7 +100,8 @@ export const FAMILY_PALETTES = deepFreeze({
     ambientGround: 0x101a18,
     rim: 0xa8dce8,
     gradeTint: [0.92, 1.02, 1.0],
-    gradeSat: 1.05,
+    gradeSat: 1.0,
+    exposure: 1.3,
   },
 
   [MAP_FAMILY_TOWER]: {
@@ -126,7 +134,8 @@ export const FAMILY_PALETTES = deepFreeze({
     ambientGround: 0x272d44,
     rim: 0xdce8ff,
     gradeTint: [0.98, 1.0, 1.1],
-    gradeSat: 1.22,
+    gradeSat: 1.06,
+    exposure: 0.6,
   },
 
   [MAP_FAMILY_HOTEL]: {
@@ -159,7 +168,8 @@ export const FAMILY_PALETTES = deepFreeze({
     ambientGround: 0x282030,
     rim: 0xe0d4f0,
     gradeTint: [1.06, 0.98, 0.95],
-    gradeSat: 1.24,
+    gradeSat: 1.1,
+    exposure: 0.72,
   },
 
   [MAP_FAMILY_LATTICE]: {
@@ -193,7 +203,8 @@ export const FAMILY_PALETTES = deepFreeze({
     ambientGround: 0x181c28,
     rim: 0xa8bcdc,
     gradeTint: [1.03, 0.99, 0.97],
-    gradeSat: 1.16,
+    gradeSat: 1.06,
+    exposure: 0.9,
   },
 })
 

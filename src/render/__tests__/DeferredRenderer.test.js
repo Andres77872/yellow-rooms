@@ -34,6 +34,30 @@ describe('DeferredRenderer render-target lifecycle', () => {
     deferred.dispose()
   })
 
+  it('re-clears skipped-pass identity targets after a GL context restore', () => {
+    const renderer = makeRenderer()
+    const listeners = new Map()
+    renderer.domElement = {
+      addEventListener: vi.fn((type, fn) => listeners.set(type, fn)),
+      removeEventListener: vi.fn((type) => listeners.delete(type)),
+    }
+    renderer.getClearColor = (c) => c
+    renderer.getClearAlpha = () => 1
+    renderer.clear = vi.fn()
+    const deferred = makeDeferred(renderer)
+
+    deferred._clearRT(deferred.aoBlurRT, 0xffffff)
+    deferred._clearRT(deferred.aoBlurRT, 0xffffff)
+    expect(renderer.clear).toHaveBeenCalledTimes(1) // cached identity: no re-clear
+
+    listeners.get('webglcontextrestored')()
+    deferred._clearRT(deferred.aoBlurRT, 0xffffff)
+    expect(renderer.clear).toHaveBeenCalledTimes(2) // storage was recreated empty
+
+    deferred.dispose()
+    expect(listeners.has('webglcontextrestored')).toBe(false)
+  })
+
   it('keeps full-resolution attachments valid in a collapsed viewport', () => {
     const renderer = makeRenderer(0, 0, 0.5)
     const deferred = makeDeferred(renderer)
@@ -98,6 +122,8 @@ describe('DeferredRenderer render-target lifecycle', () => {
       deferred.bloomPreRT,
       deferred.bloomTmpRT,
       deferred.bloomRT,
+      deferred.bloomWideTmpRT,
+      deferred.bloomWideRT,
       deferred.sceneRT,
       deferred.gradeRT,
     ])
@@ -115,7 +141,12 @@ describe('DeferredRenderer render-target lifecycle', () => {
 
     expect(deferred._effectScratchRTs.size).toBe(2)
     expect(deferred._effectScratchRTs.get('mask').size).toBe(maskScales.size)
-    expect(deferred._effectScratchRTs.get('hdr').size).toBe(1)
+    // Bloom's tight (half-res) and wide (quarter-res) horizontal intermediates
+    // are pooled at their own scales.
+    expect(deferred._effectScratchRTs.get('hdr').size).toBe(2)
+    expect(deferred.bloomWideTmpRT).not.toBe(deferred.bloomTmpRT)
+    expect(deferred.bloomWideRT).not.toBe(deferred.bloomWideTmpRT)
+    expect(deferred.compositeUniforms.tBloomWide.value).toBe(deferred.bloomWideRT.texture)
     // These game effects currently share one half-resolution target, while the
     // pool still separates them automatically if a future tuning changes scale.
     expect(deferred.aoRT === deferred.shadowRT).toBe(AO_SCALE === SHADOW_SCALE)
@@ -330,7 +361,7 @@ describe('DeferredRenderer render-target lifecycle', () => {
 
     // First frame fills each skipped pass's output with its identity value.
     deferred.render(0)
-    expect(renderer.clear).toHaveBeenCalledTimes(4) // ao, shadow, vol, bloom
+    expect(renderer.clear).toHaveBeenCalledTimes(5) // ao, shadow, vol, bloom (tight + wide)
 
     // The identity never changes, so subsequent frames must not re-clear.
     renderer.clear.mockClear()
@@ -342,7 +373,7 @@ describe('DeferredRenderer render-target lifecycle', () => {
     renderer.size.width = 640
     deferred.setSize()
     deferred.render(3)
-    expect(renderer.clear).toHaveBeenCalledTimes(4)
+    expect(renderer.clear).toHaveBeenCalledTimes(5)
 
     // And a pass that starts rendering again reclaims its target: re-enabling
     // volumetrics then disabling it must clear once more, not read as clean.

@@ -20,6 +20,7 @@ export class PathFollower {
     this._len = 0 // path.length while valid, else 0
     this._cursor = 0 // current waypoint index
     this._repathT = 0
+    this._failed = false // last search found no route (throttled like a success)
     this._goalGX = 0 // cell the current route was computed TO
     this._goalGZ = 0
     this._goalCy = 0
@@ -46,6 +47,7 @@ export class PathFollower {
     this._len = 0
     this._cursor = 0
     this._repathT = 0
+    this._failed = false
   }
 
   // Has the live target left the cell neighbourhood this route leads to?
@@ -66,7 +68,9 @@ export class PathFollower {
     this._repathT -= dt
     const tgx = worldToCell(tx)
     const tgz = worldToCell(tz)
-    const consumed = this._len === 0 || this._cursor * 3 >= this._len
+    // A finished route repaths at once; a FAILED search waits for the normal
+    // throttle (or target drift) — "no route" must not re-run A* every frame.
+    const consumed = this._len === 0 ? !this._failed : this._cursor * 3 >= this._len
     r.repathed = false
     if (consumed || this._repathT <= 0 || this._drifted(tgx, tgz, tcy)) {
       const p = findPath(this.cm, ent.pos.x, ent.pos.z, ent.cy, tx, tz, tcy, {
@@ -75,6 +79,7 @@ export class PathFollower {
         maxNodes: this.maxNodes,
       })
       this._len = p ? p.length : 0
+      this._failed = !p
       this._cursor = 0
       const near =
         Math.max(Math.abs(tgx - worldToCell(ent.pos.x)), Math.abs(tgz - worldToCell(ent.pos.z))) <=

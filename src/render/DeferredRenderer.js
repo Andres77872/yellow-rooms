@@ -58,11 +58,27 @@ import {
   BLOOM_SCALE,
   BLOOM_SPREAD,
   BLOOM_INTENSITY,
+  BLOOM_WIDE_SPREAD,
+  BLOOM_WIDE_INTENSITY,
+  BLOOM_THRESHOLD,
+  BLOOM_KNEE,
+  BLOOM_SURFACE,
   GRADE_LEVELS,
   GRADE_TINT,
   GRADE_SAT,
+  GRADE_EXPOSURE,
+  GRADE_SHADOW_TINT,
+  GRADE_HIGHLIGHT_TINT,
+  GRADE_LIFT,
   GRADE_TIME_WRAP,
+  TERMINATOR_STRENGTH,
+  LAMP_BOUNCE,
+  SPEC_POWER,
+  SPEC_STRENGTH,
+  SPEC_REACH,
   OUTLINE_INK,
+  OUTLINE_INK_TINT,
+  OUTLINE_OPACITY,
   OUTLINE_THICKNESS,
   OUTLINE_DEPTH_THRESH,
   OUTLINE_NORMAL_THRESH,
@@ -112,6 +128,15 @@ const LAMP_FRUSTUM_EPSILON = 0.05
 // this must NOT call convertSRGBToLinear() again (that double-decode darkened and
 // over-saturated every solid color).
 const linVec = (hex) => new THREE.Color(hex)
+
+// The lamp colour pushed toward full saturation for the anime terminator band:
+// square it (widens the channel spread) and renormalise to a peak of 1, so a
+// warm-white tube paints an amber edge and a cold tube a mint one.
+export function terminatorColor(lampLinear, out = new THREE.Color()) {
+  out.setRGB(lampLinear.r ** 2, lampLinear.g ** 2, lampLinear.b ** 2)
+  const peak = Math.max(out.r, out.g, out.b, 1e-4)
+  return out.multiplyScalar(1 / peak)
+}
 
 // Radical inverse (van der Corput): any PREFIX of the sequence covers [0,1)
 // uniformly, which is what lets one max-size kernel serve every quality tier —
@@ -183,6 +208,12 @@ export class DeferredRenderer {
     // Render target -> the identity color it currently holds, so a pass that
     // stays skipped is not re-cleared every frame (see _clearRT).
     this._identityRT = new Map()
+    // A lost-then-restored GL context recreates every target zero-filled while
+    // this cache still claims they hold their identity values: with AO or
+    // shadows disabled, ambient x AO (and lamp x shadow) would read 0 and the
+    // scene would stay near-black until the next resize or settings change.
+    this._onContextRestored = () => this._identityRT.clear()
+    renderer.domElement?.addEventListener?.('webglcontextrestored', this._onContextRestored)
 
     const { dw, dh } = this._dims()
     // The lamp field is shared by the shadow and lighting passes, so build it
@@ -261,14 +292,19 @@ export class DeferredRenderer {
   // color, and the post grade. One family is active per world, so this runs
   // at family-apply time (boot / startRun), never per frame.
   applyPalette(pal) {
+    this.palette = pal // the active family's defaults (debug LightTool resets to these)
     this.lightUniforms.uFogColor.value = linVec(pal.fog)
     this.lightUniforms.uAmbSky.value = linVec(pal.ambientSky)
     this.lightUniforms.uAmbGround.value = linVec(pal.ambientGround)
     this.lightUniforms.uRimColor.value = linVec(pal.rim)
-    this.lightUniforms.uLampColor.value = linVec(pal.panel)
-    this.volUniforms.uLampColor.value = linVec(pal.panel)
+    this.lightUniforms.uLampColor.value = linVec(pal.panel) // shared with volumetrics
+    terminatorColor(this.lightUniforms.uLampColor.value, this.lightUniforms.uTermColor.value)
+    // One-bounce fill takes the floor's reflectance colour: the yellow rooms
+    // glow yellow, the hotel's burgundy carpet warms its walls.
+    this.lightUniforms.uBounceColor.value = linVec(pal.floor?.base ?? 0x808080)
     this.gradeUniforms.sat.value = pal.gradeSat
     this.gradeUniforms.tint.value.set(pal.gradeTint[0], pal.gradeTint[1], pal.gradeTint[2])
+    this.gradeUniforms.exposure.value = pal.exposure ?? GRADE_EXPOSURE
   }
 
   // Half-res (or any scale) dimensions with a >=1 clamp, shared by the
@@ -400,10 +436,18 @@ export class DeferredRenderer {
       uLampRange: { value: LIGHT_RANGE },
       uAmbSky: { value: linVec(AMBIENT_SKY) },
       uAmbGround: { value: linVec(AMBIENT_GROUND) },
-      uLampWrap: { value: LAMP_WRAP },
+      // Same value-object as the shadow pass: the mask must stay weighted by
+      // the wrap the lit pass shades with (LightTool edits reach both).
+      uLampWrap: this.shadowUniforms.uLampWrap,
       uRim: { value: RIM_STRENGTH },
       uRimColor: { value: linVec(RIM_COLOR) },
       uEntityRim: { value: linVec(ENTITY_RIM) },
+      uTermColor: { value: terminatorColor(linVec(PANEL_COLOR)) },
+      uTermStrength: { value: TERMINATOR_STRENGTH },
+      uBounceColor: { value: linVec(0xcfae5e) }, // office carpet until applyPalette
+      uBounce: { value: LAMP_BOUNCE },
+      uSpecPower: { value: SPEC_POWER },
+      uSpecStrength: { value: SPEC_STRENGTH },
       uFlashOn: { value: 0 },
       uFlashColor: { value: linVec(FLASH_COLOR) },
       uFlashRange: { value: FLASH_RANGE },
@@ -426,9 +470,9 @@ export class DeferredRenderer {
       uLampViewPos: this.visibleLamps.uLampViewPos,
       uLampCount: this.visibleLamps.uLampCount,
       uLampChar: this.visibleLamps.uLampChar,
-      uLampColor: { value: linVec(PANEL_COLOR) },
-      // Share the lit pass's lamp-intensity + flicker value-objects so shafts
-      // track lamp brightness (incl. LightTool edits + the Engine flicker dip).
+      // Share the lit pass's lamp color, intensity + flicker value-objects so
+      // shafts track the lamps (family palette, LightTool edits, flicker dip).
+      uLampColor: this.lightUniforms.uLampColor,
       uLampIntensity: this.lightUniforms.uLampIntensity,
       uLampFlicker: this.lightUniforms.uLampFlicker,
       uLampRange: { value: LIGHT_RANGE },
@@ -457,10 +501,19 @@ export class DeferredRenderer {
     this.bloomPreRT = new THREE.WebGLRenderTarget(bw, bh, HALF_RT_OPTS)
     this.bloomTmpRT = this._effectScratch(dw, dh, BLOOM_SCALE, 'hdr')
     this.bloomRT = new THREE.WebGLRenderTarget(bw, bh, HALF_RT_OPTS)
+    // Wide veil: the tight halo re-blurred at half the bloom scale. Its
+    // horizontal intermediate is pooled like the tight one (disjoint lifetime).
+    const { w: ww, h: wh } = this._halfRes(dw, dh, BLOOM_SCALE * 0.5)
+    this.bloomWideTmpRT = this._effectScratch(dw, dh, BLOOM_SCALE * 0.5, 'hdr')
+    this.bloomWideRT = new THREE.WebGLRenderTarget(ww, wh, HALF_RT_OPTS)
+    this._bloomWideTexel = new THREE.Vector2(1 / ww, 1 / wh)
     this.bloomPreUniforms = {
       tLit: { value: this.litRT.texture },
       tColor: { value: this.gColor },
       tDepth: { value: this.depthTex },
+      uThreshold: { value: BLOOM_THRESHOLD },
+      uKnee: { value: BLOOM_KNEE },
+      uSurface: { value: BLOOM_SURFACE },
     }
     this.bloomPreQuad = new FullScreenQuad(fsMaterial(BLOOM_PREFILTER_FRAG, this.bloomPreUniforms))
     this.bloomBlurUniforms = {
@@ -478,8 +531,10 @@ export class DeferredRenderer {
       tInput: { value: this.litRT.texture },
       tVol: { value: this.volRT.texture },
       tBloom: { value: this.bloomRT.texture },
+      tBloomWide: { value: this.bloomWideRT.texture },
       uVolIntensity: { value: VOL_INTENSITY },
       uBloomIntensity: { value: BLOOM_INTENSITY },
+      uBloomWide: { value: BLOOM_WIDE_INTENSITY },
     }
     this.compositeQuad = new FullScreenQuad(fsMaterial(COMPOSITE_FRAG, this.compositeUniforms))
   }
@@ -502,6 +557,8 @@ export class DeferredRenderer {
       uFadeNear: { value: OUTLINE_FADE_NEAR },
       uFadeFar: { value: OUTLINE_FADE_FAR },
       uInk: { value: linVec(OUTLINE_INK) },
+      uInkTint: { value: OUTLINE_INK_TINT },
+      uInkOpacity: { value: OUTLINE_OPACITY },
     }
     this.outlineQuad = new FullScreenQuad(fsMaterial(OUTLINE_FRAG, this.outlineUniforms))
   }
@@ -513,12 +570,15 @@ export class DeferredRenderer {
       tDiffuse: { value: this.litRT.texture },
       time: { value: 0 },
       levels: { value: GRADE_LEVELS },
-      exposure: { value: 1 }, // pre-tonemap exposure
+      exposure: { value: GRADE_EXPOSURE }, // pre-tonemap exposure (per family)
       sat: { value: GRADE_SAT }, // post-tonemap saturation (anime pop)
       tint: { value: new THREE.Vector3(GRADE_TINT[0], GRADE_TINT[1], GRADE_TINT[2]) },
+      shadowTint: { value: new THREE.Vector3(...GRADE_SHADOW_TINT) },
+      highTint: { value: new THREE.Vector3(...GRADE_HIGHLIGHT_TINT) },
+      lift: { value: GRADE_LIFT },
       vignette: { value: 0.18 },
       grain: { value: 0.025 },
-      aberration: { value: 0.0015 },
+      aberration: { value: 0.0008 },
       dead: { value: 0 },
     }
     this.gradeQuad = new FullScreenQuad(fsMaterial(GRADE_FRAG, this.gradeUniforms))
@@ -596,6 +656,9 @@ export class DeferredRenderer {
     this.bloomPreRT.setSize(b.w, b.h)
     this.bloomRT.setSize(b.w, b.h)
     this._bloomTexel.set(1 / b.w, 1 / b.h)
+    const bw = this._halfRes(dw, dh, BLOOM_SCALE * 0.5)
+    this.bloomWideRT.setSize(bw.w, bw.h)
+    this._bloomWideTexel.set(1 / bw.w, 1 / bw.h)
     this.sceneRT.setSize(dw, dh)
     this.gradeRT.setSize(dw, dh)
     this.outlineUniforms.uTexel.value.set(1 / dw, 1 / dh)
@@ -640,11 +703,13 @@ export class DeferredRenderer {
     const fade0 = cutoff - fadeBand
     // The passes normally share one range, but the LightTool exposes live
     // tuning and integrations may adjust them independently. Cull against the
-    // maximum so no pass loses an influence that can reach the viewport.
+    // maximum so no pass loses an influence that can reach the viewport. The
+    // lighting pass reaches SPEC_REACH x its range for glossy highlights (a
+    // lamp just above the view still mirrors in the floor below it).
     this._lampSphere.radius =
       Math.max(
         0,
-        this.lightUniforms.uLampRange.value,
+        this.lightUniforms.uLampRange.value * SPEC_REACH,
         this.shadowUniforms.uLampRange.value,
         this.volUniforms.uLampRange.value,
       ) + LAMP_FRUSTUM_EPSILON
@@ -740,6 +805,17 @@ export class DeferredRenderer {
     bb.tInput.value = this.bloomTmpRT.texture
     bb.uDir.value.set(0, this._bloomTexel.y * BLOOM_SPREAD)
     r.setRenderTarget(this.bloomRT)
+    this.bloomBlurQuad.render(r)
+    // Wide veil: blur the finished tight halo again at half its resolution.
+    // Separable Gaussians compose, so this is a far wider kernel for the price
+    // of two quarter-res passes.
+    bb.tInput.value = this.bloomRT.texture
+    bb.uDir.value.set(this._bloomWideTexel.x * BLOOM_WIDE_SPREAD, 0)
+    r.setRenderTarget(this.bloomWideTmpRT)
+    this.bloomBlurQuad.render(r)
+    bb.tInput.value = this.bloomWideTmpRT.texture
+    bb.uDir.value.set(0, this._bloomWideTexel.y * BLOOM_WIDE_SPREAD)
+    r.setRenderTarget(this.bloomWideRT)
     this.bloomBlurQuad.render(r)
   }
 
@@ -860,6 +936,9 @@ export class DeferredRenderer {
       this.volRT, 0x000000
     )
     this._runOr(this.bloomEnabled, 'bloom', this._renderBloom, this.bloomRT, 0x000000)
+    // The wide veil is written by the same pass; keep its identity in step.
+    if (this.bloomEnabled) this._identityRT.delete(this.bloomWideRT)
+    else this._clearRT(this.bloomWideRT, 0x000000)
     this._pass('composite', () => this._composite())
 
     // Debug: blit a single pipeline channel to screen, skip grade/FXAA.
@@ -896,6 +975,7 @@ export class DeferredRenderer {
     this.volRT.dispose()
     this.bloomPreRT.dispose()
     this.bloomRT.dispose()
+    this.bloomWideRT.dispose()
     this.sceneRT.dispose()
     this.gradeRT.dispose()
     // FullScreenQuad.dispose() only releases its shared triangle geometry;
@@ -907,5 +987,6 @@ export class DeferredRenderer {
     ]) quad.material.dispose()
     this.lightQuad.dispose()
     this._identityRT.clear()
+    this.renderer.domElement?.removeEventListener?.('webglcontextrestored', this._onContextRestored)
   }
 }

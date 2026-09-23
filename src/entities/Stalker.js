@@ -10,7 +10,7 @@ import {
   worldToCell,
   layerY,
 } from '../world/constants.js'
-import { moveAndCollide } from '../player/collision.js'
+import { moveAndCollide, hasWalkableCorridor } from '../player/collision.js'
 import { groundHeightAt } from '../player/ground.js'
 import { sightGate, findHiddenSpot } from './sense.js'
 import { PathFollower, extrapolateSearch, cellCenterOf } from './follow.js'
@@ -182,6 +182,12 @@ export class Stalker {
     this.inBeam = false
     this.mesh.visible = false
     this._spawnTimer = this.respawnCooldown
+    // A search extension can outlast despawnDelay; the next spawn must hunt
+    // fresh instead of routing to the previous episode's last-seen cell.
+    this._pursueT = 0
+    this._hasLast = false
+    this._searched = false
+    this.follower.reset()
   }
 
   // --- Debug controls ---
@@ -296,10 +302,9 @@ export class Stalker {
       return { caught: false, tension: 0, seen: false, dist: Infinity, inBeam: false, frozen: false }
     }
 
+    // Pre-move bearing for the chase step; catch distance is taken after moving.
     const dx = player.x - this.pos.x
-    const dy = (player.y || 0) - this.pos.y
     const dz = player.z - this.pos.z
-    const dist = Math.hypot(dx, dy, dz) // 3D: a floor of separation is distance, not contact
 
     // Cheap-first visibility gate (3D distance -> floor gate -> frustum -> LOS).
     const seen = sightGate(this.cm, camera, this.pos, this.cy, player, playerCy, this.sightDist)
@@ -316,7 +321,7 @@ export class Stalker {
     // read of which way they're moving. When sight breaks and the pursue runs
     // dry at the last-seen cell, this bearing drives the search extension.
     if (seen && this._hasPrev && dt > 1e-4) {
-      const a = Math.min(1, dt * 3)
+      const a = 1 - Math.exp(-3 * dt) // frame-rate independent smoothing
       this._escapeX += ((player.x - this._prevPX) / dt - this._escapeX) * a
       this._escapeZ += ((player.z - this._prevPZ) / dt - this._escapeZ) * a
     }
@@ -338,10 +343,14 @@ export class Stalker {
       this.stateLabel = 'frozen'
       this._lostTimer = this.despawnDelay
       this.mesh.rotation.y = Math.atan2(player.x - this.pos.x, player.z - this.pos.z)
-    } else if (seen && playerCy === this.cy) {
-      // CHASE: straight beeline at the player (same floor, LOS clear, so the
-      // line is walkable). Arm the corner-pursuit window and remember where we
-      // last saw them.
+    } else if (
+      seen &&
+      playerCy === this.cy &&
+      hasWalkableCorridor(this.cm, this.pos.x, this.pos.z, player.x, player.z, this.cy)
+    ) {
+      // CHASE: straight beeline at the player (same floor, and the body-wide
+      // line is WALKABLE — sight alone passes rails, windows and desks). Arm
+      // the corner-pursuit window and remember where we last saw them.
       this.stateLabel = 'chasing'
       this._lostTimer = this.despawnDelay
       this._pursueT = this.pursueTime
@@ -364,10 +373,11 @@ export class Stalker {
       const movedSq = (this.pos.x - beforeX) ** 2 + (this.pos.y - beforeY) ** 2 + (this.pos.z - beforeZ) ** 2
       if (movedSq < (step * 0.1) ** 2) this._timer = Math.min(this._timer, 0.8)
     } else if (seen) {
-      // Seen THROUGH a stairwell aperture (one floor apart): it can't lunge
-      // through the slab — arm the pursuit toward the player's floor and let
-      // the stair-aware A* bring it up/down the stairs.
-      this.stateLabel = 'pursuing(stairs)'
+      // Seen but not straight-line reachable: THROUGH a stairwell aperture
+      // (one floor apart — it can't lunge through the slab), or across a rail,
+      // window, or furniture on its own floor. Arm the pursuit toward the
+      // player and let the stair-aware A* route around.
+      this.stateLabel = playerCy === this.cy ? 'pursuing(route)' : 'pursuing(stairs)'
       this._lostTimer = this.despawnDelay
       this._pursueT = this.pursueTime
       this._searched = false
@@ -414,8 +424,11 @@ export class Stalker {
 
     if (this.alwaysVisible) this.mesh.visible = true
 
-    // A frozen entity can't close the distance, so it can't catch you — until
-    // the freeze fails (then it lunges).
+    // Catch / sense against the POST-move position (the chase and pursue steps
+    // above moved it this frame). A frozen entity can't close the distance, so
+    // it can't catch you — until the freeze fails (then it lunges).
+    // 3D: a floor of separation is distance, not contact.
+    const dist = Math.hypot(player.x - this.pos.x, (player.y || 0) - this.pos.y, player.z - this.pos.z)
     const caught = dist < this.catchDist && !frozen
     if (caught) this.stateLabel = 'caught'
     // Tension from proximity, amplified when in view.

@@ -17,7 +17,7 @@ import {
   ENTITY_VANISH_DIST,
   ENEMY_STAIR_SPEED,
 } from '../world/constants.js'
-import { moveAndCollide, hasLineOfSight } from '../player/collision.js'
+import { moveAndCollide, hasWalkableCorridor } from '../player/collision.js'
 import { groundHeightAt } from '../player/ground.js'
 import { sightGate, findHiddenSpot } from './sense.js'
 import { PathFollower } from './follow.js'
@@ -222,9 +222,11 @@ export class Pursuer {
     const step = this.chaseSpeed * dt
     const bx = this.pos.x
     const bz = this.pos.z
+    // Beeline only along a body-wide WALKABLE line: sight passes rails,
+    // observation windows and desks, which a beeline would grind forever.
     const losSameFloor =
       playerCy === this.cy &&
-      hasLineOfSight(this.cm, player.x, player.z, this.pos.x, this.pos.z, this.cy)
+      hasWalkableCorridor(this.cm, this.pos.x, this.pos.z, player.x, player.z, this.cy)
     let stairMul = 1
     if (losSameFloor) {
       this.stateLabel = 'chasing'
@@ -261,8 +263,11 @@ export class Pursuer {
         this._stuckT = 0
         this.follower.reset()
       }
-    } else if (this._stuckT > PURSUER_STUCK_REPATH) {
-      this.follower.reset() // force a fresh route next frame
+    } else if (this._stuckT > PURSUER_STUCK_REPATH && this._stuckT - dt <= PURSUER_STUCK_REPATH) {
+      // Force ONE fresh route as the stall begins; resetting on every stuck
+      // frame would bypass the follower's repath throttle and run a full A*
+      // search per frame until the relocate fires.
+      this.follower.reset()
     }
 
     this._faceMesh(player)

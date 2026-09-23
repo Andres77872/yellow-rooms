@@ -5,8 +5,10 @@ import { MAP_FAMILY_OFFICE } from '../world/mapTypes.js'
 
 // G-buffer materials for the deferred pipeline. Each writes two MRT targets:
 //   layout(location=0) gColor  = vec4(albedoLinear.rgb, matID)
-//   layout(location=1) gNormal = vec4(viewNormal*0.5+0.5, 1)
+//   layout(location=1) gNormal = vec4(viewNormal*0.5+0.5, gloss)
 // matID: 0 = lit surface, 1 = emissive (passed through), 2 = entity.
+// gloss: 0..1 strength of the stylised lamp highlight (lighting.js). It rides
+// in the normal target's otherwise-constant alpha, so it costs no bandwidth.
 //
 // RawShaderMaterial (GLSL3) is used so we fully control the MRT outputs and the
 // instancing transform — three's ShaderMaterial would inject its own fragment
@@ -93,6 +95,7 @@ const FRAG = /* glsl */ `
   uniform vec3 uColor;       // tint (map path) or flat/emissive color (linear)
   uniform float uIntensity;  // emissive multiplier (flicker)
   uniform float uMatID;
+  uniform float uGloss;
   #ifdef USE_MAP
     uniform sampler2D map;
   #endif
@@ -107,7 +110,7 @@ const FRAG = /* glsl */ `
       albedo = uColor * uIntensity * vTint;
     #endif
     gColor = vec4(albedo, uMatID);
-    gNormal = vec4(normalize(vViewNormal) * 0.5 + 0.5, 1.0);
+    gNormal = vec4(normalize(vViewNormal) * 0.5 + 0.5, uGloss);
   }
 `
 
@@ -115,6 +118,15 @@ const FRAG = /* glsl */ `
 // Engine) makes the Color constructor decode sRGB -> linear once, so we must NOT
 // call convertSRGBToLinear() on top (double-decode darkened every flat color).
 const lin = (hex) => new THREE.Color(hex)
+
+// Surface gloss by palette style: soft furnishings are matte, glazed tile and
+// bare metal carry the painted lamp streaks anime corridors are known for.
+export const SURFACE_GLOSS = Object.freeze({
+  carpet: 0, concrete: 0.16, tile: 0.55, deck: 0.38,
+  wallpaper: 0.03, brick: 0.05, panel: 0.28, steel: 0.34,
+  vault: 0.06,
+})
+const glossOf = (spec) => SURFACE_GLOSS[spec?.style] ?? 0
 
 function surfaceMaterial(map, instanced) {
   return new THREE.RawShaderMaterial({
@@ -125,13 +137,14 @@ function surfaceMaterial(map, instanced) {
       uColor: { value: new THREE.Color(1, 1, 1) },
       uIntensity: { value: 1 }, // unused in the USE_MAP branch; kept so all three factories share one uniform block
       uMatID: { value: 0 },
+      uGloss: { value: 0 },
     },
     vertexShader: instanced ? VERT_INSTANCED : VERT_STATIC,
     fragmentShader: FRAG,
   })
 }
 
-function flatMaterial(colorLinear, matID, instanced, tinted = false, partColor = false) {
+function flatMaterial(colorLinear, matID, instanced, tinted = false, partColor = false, gloss = 0) {
   return new THREE.RawShaderMaterial({
     glslVersion: THREE.GLSL3,
     defines: {
@@ -143,6 +156,7 @@ function flatMaterial(colorLinear, matID, instanced, tinted = false, partColor =
       uColor: { value: colorLinear },
       uIntensity: { value: 1 },
       uMatID: { value: matID },
+      uGloss: { value: gloss },
     },
     vertexShader: instanced ? VERT_INSTANCED : VERT_STATIC,
     fragmentShader: FRAG,
@@ -158,6 +172,7 @@ function emissiveMaterial(colorLinear, instanced, tinted = false) {
       uColor: { value: colorLinear },
       uIntensity: { value: 1 }, // flicker multiplier, updated per frame
       uMatID: { value: 1 },
+      uGloss: { value: 0 },
     },
     vertexShader: instanced ? VERT_INSTANCED : VERT_STATIC,
     fragmentShader: FRAG,
@@ -199,6 +214,9 @@ export function applyFamilyMaterials(materials, renderer, family) {
   materials.carpet.uniforms.map.value = tex.floor
   materials.ceiling.uniforms.map.value = tex.ceiling
   materials.wallpaper.uniforms.map.value = tex.wall
+  materials.carpet.uniforms.uGloss.value = glossOf(pal.floor)
+  materials.ceiling.uniforms.uGloss.value = glossOf(pal.ceiling) * 0.5
+  materials.wallpaper.uniforms.uGloss.value = glossOf(pal.wall)
   materials.panel.uniforms.uColor.value = lin(pal.panel)
   materials.panelDead.uniforms.uColor.value = lin(pal.panelDead)
   materials.doorFrame.uniforms.uColor.value = lin(pal.trim)
@@ -213,39 +231,44 @@ export function createGBufferMaterials(renderer, family = MAP_FAMILY_OFFICE) {
   const carpet = surfaceMaterial(tex.floor, false) // floor mesh
   const ceiling = surfaceMaterial(tex.ceiling, false) // ceiling mesh
   const wallpaper = surfaceMaterial(tex.wall, true) // instanced pillars
+  carpet.uniforms.uGloss.value = glossOf(pal.floor)
+  ceiling.uniforms.uGloss.value = glossOf(pal.ceiling) * 0.5
+  wallpaper.uniforms.uGloss.value = glossOf(pal.wall)
 
   const panel = emissiveMaterial(lin(pal.panel), true, true) // instanced lit lamps, per-tube identity tint
-  const panelDead = flatMaterial(lin(pal.panelDead), 0, true) // instanced dead tubes
-  const entity = flatMaterial(lin(0x16161c), 2, false) // Stalker capsule silhouette (near-black)
-  const pursuer = flatMaterial(lin(0x3a0d0d), 2, false) // Pursuer silhouette (dark blood-red, distinct)
-  const husk = flatMaterial(lin(0x5c5847), 2, false) // Husk silhouette (pale ash — the weak one)
+  const panelDead = flatMaterial(lin(pal.panelDead), 0, true, false, false, 0.35) // instanced dead tubes (diffuser plastic)
+  // Entities carry a faint wet sheen: under a tube their silhouettes catch
+  // one hard highlight, which reads as "alive" more than any texture could.
+  const entity = flatMaterial(lin(0x16161c), 2, false, false, false, 0.3) // Stalker capsule silhouette (near-black)
+  const pursuer = flatMaterial(lin(0x3a0d0d), 2, false, false, false, 0.45) // Pursuer silhouette (dark blood-red, distinct)
+  const husk = flatMaterial(lin(0x5c5847), 2, false, false, false, 0.2) // Husk silhouette (pale ash — the weak one)
   // Blender-built enemy GLBs (render/enemyModels.js): merged per-entity
   // geometry whose baked vertex colors carry the per-part palette (ink body,
   // pale oval head / pinpoint eyes / hollow void face). Same matID-2 entity
   // lane as the capsule silhouettes; entities swap to this on upgradeModel.
-  const entityModel = flatMaterial(lin(0xffffff), 2, false, false, true)
+  const entityModel = flatMaterial(lin(0xffffff), 2, false, false, true, 0.3)
   const exit = emissiveMaterial(lin(0xeafff2), false) // glowing anomaly
 
-  const doorFrame = flatMaterial(lin(pal.trim), 0, true) // instanced door/window casings (family trim)
+  const doorFrame = flatMaterial(lin(pal.trim), 0, true, false, false, 0.3) // instanced door/window casings (family trim, painted gloss)
   // Painted leaf base; per-door instanceColor tones it (brightness band,
   // rare dark stain) and darkens the knob to metal — see mesh.js leafTint.
-  const doorLeaf = flatMaterial(lin(pal.leaf), 0, true, true)
+  const doorLeaf = flatMaterial(lin(pal.leaf), 0, true, true, false, 0.25)
   // Interior props (thresholds, radiators, clocks, boards, extinguisher
   // cabinets, vents): white base tinted per instance by the objects/dressing
   // palettes.
-  const prop = flatMaterial(lin(0xffffff), 0, true, true)
+  const prop = flatMaterial(lin(0xffffff), 0, true, true, false, 0.25)
   // Emissive wayfinding signs (exit + hanging blades): they glow and bloom
   // but are NOT in the light field — beacons, not lamps. Steady (no flicker
   // wiring), tinted per instance (exit green / blade amber).
   const signGlow = emissiveMaterial(lin(0xffffff), true, true)
   // Collision-real office furniture: white base tinted per part by the
   // objects/furniture palette (laminate, metal, fabric, screens, leaves).
-  const furniture = flatMaterial(lin(0xffffff), 0, true, true)
+  const furniture = flatMaterial(lin(0xffffff), 0, true, true, false, 0.22)
   // Blender-built furniture GLBs (render/furnitureModels.js): merged
   // per-kind geometry whose baked vertex colors carry the per-part palette,
   // multiplied by the per-instance tint. Same deferred lane as `furniture`;
   // mesh.js picks this path once the model library has loaded.
-  const furnitureModel = flatMaterial(lin(0xffffff), 0, true, true, true)
+  const furnitureModel = flatMaterial(lin(0xffffff), 0, true, true, true, 0.22)
 
   const materials = { carpet, ceiling, wallpaper, panel, panelDead, entity, pursuer, husk, entityModel, exit, doorFrame, doorLeaf, prop, signGlow, furniture, furnitureModel }
   const owner = TEXTURE_CACHE.get(renderer)

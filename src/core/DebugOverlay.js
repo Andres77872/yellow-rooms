@@ -1,3 +1,5 @@
+import { isEditableFocused } from './input.js'
+
 // On-screen renderer.info readout. Toggle with the backtick (`) key. Catches
 // draw-call creep and undisposed-resource leaks immediately during dev.
 export class DebugOverlay {
@@ -15,7 +17,7 @@ export class DebugOverlay {
     document.body.appendChild(el)
     this.el = el
     this._onKeyDown = (e) => {
-      if (e.code === 'Backquote') this.toggle()
+      if (e.code === 'Backquote' && !e.repeat && !isEditableFocused()) this.toggle()
     }
     addEventListener('keydown', this._onKeyDown)
   }

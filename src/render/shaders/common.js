@@ -1,4 +1,4 @@
-import { CEL_BANDS, CEL_FLOOR } from '../../world/constants.js'
+import { CEL_BANDS, CEL_FLOOR, CEL_HARD } from '../../world/constants.js'
 
 // Shared GLSL snippets for the deferred fullscreen passes. Injected into the
 // per-pass fragment shaders with ${...} template interpolation. Keeping these in
@@ -115,5 +115,22 @@ export const CEL_BAND = /* glsl */ `
   float band(float x){
     float i = min(floor(clamp(x, 0.0, 1.0) * ${glslFloat(CEL_BANDS)}), ${glslFloat(CEL_BANDS - 1)});
     return ${glslFloat(CEL_FLOOR)} + ${glslFloat(1 - CEL_FLOOR)} * (i / ${glslFloat(CEL_BANDS - 1)});
+  }
+`
+
+// The world-surface lamp ramp (requires CEL_BAND above it). Semi-realistic
+// anime backgrounds are PAINTED: a smooth gradient with a soft but defined
+// terminator (the smoothstep), carrying only CEL_HARD of the banded ramp so a
+// hint of the cel step survives on big flat walls. Spans CEL_FLOOR..1 like
+// band(), so the ambient still owns the shadow side. `dither` feeds only the
+// banded share (it exists to dissolve band edges). The lighting pass shades
+// with it and the shadow pass weights its visibility mask with it — the two
+// must agree or the mask stops matching the lit brightness it averages.
+export const LIT_RAMP = /* glsl */ `
+  float paintedRamp(float x){
+    return ${glslFloat(CEL_FLOOR)} + ${glslFloat(1 - CEL_FLOOR)} * smoothstep(0.02, 0.92, x);
+  }
+  float surfaceRamp(float x, float dither){
+    return mix(paintedRamp(x), band(x + dither), ${glslFloat(CEL_HARD)});
   }
 `

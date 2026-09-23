@@ -1,35 +1,37 @@
 import { COLOR_FNS, IGN, HASH } from './common.js'
 
-// Grade: tone map (hue-preserving) + chromatic aberration + warm tint + luminance
-// posterize + vignette + grain + dead-static, then linear -> sRGB + TPDF dither.
+// Grade: filmic tone map + chromatic aberration + family tint + saturation +
+// split toning + shadow lift + faint posterize + vignette + grain + dead-static,
+// then linear -> sRGB + TPDF dither.
 // Sanity FX drive the uniforms (vignette/grain/aberration/dead from Engine._applyFX).
 export const GRADE_FRAG = /* glsl */ `
   precision highp float;
   in vec2 vUv;
   out vec4 outColor;
   uniform sampler2D tDiffuse;
-  uniform float time, levels, vignette, grain, aberration, dead, exposure, sat;
+  uniform float time, levels, vignette, grain, aberration, dead, exposure, sat, lift;
   uniform vec3 tint;
+  uniform vec3 shadowTint;   // split-tone multiplier at the dark end
+  uniform vec3 highTint;     // split-tone multiplier at the bright end
   ${COLOR_FNS}
   ${IGN}
   ${HASH}
 
-  // Khronos PBR Neutral tone map: hue-preserving, leaves values below ~0.8 almost
-  // untouched and rolls bright lamp/flashlight/bloom cores off toward white instead
-  // of hard-clipping (which had been blowing the warm hue out to flat white).
-  vec3 toneMap(vec3 color){
-    const float startCompression = 0.8 - 0.04;
-    const float desaturation = 0.15;
-    float x = min(color.r, min(color.g, color.b));
-    float offset = x < 0.08 ? x - 6.25 * x * x : 0.04;
-    color -= offset;
-    float peak = max(color.r, max(color.g, color.b));
-    if (peak < startCompression) return color;
-    float dd = 1.0 - startCompression;
-    float newPeak = 1.0 - dd * dd / (peak + dd - startCompression);
-    color *= newPeak / peak;
-    float g = 1.0 - 1.0 / (desaturation * (peak - newPeak) + 1.0);
-    return mix(color, newPeak * vec3(1.0), g);
+  // Filmic tone curve: the Narkowicz ACES fit (a real toe and a long
+  // shoulder). The old Khronos PBR Neutral map was linear up to ~0.76, so lamp
+  // pools on light walls went straight to the shoulder and flattened to cream.
+  // Applied mostly to LUMINANCE (hue-preserving: yellow walls stay yellow, the
+  // anime palette survives), blending toward the per-channel curve as values
+  // climb so hot cores roll off to warm white instead of clipping one channel.
+  const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
+  float aces(float x){ return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
+  vec3 aces3(vec3 x){ return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
+  vec3 toneMap(vec3 c){
+    c = max(c, 0.0);
+    float L = dot(c, LUMA);
+    vec3 hue = c * (aces(L) / max(L, 1e-5));
+    vec3 chan = aces3(c);
+    return min(mix(hue, chan, 0.3 + 0.5 * smoothstep(0.3, 1.4, L)), vec3(1.0));
   }
 
   void main(){
@@ -46,8 +48,14 @@ export const GRADE_FRAG = /* glsl */ `
     // Post-tonemap saturation push (anime palette pop). After the tone map so
     // it can't fight the hue-preserving rolloff; clamped at 0 so deep shadows
     // can't go negative and NaN the posterize below.
-    float luma = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    float luma = dot(col, LUMA);
     col = max(mix(vec3(luma), col, sat), 0.0);
+    // Split tone: dusk-blue shadows, warm highlights (anime background
+    // colour script), then lift the deepest values toward a shadow blue so
+    // nothing reads as dead black ink except the ink itself.
+    float tl = dot(col, LUMA);
+    col *= mix(shadowTint, highTint, smoothstep(0.02, 0.5, tl));
+    col += lift * vec3(0.6, 0.7, 1.0) * (1.0 - smoothstep(0.0, 0.2, tl));
     float v = max(max(col.r, col.g), col.b);
     if (v > 1e-4) {
       float vg = pow(v, 0.4545);

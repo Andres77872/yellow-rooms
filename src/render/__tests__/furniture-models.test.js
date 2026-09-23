@@ -100,10 +100,36 @@ describe('furniture GLB exports (Blender pipeline contract)', () => {
         for (const prim of mesh.primitives) {
           expect(prim.material).toBeTypeOf('number')
           expect(prim.attributes.TEXCOORD_0).toBeUndefined()
+          // Painted vertex shading (yr_shading.py): a compact normalized
+          // UNSIGNED_BYTE multiplier the bake folds into the part color.
+          const color = json.accessors[prim.attributes.COLOR_0]
+          expect(color).toMatchObject({ componentType: 5121, normalized: true, type: 'VEC4' })
         }
       }
       expect(json.cameras ?? []).toHaveLength(0)
       expect(json.extensionsRequired ?? []).toHaveLength(0)
+    }
+  })
+
+  it('keeps the painted COLOR_0 multiplier gentle (the game adds SSAO on top)', async () => {
+    for (const name of Object.values(FURNITURE_MODEL_FILES)) {
+      const { scene } = await readModel(name)
+      let lo = Infinity, sum = 0, count = 0
+      scene.traverse((node) => {
+        const color = node.isMesh ? node.geometry.attributes.color : null
+        if (!color) return
+        expect(node.material.vertexColors, name).toBe(true)
+        for (let i = 0; i < color.count; i++) {
+          const v = (color.getX(i) + color.getY(i) + color.getZ(i)) / 3
+          lo = Math.min(lo, v)
+          sum += v
+          count++
+        }
+      })
+      expect(count, name).toBeGreaterThan(0)
+      expect(lo, name).toBeGreaterThanOrEqual(0.6) // never crushes toward black
+      expect(sum / count, name).toBeGreaterThan(0.72)
+      disposeModelScene(scene)
     }
   })
 
@@ -503,5 +529,27 @@ describe('chunk furniture batching (GLB path)', () => {
     // Swap-in respects the mount() transform freeze contract.
     expect(glb.matrixWorldAutoUpdate).toBe(false)
     chunk.dispose()
+  })
+
+  it('disposes the upgraded furniture batch (not only the build-time one) on unload', () => {
+    const geom = createGeometries()
+    const chunk = new Chunk(0, 0, 0, 4242, stubMaterials(), geom, null, DEFAULT_WORLD_CONFIG, null, null)
+    chunk.data.furniture.push(
+      { kind: FURN_DESK, lx: 4, lz: 4, x: 8.4, z: 8.4, w: DESK_W, d: DESK_D, facing: 0 }
+    )
+    chunk.refreshFurniture(null)
+    const boxed = chunk.renderParts.furniture
+    chunk.refreshFurniture(stubLibrary())
+    const glb = chunk.renderParts.furniture
+    const disposed = new Set()
+    for (const part of [boxed, glb]) {
+      for (const c of part.children) c.addEventListener('dispose', () => disposed.add(c))
+    }
+
+    chunk.dispose()
+
+    for (const c of glb.children) expect(disposed.has(c)).toBe(true)
+    // The already-released first generation is not disposed a second time.
+    for (const c of boxed.children) expect(disposed.has(c)).toBe(false)
   })
 })

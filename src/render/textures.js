@@ -40,6 +40,43 @@ function speckle(ctx, size, count, colors, min, max) {
   ctx.globalAlpha = 1
 }
 
+// Soft painted wear: feathered, slightly elongated blots (radial gradients,
+// low alpha) instead of hard discs — at the new darker exposure the old
+// crisp stains read as polka dots rather than traffic wear. Each blot is also
+// drawn at its wrapped offsets, so one crossing the tile edge never leaves a
+// seam in the repeat.
+function softBlots(ctx, size, count, colors, min, max, alpha = 0.22) {
+  for (let i = 0; i < count; i++) {
+    const color = colors[(Math.random() * colors.length) | 0]
+    const r = min + Math.random() * (max - min)
+    const x = Math.random() * size
+    const y = Math.random() * size
+    const stretch = 1 + Math.random() * 0.8
+    const angle = Math.random() * Math.PI
+    ctx.globalAlpha = alpha * (0.5 + Math.random() * 0.5)
+    for (const ox of [-size, 0, size]) {
+      for (const oy of [-size, 0, size]) {
+        const cx = x + ox
+        const cy = y + oy
+        if (cx + r * stretch < 0 || cx - r * stretch > size || cy + r * stretch < 0 || cy - r * stretch > size) continue
+        ctx.save()
+        ctx.translate(cx, cy)
+        ctx.rotate(angle)
+        ctx.scale(stretch, 1)
+        const g = ctx.createRadialGradient(0, 0, 0, 0, 0, r)
+        g.addColorStop(0, color)
+        g.addColorStop(1, 'rgba(0,0,0,0)')
+        ctx.fillStyle = g
+        ctx.beginPath()
+        ctx.arc(0, 0, r, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.restore()
+      }
+    }
+  }
+  ctx.globalAlpha = 1
+}
+
 // Soft painted top-light / floor-shade vertical gradient (background-art
 // shading, not grime) shared by every wall style.
 function wallGradient(ctx, s, spec) {
@@ -57,14 +94,14 @@ function wallGradient(ctx, s, spec) {
 // Warm carpet: a mostly-flat painted field with sparse soft flecks.
 function floorCarpet(ctx, s, spec) {
   speckle(ctx, s, 900, spec.flecks, 0.5, 1.3)
-  speckle(ctx, s, 7, spec.stains, 6, 15)
+  softBlots(ctx, s, 5, spec.stains, 14, 34)
 }
 
 // Poured concrete walkway: broad damp blotches, a few hairline cracks, and a
 // shallow perimeter darkening so slabs read as individually poured bays.
 function floorConcrete(ctx, s, spec) {
   speckle(ctx, s, 350, spec.flecks, 0.6, 1.6)
-  speckle(ctx, s, 10, spec.stains, 8, 22)
+  softBlots(ctx, s, 8, spec.stains, 14, 38, 0.3)
   ctx.strokeStyle = spec.stains[0]
   ctx.globalAlpha = 0.35
   ctx.lineWidth = 1

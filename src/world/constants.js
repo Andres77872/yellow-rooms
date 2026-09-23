@@ -116,10 +116,16 @@ export const LIGHT_MAX = 72 // max lamps shaded per frame (uniform-array cap; lo
 // looks like fog" failure). Range 11 + the shared CUBIC window (lampAtt in
 // shaders/common.js, mirrored by ChunkManager.lightAt) makes each fixture cast
 // a distinct pool that dies before the next lamp: light has shape again.
-// Intensity is re-anchored up so the pool CENTERS stay bright — contrast comes
-// from the falloff, not from dimming the world.
+// Contrast comes from the falloff, not from flooding the pool: at 3.0 the
+// pool centres sat past the tone curve's shoulder and every lit wall clipped
+// to flat cream (the "too bright" complaint): on the office spawn view even
+// the darkest 5% of the frame sat at 0.51 sRGB. 1.15 puts a pool centre on a
+// light wall well under the shoulder, so the lamp panel itself (PANEL_GLOW,
+// HDR) stays the brightest thing on screen, walls keep their painted gradient,
+// and the gaps between pools finally read as dim. The lamp bounce term (LAMP_BOUNCE) returns some of the fill the
+// lower intensity takes out of the shadow side.
 export const LIGHT_RANGE = 11 // lamp reach (world units) before windowed to 0
-export const LIGHT_INTENSITY = 3.0 // per-lamp warm contribution (linear, pre-grade)
+export const LIGHT_INTENSITY = 1.15 // per-lamp warm contribution (linear, pre-grade)
 // Lamp candidate radius. Must reach far enough that a lamp's floor pool
 // (LIGHT_RANGE) can only appear/disappear where the fog already dominates:
 // QUERY_R + LIGHT_RANGE = 73u sits past the 50%-fog distance (~59u at density
@@ -153,6 +159,32 @@ export const APERTURE_VIS_CHUNKS = 1
 // terminator there at all.
 export const CEL_BANDS = 4
 export const CEL_FLOOR = 0.12
+// Semi-realistic anime split: environments are painted backgrounds (soft
+// gradients with a defined but soft terminator), characters are cel. World
+// surfaces therefore mix CEL_HARD of the banded ramp into a smooth painted
+// ramp; entities keep their fully stepped rim. 0 = all painted, 1 = old bands.
+export const CEL_HARD = 0.3
+// Anime "subsurface" terminator: a thin band of saturated lamp colour where
+// the lit side turns into shadow (the warm edge painted on shadow boundaries
+// in Genshin/KyoAni-style shading). Colour is the lamp colour pushed toward
+// full saturation (DeferredRenderer.applyPalette); this is its strength.
+export const TERMINATOR_STRENGTH = 0.26
+// Cheap one-bounce fill: a non-directional share of every nearby lamp's
+// irradiance, tinted by the family's floor colour — the floor pool lighting
+// the ceiling and wall undersides. It removes the dirty dark halo the ceiling
+// used to get around every fixture and gives the yellow rooms their warm
+// indirect glow.
+export const LAMP_BOUNCE = 0.07
+// Stylised lamp specular for glossy materials (G-buffer normal alpha carries
+// per-material gloss; carpet 0, tile/metal high). A soft-thresholded Blinn
+// lobe reads as the painted light streaks on anime corridor floors rather
+// than a plastic Phong hotspot.
+export const SPEC_POWER = 56
+export const SPEC_STRENGTH = 0.55
+// Highlight reach as a multiple of LIGHT_RANGE: a mirror-like floor shows a
+// lamp's reflection far past the pool that lamp casts. Shader-only — the AI's
+// light sense (ChunkManager.lightAt) mirrors the diffuse window, not this.
+export const SPEC_REACH = 1.8
 // How much SSAO modulates DIRECT lamp light (0 = none/physical, 1 = full). The
 // ambient term always gets full AO; this is a deliberate non-physical contact-
 // darkening lever for the direct term.
@@ -168,7 +200,7 @@ export const LAMP_AO_MIX = 0.34
 // survives the grade.
 export const AMBIENT_SKY = 0x38456e // hemi up tint (lights up-facing floors)
 export const AMBIENT_GROUND = 0x2a2740 // hemi down tint (lights down-facing ceilings)
-export const RIM_STRENGTH = 0.24 // anime fresnel edge light
+export const RIM_STRENGTH = 0.14 // anime fresnel edge light (world; entities use ENTITY_RIM)
 export const RIM_POW = 3.0 // fresnel falloff exponent for the rim term
 export const RIM_MIX = 0.52 // rim contribution scale (uRimColor * rim * RIM_MIX)
 // Rim light decoupled from the warm lamp color: a pale COOL edge light is the
@@ -181,6 +213,9 @@ export const RIM_MIX = 0.52 // rim contribution scale (uRimColor * rim * RIM_MIX
 // term hits whole floor/ceiling planes, so RIM_MIX is the safety valve.
 export const RIM_COLOR = 0xcfe0ff
 export const ENTITY_RIM = 0x8fa3c8
+// Flat fill for entities, multiplied by their albedo (lighting.js): ink stays
+// ink, pale parts stay pale enough to read even between lamp pools.
+export const ENTITY_FILL = 0.3
 // Wrapped diffuse (half-Lambert) factor for the per-lamp N·L. >0 wraps a lamp's
 // light around onto grazing / under-facing surfaces (ceilings, wall undersides)
 // so floor/roof/walls read consistently lit. The range window still keeps
@@ -204,7 +239,7 @@ export const LAMP_TINT_VAR = 0.045 // per-channel colour-temperature drift (subt
 
 // Flashlight (analytic cone in the lighting pass)
 export const FLASH_RANGE = 26
-export const FLASH_INTENSITY = 2.2
+export const FLASH_INTENSITY = 1.5
 export const FLASH_COS_INNER = 0.94
 export const FLASH_COS_OUTER = 0.86
 export const FLASH_COLOR = 0xfff0c4 // warm white flashlight tint
@@ -332,7 +367,11 @@ export const VOL_MAXDIST = 46 // clamp march distance (world units)
 // air stays clear everywhere else.
 export const VOL_DENSITY = 0.03 // in-scatter coefficient
 export const VOL_PHASE_G = 0.74 // Henyey-Greenstein anisotropy (0 = isotropic; higher = tighter forward beams)
-export const VOL_INTENSITY = 0.75 // composite strength of the shafts
+// Measured on the office spawn view (HDR probe of the composite): at 0.75
+// the in-scatter added +0.3..+0.7 linear across the WHOLE frame — more than
+// the lamps themselves on shadowed walls — which was most of the milky
+// over-bright veil. 0.3 keeps visible beams toward a lamp without the fog.
+export const VOL_INTENSITY = 0.3 // composite strength of the shafts
 export const VOL_OCC_NEAR = 0.05 // volumetric visToLight near acceptance (shaft cutoff vs leak)
 export const VOL_OCC_FAR = 4.0 // volumetric visToLight far thickness window
 // Minimum per-sample lamp weight (flicker/fade x cubic attenuation) worth the
@@ -344,16 +383,41 @@ export const VOL_CONTRIB_EPS = 0.01
 
 // Emissive bloom (selective by matID; fluorescents + exit glow)
 export const BLOOM_SCALE = 0.5 // bloom buffers at half res
-export const BLOOM_SPREAD = 4.5 // blur step in texels (wider = softer glow)
-export const BLOOM_INTENSITY = 1.25
+export const BLOOM_SPREAD = 2.5 // blur step in texels of the tight halo
+export const BLOOM_INTENSITY = 0.8 // tight halo around the tubes
+// Two-scale bloom (the Shinkai glow): the tight halo is re-blurred at quarter
+// res into a wide, soft veil, so a lamp reads as a source that lights the air
+// around it instead of a hard-edged sticker. Wide spread is in quarter-res
+// texels (~4x the tight step in screen space).
+export const BLOOM_WIDE_SPREAD = 3.2
+export const BLOOM_WIDE_INTENSITY = 0.45
+// Bright NON-emissive surfaces bloom too, but only their HDR excess over
+// BLOOM_THRESHOLD (soft knee) and at BLOOM_SURFACE weight: a flashlit wall or
+// a pool centre glows faintly, painted-highlight style, while mid-tones never
+// haze.
+export const BLOOM_THRESHOLD = 1.1
+export const BLOOM_KNEE = 0.4
+export const BLOOM_SURFACE = 0.18
 // HDR boost on the lit tubes' emissive (× the flicker level). Pushes the panel
 // core past 1.0 so the tone map rolls it toward white and the selective bloom
 // halos it — fixtures read as SOURCES (the anime fluorescent glow), where at
 // ~0.9 they used to vanish into an equally-bright ceiling.
 export const PANEL_GLOW = 1.7
 
-// Posterize cel bands in the grade (higher = smoother gradients)
-export const GRADE_LEVELS = 14.0
+// Posterize cel bands in the grade (higher = smoother gradients). 14 levels
+// stepped every painted wall gradient into visible contours; semi-realistic
+// backgrounds want the gradient, so the posterize is now only a faint
+// quantisation that the dither hides.
+export const GRADE_LEVELS = 48.0
+// Pre-tonemap exposure (per family override: familyPalette `exposure`).
+export const GRADE_EXPOSURE = 0.66
+// Split toning after the tone curve: shadows lean cool (the dusk-blue shadow
+// side of anime backgrounds), highlights lean warm. Multipliers, ~1.
+export const GRADE_SHADOW_TINT = [0.93, 0.97, 1.08]
+export const GRADE_HIGHLIGHT_TINT = [1.04, 1.0, 0.95]
+// Anime shadows are never pure black: the darkest values lift toward a deep
+// shadow blue by this much (linear, before the sRGB encode).
+export const GRADE_LIFT = 0.01
 // Warm look-tint applied in the grade (linear). Blue at 0.9 keeps the amber
 // mood but stops crushing the cool half of the palette — the slate-violet
 // ambient, rim light, mint exit glow and violet sanity tones are exactly the
@@ -361,8 +425,10 @@ export const GRADE_LEVELS = 14.0
 export const GRADE_TINT = [1.06, 1.0, 0.88]
 // Post-tonemap saturation (1 = neutral). A gentle push toward the clean,
 // saturated anime palette; done AFTER tone mapping so it never fights the
-// hue-preserving rolloff.
-export const GRADE_SAT = 1.34
+// hue-preserving rolloff. Kept restrained: semi-realistic anime keeps fully
+// saturated colour to a small share of the frame (lamp glow, signs, the exit)
+// — 1.34 pushed every wall and floor to poster saturation.
+export const GRADE_SAT = 1.12
 // Seconds after which the grade's grain/dead-static clock wraps. The shader
 // hashes `uv * 1280 + time`; Engine._time accumulates from boot, so past ~1e4
 // the highp-float ULP of that sum (~1e-3 and growing) exceeds the per-pixel
@@ -379,7 +445,13 @@ export const GRADE_TIME_WRAP = 600
 // DEPTH_THRESH is in normalized-depth units (viewZ/FAR): rescaled 0.009->0.012
 // when FAR went 240->180 so the same world-space depth step trips an edge.
 export const OUTLINE_INK = 0x1c1710
-export const OUTLINE_THICKNESS = 1.8
+// Colour-traced line art (iro-tore): world ink takes a darkened, saturated
+// version of the surface's own albedo instead of flat near-black, blended by
+// OUTLINE_INK_TINT, and draws at OUTLINE_OPACITY. Entities keep full black
+// ink — the one thing that should read as drawn over the painting.
+export const OUTLINE_INK_TINT = 0.7
+export const OUTLINE_OPACITY = 0.8
+export const OUTLINE_THICKNESS = 1.3
 export const OUTLINE_DEPTH_THRESH = 0.012
 export const OUTLINE_NORMAL_THRESH = 0.42
 // The near/far envelope is no longer a safety net — it is the look. World ink

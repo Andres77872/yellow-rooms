@@ -304,10 +304,25 @@ function depenetrate(cm, pos, hit, cy) {
   }
 }
 
-// Line-of-sight via an Amanatides-Woo grid DDA: step cell to cell and block on
-// the wall LINE crossed at each step. Replaces point-sampling, which would pass
-// straight through zero-width walls. Endpoints' own cells are not tested.
-export function hasLineOfSight(cm, x0, z0, x1, z1, cy = 0) {
+// May a walker occupy cell (gx,gz) on layer cy? Columns (incl. furniture)
+// block, and so do stair run cells (the ramp) and hole cells (open slab) — the
+// ONE walkability rule shared by A* expansion, retargeting, steering, the
+// debug flood, and the walk-mode line test below.
+export function cellBlocked(cm, gx, gz, cy) {
+  if (cm.columnAt(gx, gz, cy)) return true
+  if (cm.floorHoleAt?.(gx, gz, cy)) return true
+  const s = cm.stairAt(gx, gz, cy)
+  return !!s && (s.part === 'run' || s.part === 'hole')
+}
+
+// Amanatides-Woo grid DDA: step cell to cell and block on the wall LINE crossed
+// at each step (point-sampling would pass straight through zero-width walls).
+// The endpoints' own cells are not tested. Two modes share the traversal:
+//   sight — sight-opaque walls (observation windows and guard rails are see-
+//           through) and true-size piers; low furniture does not occlude.
+//   walk  — collision walls and every cell A* refuses, so a clear walk line is
+//           a straight route an enemy can actually take.
+function gridLineClear(cm, x0, z0, x1, z1, cy, walk) {
   let gx = worldToCell(x0)
   let gz = worldToCell(z0)
   const gxe = worldToCell(x1)
@@ -322,24 +337,54 @@ export function hasLineOfSight(cm, x0, z0, x1, z1, cy = 0) {
     dx !== 0 ? (sx > 0 ? (gx + 1) * CELL - x0 : x0 - gx * CELL) / Math.abs(dx) : Infinity
   let tMaxZ =
     dz !== 0 ? (sz > 0 ? (gz + 1) * CELL - z0 : z0 - gz * CELL) / Math.abs(dz) : Infinity
+  const sightV = !walk && cm.opaqueVAt
+  const sightH = !walk && cm.opaqueHAt
   let guard = 0
   let startCell = true
   while ((gx !== gxe || gz !== gze) && guard++ < 4096) {
-    // Match the historical endpoint policy: the observer and target cells are
-    // not self-occluding. Every intermediate cell is tested at true pier size.
-    if (!startCell && segmentHitsColumn(cm, gx, gz, cy, x0, z0, x1, z1)) return false
+    if (!startCell) {
+      if (walk ? cellBlocked(cm, gx, gz, cy) : segmentHitsColumn(cm, gx, gz, cy, x0, z0, x1, z1)) {
+        return false
+      }
+    }
     startCell = false
     if (tMaxX < tMaxZ) {
       const line = sx > 0 ? gx + 1 : gx
-      if (cm.opaqueVAt ? cm.opaqueVAt(line, gz, cy) : cm.wallVAt(line, gz, cy)) return false
+      if (sightV ? cm.opaqueVAt(line, gz, cy) : cm.wallVAt(line, gz, cy)) return false
       gx += sx
       tMaxX += tDeltaX
     } else {
       const line = sz > 0 ? gz + 1 : gz
-      if (cm.opaqueHAt ? cm.opaqueHAt(gx, line, cy) : cm.wallHAt(gx, line, cy)) return false
+      if (sightH ? cm.opaqueHAt(gx, line, cy) : cm.wallHAt(gx, line, cy)) return false
       gz += sz
       tMaxZ += tDeltaZ
     }
   }
   return true
+}
+
+export function hasLineOfSight(cm, x0, z0, x1, z1, cy = 0) {
+  return gridLineClear(cm, x0, z0, x1, z1, cy, false)
+}
+
+// Sight is not walkability: an enemy that can SEE the player across a railed
+// void, through an observation window, or over a desk must still route.
+export function hasWalkableLine(cm, x0, z0, x1, z1, cy = 0) {
+  return gridLineClear(cm, x0, z0, x1, z1, cy, true)
+}
+
+// Is the straight segment walkable for a body of PLAYER_R half-width (not just
+// a zero-width ray)? Centre ray plus two parallel rays offset by the radius.
+export function hasWalkableCorridor(cm, x0, z0, x1, z1, cy = 0) {
+  const dx = x1 - x0
+  const dz = z1 - z0
+  const d = Math.hypot(dx, dz)
+  if (d < 1e-4) return true
+  const px = (-dz / d) * PLAYER_R
+  const pz = (dx / d) * PLAYER_R
+  return (
+    hasWalkableLine(cm, x0, z0, x1, z1, cy) &&
+    hasWalkableLine(cm, x0 + px, z0 + pz, x1 + px, z1 + pz, cy) &&
+    hasWalkableLine(cm, x0 - px, z0 - pz, x1 - px, z1 - pz, cy)
+  )
 }

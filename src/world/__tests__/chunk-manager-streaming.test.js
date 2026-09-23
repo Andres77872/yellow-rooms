@@ -330,6 +330,49 @@ function makeLatticeManager(seed, config) {
   return { cm, built }
 }
 
+describe('ChunkManager furniture model upgrade', () => {
+  const fakeChunk = (cx, cy, cz) => ({
+    cx, cy, cz,
+    furnitureModelCount: 0,
+    refreshFurniture: vi.fn(function (models) {
+      this.furnitureModelCount = models.geometries.size
+    }),
+  })
+
+  it('re-meshes residents nearest-first under the frame budget, not all at once', () => {
+    const cm = new ChunkManager(new THREE.Scene(), 1, null, null)
+    cm.config = ordinaryConfig()
+    cm._planStreamingRequests = () => {}
+    cm._unloadOutsideStreamingBounds = () => {}
+    const near = fakeChunk(0, 0, 0)
+    const far = fakeChunk(3, 0, 3)
+    cm.chunks.set('far', far)
+    cm.chunks.set('near', near)
+    const lib = { geometries: new Map([[1, {}]]) }
+
+    cm.upgradeFurnitureModels(lib)
+    expect(near.refreshFurniture).not.toHaveBeenCalled() // deferred to update()
+
+    let t = 0
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => t)
+    near.refreshFurniture.mockImplementation(function (models) {
+      this.furnitureModelCount = models.geometries.size
+      t += STREAM_BUILD_BUDGET_MS // one refresh spends the whole slice
+    })
+    cm.update(0, 0, 0)
+    expect(near.refreshFurniture).toHaveBeenCalledOnce()
+    expect(far.refreshFurniture).not.toHaveBeenCalled()
+    expect(cm._furnitureStale).toBe(true)
+
+    cm.update(0, 0, 0)
+    expect(far.refreshFurniture).toHaveBeenCalledOnce()
+    cm.update(0, 0, 0)
+    expect(cm._furnitureStale).toBe(false)
+    expect(near.refreshFurniture).toHaveBeenCalledOnce() // already current
+    clock.mockRestore()
+  })
+})
+
 describe('ChunkManager streaming queue', () => {
   it('validates tall-structure retention only for slabs beyond ordinary Y hysteresis', () => {
     const { cm } = makeManager()

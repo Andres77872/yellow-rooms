@@ -16,6 +16,7 @@ import { moveAndCollide } from './collision.js'
 import { groundHeightAt } from './ground.js'
 import { HeadBob } from './headbob.js'
 import { CameraFx } from './cameraFx.js'
+import { isEditableFocused } from '../core/input.js'
 
 const MAX_PITCH = Math.PI / 2 - 0.05
 // Thumb travel on a phone is far shorter than mouse travel, so touch look runs
@@ -122,7 +123,10 @@ export class Controller {
     }
     listen(globalThis, 'keydown', (e) => {
       this.keys.add(e.code)
-      if (e.code === 'KeyF') this._toggleFlashlight()
+      // Auto-repeat would strobe the beam (and its click voices) while held.
+      if (e.code === 'KeyF' && !e.repeat && this.inputEnabled && !isEditableFocused()) {
+        this._toggleFlashlight()
+      }
     })
     listen(globalThis, 'keyup', (e) => this.keys.delete(e.code))
     listen(globalThis, 'blur', () => {
@@ -304,8 +308,9 @@ export class Controller {
 
     // Vertical resolve (v8). Grounded movement is glue-to-ground: the stair
     // ramp rises ~0.05u per substep, far inside GROUND_SNAP, so walking stairs
-    // is pure snap-follow (GROUND_SNAP doubles as the max climb rate — a
-    // bigger instantaneous ground jump becomes a fall/land, not a teleport).
+    // is pure snap-follow. GROUND_SNAP bounds only the DROP that still counts
+    // as grounded (a bigger drop becomes a fall/land); upward the feet always
+    // snap onto the surface, and guard walls keep taller ledges out of reach.
     // The gravity branch is a safety net for teleports/debug drops only: in
     // normal play every hole edge is either guard-walled or opens onto the
     // ramp top at the same height.

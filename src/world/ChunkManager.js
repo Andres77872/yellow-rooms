@@ -167,6 +167,7 @@ export class ChunkManager {
     // by reference: chunks consult it at mesh time and fall back to the
     // procedural box builders while it is still empty.
     this.furnitureModels = models
+    this._furnitureStale = false // residents await a budgeted furniture re-mesh
     this.chunks = new Map() // chunkKey3 -> Chunk
     this.queue = [] // pending keys
     this.queued = new Set()
@@ -212,18 +213,35 @@ export class ChunkManager {
     this.exit = { cx, cy, cz, lx, lz }
   }
 
-  // Replace the forced-open clearing list (each {cx,cy,cz,lx,lz,r?}). Keeps the
-  // spawn clearing unless the caller overrides it.
-  setClearings(list) {
-    this.clearings = list
-  }
-
-  // Swap the furniture model library and re-mesh every resident chunk's
-  // furniture batch (Engine calls this when the Blender GLBs finish loading).
+  // Swap the furniture model library (Engine calls this when the Blender GLBs
+  // finish loading). Resident chunks re-mesh their furniture batch from
+  // update(), nearest first under the streaming build budget — re-meshing the
+  // several hundred residents in the promise callback was one long stall.
   // Chunks built afterwards pick the library up through the constructor path.
   upgradeFurnitureModels(models = this.furnitureModels) {
     this.furnitureModels = models
-    for (const chunk of this.chunks.values()) chunk.refreshFurniture(models)
+    this._furnitureStale = true
+  }
+
+  // Re-mesh stale furniture batches, nearest chunk first, until the frame's
+  // build budget is spent (always at least one, so the upgrade converges even
+  // while streaming saturates the budget). Clears the flag once none remain.
+  _refreshStaleFurniture(pcx, pcy, pcz, budgetStart) {
+    const want = this.furnitureModels?.geometries?.size ?? 0
+    const stale = []
+    for (const c of this.chunks.values()) if (c.furnitureModelCount !== want) stale.push(c)
+    if (!stale.length) {
+      this._furnitureStale = false
+      return
+    }
+    const ring = (c) =>
+      Math.max(Math.abs(c.cx - pcx), Math.abs(c.cz - pcz)) + Math.abs(c.cy - pcy)
+    stale.sort((a, b) => ring(a) - ring(b))
+    for (let i = 0; i < stale.length; i++) {
+      if (i > 0 && performance.now() - budgetStart >= STREAM_BUILD_BUDGET_MS) return
+      stale[i].refreshFurniture(this.furnitureModels)
+    }
+    this._furnitureStale = false
   }
 
   setRenderDetailProfile(profile) {
@@ -546,6 +564,7 @@ export class ChunkManager {
     }
 
     if (planDirty) this._unloadOutsideStreamingBounds(pcx, pcy, pcz)
+    if (this._furnitureStale) this._refreshStaleFurniture(pcx, pcy, pcz, buildStart)
     this._streamPlanChunkCount = this.chunks.size
   }
 

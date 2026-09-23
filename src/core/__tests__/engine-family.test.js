@@ -174,6 +174,7 @@ vi.mock('../../audio/AudioBus.js', () => ({
   AudioBus: class {
     constructor() {
       this.setVolume = vi.fn()
+      this.silence = vi.fn()
       this.resetLevel = vi.fn()
       this.start = vi.fn()
       this.setTension = vi.fn()
@@ -497,6 +498,28 @@ describe('engine resource lifetime', () => {
     expect(engine.lightField.reset).toHaveBeenCalledOnce()
     expect(engine.deferred.lightUniforms.uFlashOn.value).toBe(0)
     expect(engine.deferred.grade.dead.value).toBe(0)
+  })
+
+  it('drops the quit frame low-sanity grade before showing the title backdrop', () => {
+    const engine = createEngine()
+    engine.state.phase = Phase.PAUSED
+    engine.state.sanity = 0.1
+    engine.state.exposure = 5
+    engine.controller.speedMul = 0.45
+    engine._applyFX(1)
+    const stressed = engine.deferred.grade.vignette.value
+
+    engine.quitToTitle()
+
+    expect(engine.state.sanity).toBe(1)
+    expect(engine.state.exposure).toBe(0)
+    expect(engine.controller.speedMul).toBe(1)
+    expect(engine.deferred.grade.vignette.value).toBeLessThan(stressed)
+    expect(engine.deferred.grade.vignette.value).toBeCloseTo(0.16)
+    expect(engine.deferred.grade.aberration.value).toBeCloseTo(0.0026)
+    // Enemies are parked (reset hides them) instead of standing frozen in the
+    // rotating title backdrop.
+    for (const enemy of engine.enemies) expect(enemy.reset).toHaveBeenCalled()
   })
 
   it('upgrades models that finish before the first start', async () => {

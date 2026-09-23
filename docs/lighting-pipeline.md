@@ -1,7 +1,9 @@
 # Lighting & Rendering Pipeline
 
 Verified on 2026-07-24 against the current renderer, shaders, graphics settings,
-debug tools, and light-field implementation.
+debug tools, and light-field implementation. The semi-realistic anime look pass
+(lighting model, two-scale bloom, colour-traced ink, filmic grade) was added on
+2026-09-22 — see [Art direction](#art-direction-semi-realistic-anime).
 
 The game renders through a custom deferred toon pipeline (`src/render/DeferredRenderer.js`).
 There are **no real three.js lights**: lamps are shaded from a uniform field, the
@@ -12,17 +14,20 @@ render targets, uniforms and per-frame orchestration only.
 ## Frame anatomy
 
 ```
-G-buffer (albedo+matID, viewNormal, depth)
+G-buffer (albedo+matID, viewNormal+gloss, depth)
   ├─ SSAO          half-res hemisphere kernel + bilateral blur      [tier: off/low/high/ultra]
   ├─ Shadow mask   half-res screen-space march to N nearest lamps   [tier: off/low/high/ultra]
-  │                + bilateral blur (contribution-weighted, exact)
-  ├─ Lighting      hemispheric ambient + ≤72 cel-banded lamps
+  │                + bilateral blur (luminance-contribution-weighted)
+  ├─ Lighting      hemispheric ambient + ≤72 painted/cel lamps
+  │                (+ terminator band, gloss highlight, one-bounce fill)
   │                + flashlight cone + rim + analytic exp² fog
   ├─ Volumetrics   half-res in-scatter raymarch (lamps + flashlight) [tier: off/low/high/ultra]
-  ├─ Bloom         selective by matID (emissive only), separable blur [toggle]
-  ├─ Composite     lit + shafts·intensity + bloom·intensity
-  ├─ Outline       depth/normal Sobel ink, fog-faded                 [toggle]
-  ├─ Grade         tone map → tint → posterize → vignette/grain → sRGB
+  ├─ Bloom         emissives + soft-kneed lit excess; tight half-res blur,
+  │                then a wide quarter-res re-blur                   [toggle]
+  ├─ Composite     lit + shafts·intensity + tight + wide bloom
+  ├─ Outline       depth/normal Sobel, colour-traced ink, fog-faded  [toggle]
+  ├─ Grade         filmic tone map → tint → sat → split tone/lift →
+  │                faint posterize → vignette/grain → sRGB
   └─ FXAA          final LDR pass to screen                          [toggle]
 ```
 
@@ -335,3 +340,100 @@ binding, but on a desktop GPU a fully-cached 4-texel LUT fetch is close to free,
 so they do not show a measurable win at this lamp count — expect more from them
 on tile-based mobile GPUs (the `medium`/touch preset) and at higher lamp counts.
 **Re-measure on the target device before treating either as a budget saving.**
+
+## Art direction: semi-realistic anime
+
+Reference points: Makoto Shinkai / Kyoto Animation background painting and
+the Genshin Impact / Honkai: Star Rail toon pipelines. The rules this pass
+applies: environments are painted (smooth gradients, a soft but defined
+terminator), characters are cel; shadows are hue-shifted cool rather than
+darkened; fully saturated colour is a small share of the frame; light sources
+glow into the air around them; line art is thin and colour-traced; nothing
+reads as dead black except ink.
+
+### Lighting model (`shaders/lighting.js`)
+
+- **Painted ramp.** World surfaces shade with `surfaceRamp()`
+  (`shaders/common.js` `LIT_RAMP`): a smoothstep ramp from `CEL_FLOOR` to 1
+  carrying only `CEL_HARD` (0.3) of the old banded ramp. The shadow pass
+  weights its visibility mask with the same function. Entities keep the fully
+  stepped rim.
+- **Terminator band.** A bell over the wrapped N·L, peaking just inside the
+  terminator, adds the lamp colour pushed toward full saturation
+  (`terminatorColor()` in `DeferredRenderer.js`: squared and renormalised) at
+  `TERMINATOR_STRENGTH`. Warm tubes paint an amber edge, cold tubes a mint one.
+- **Gloss highlight.** The G-buffer normal target's alpha, previously a
+  constant 1, carries per-material gloss (`SURFACE_GLOSS` in
+  `gbufferMaterials.js`, chosen by palette surface style: carpet 0, tile 0.55,
+  deck 0.38; props, trim, furniture and entities 0.2–0.45). Each lamp adds a
+  soft-thresholded Blinn lobe (`SPEC_POWER`, `SPEC_STRENGTH`) — the painted
+  light streaks on anime corridor floors. The lobe has its own cubic window at
+  `SPEC_REACH` (1.8) × the lamp range, because a glossy floor mirrors a panel
+  far beyond the pool it casts. A Schlick-style grazing boost (0.4 → 1) favours
+  the low angles a first-person camera sees floors at. `_updateFrame` culls
+  lamps against that longer reach, so a lamp just above the view still
+  reflects in the floor. `ChunkManager.lightAt` still mirrors only the
+  diffuse window. The flashlight adds its own lobe back at the eye. The gloss
+  costs no bandwidth: the alpha was already stored.
+- **One-bounce fill.** A non-directional share (`LAMP_BOUNCE`) of every
+  nearby lamp's irradiance, tinted by the family's `floor.base`, ignores the
+  shadow mask and takes AO. The floor pool lights the ceiling and wall
+  undersides, which also removed the dirty halo ceilings had around fixtures.
+- **Downward fixtures.** The half-Lambert wrap is scaled by the hemisphere
+  term (30% on ceilings, full on floors), and ceilings take only a quarter of
+  the shadow mask. The only occluder a ceiling point's march can find is the
+  fixture's own housing at a grazing angle.
+- **Entities.** Most of the stepped rim's `CEL_FLOOR` is subtracted. At the
+  full floor it washed the whole body slate-blue. Now the ink figures stay
+  ink-dark with a cool edge. An albedo-proportional fill (`ENTITY_FILL`)
+  keeps pale parts readable between pools: the Husk's ash, the Stalker's
+  blank head and hands, the Pursuer's eyes. Ink albedo (~0.01) gains
+  nothing from it.
+
+### Brightness
+
+`LIGHT_INTENSITY` 3.0 → 1.15, `VOL_INTENSITY` 0.75 → 0.3, `FLASH_INTENSITY`
+2.2 → 1.5, and a per-family `exposure` (palette key, default
+`GRADE_EXPOSURE`). An HDR probe of the composite on the office spawn view
+showed the in-scatter alone adding +0.3 to +0.7 linear across the whole frame.
+That was more than the lamps on shadowed walls, and it caused most of the
+milky over-bright veil. Luminance of the graded frame, measured on fixed
+views (seed `review`, spawn, 1280×720):
+
+| View | Mean before | Mean after | Clipped px before | after |
+| --- | ---: | ---: | ---: | ---: |
+| office, spawn | 0.71 | 0.54 | 30.8% | 1.9% |
+| office, turned | 0.60 | 0.45 | 21.1% | 0.4% |
+| hotel, spawn | 0.56 | 0.40 | 25.1% | 3.0% |
+| tower, spawn | 0.76 | 0.55 | 31.4% | 0.0% |
+| office, flashlight | 0.60 | 0.44 | 18.0% | 1.5% |
+
+### Post
+
+- **Bloom** prefilters emissives in full plus lit surfaces' soft-kneed excess
+  over `BLOOM_THRESHOLD` at `BLOOM_SURFACE`. The tight half-res blur
+  (`BLOOM_SPREAD`) is then re-blurred at quarter res (`BLOOM_WIDE_SPREAD`)
+  into `bloomWideRT`. Composite adds both. When bloom is disabled, both
+  targets hold the black identity.
+- **Outline** colour-traces world lines. The ink is the albedo darkened and
+  pushed ~40% more saturated, blended with the flat ink by `OUTLINE_INK_TINT`
+  and drawn at `OUTLINE_OPACITY`. Thresholds are soft smoothsteps, so lines
+  anti-alias. Entities keep full flat ink at any distance.
+- **Grade.** The Narkowicz ACES fit, applied mostly to luminance
+  (hue-preserving), blends toward the per-channel curve as values climb, so
+  hot cores roll off to warm white. The old Khronos PBR Neutral map was linear
+  to ~0.76, so every lamp pool on a light wall flattened to cream. After tint
+  and saturation (`GRADE_SAT` 1.34 → 1.12, and lower per family): split
+  toning (`GRADE_SHADOW_TINT` / `GRADE_HIGHLIGHT_TINT`) and a small cool lift
+  of the darkest values (`GRADE_LIFT`). The posterize went from 14 to 48
+  levels, a faint quantisation hidden by the dither. The calm-frame chromatic
+  aberration dropped from 0.0026 to 0.0008. Fringing is now a sanity/stare
+  symptom.
+- **Textures.** Carpet and concrete wear are feathered, wrapped radial blots
+  (`softBlots` in `textures.js`) rather than hard discs.
+
+All new terms have F2 → LIGHT sliders (terminator, bounce, spec strength and
+power, bloom wide, threshold and surface, ink tint and opacity, shadow lift).
+Measured cost on the office spawn view (1687×578, 44 visible lamps, F2 pass
+timers): lighting 0.048 ms, all four bloom blurs plus prefilter 0.025 ms. The
+G-buffer pass (1.9 ms) still dominates.

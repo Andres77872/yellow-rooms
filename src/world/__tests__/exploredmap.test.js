@@ -106,3 +106,29 @@ describe('ExploredMap: dataAt fallback', () => {
     }
   })
 })
+
+describe('ExploredMap: data retention', () => {
+  it('keeps reveal masks for the level but releases far chunk data, re-hydrating on demand', () => {
+    const data = new ChunkData(0, 0, 0, 0)
+    const cm = mockCM(data)
+    // Beyond the origin chunk the stub world is open space.
+    cm.wallVAt = () => false
+    cm.wallHAt = () => false
+    cm.columnAt = () => false
+    const em = new ExploredMap(cm)
+    em.update(cellCenter(7), cellCenter(7))
+    const origin = em.chunks.get('0,0,0')
+    expect(origin.data).toBe(data)
+
+    // Walk far away: the origin's reveal survives, its data is unpinned.
+    const far = 40 * CHUNK
+    cm.chunks = new Map() // the live world unloaded it too
+    em.update(cellCenter(far + 7), cellCenter(7))
+    expect(origin.data).toBeNull()
+    expect(em.isRevealed(7, 7)).toBe(true)
+
+    // A query deterministically regenerates it.
+    expect(em.dataAt(0, 0, 0)).not.toBeNull()
+    expect(origin.hydrated).toBe(true)
+  })
+})

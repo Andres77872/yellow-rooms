@@ -28,6 +28,10 @@ export class LightField {
     this._t = 0
     this._time = 0
     this._tint = [0, 0, 0]
+    // Floor index per uploaded slot. uLampPos holds plain Vector3s, so the
+    // candidates' `cy` tag does not survive the copy; the per-frame flicker
+    // must hash the same (x, z, cy) as the tint and the emissive panel.
+    this._cy = new Int32Array(LIGHT_MAX)
   }
 
   reset() {
@@ -68,6 +72,7 @@ export class LightField {
       for (let i = 0; i < n; i++) {
         const v = cand[order[i]]
         pos[i].copy(v)
+        this._cy[i] = v.cy ?? 0
         lampTint(v.x, v.z, v.cy ?? 0, this._tint, v.role ?? 0)
         char[i].set(this._tint[0], this._tint[1], this._tint[2], char[i].w)
       }
@@ -90,9 +95,10 @@ export class LightField {
     const n = this.u.uLampCount.value
     const pos = this.u.uLampPos.value
     const raw = this.u.lampFlickerRaw
+    const cy = this._cy
     for (let i = 0; i < n; i++) {
       const v = pos[i]
-      raw[i] = lampFlicker(v.x, v.z, v.cy ?? 0, this._time)
+      raw[i] = lampFlicker(v.x, v.z, cy[i], this._time)
     }
   }
 }

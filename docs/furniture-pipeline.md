@@ -24,7 +24,42 @@ runs `scripts/blender/build_furniture.py` in background Blender. The script:
   two bevel segments for upholstered silhouettes, and uses weighted normals
   to keep large faces flat without outlining every bevel strip;
 - omits UVs (these models use material colors), and preserves existing
-  `.blend1` artist backups when saving the rebuilt source.
+  `.blend1` artist backups when saving the rebuilt source;
+- bakes a painted per-vertex shading pass into `COLOR_0`, culls faces nobody
+  can see, audits degenerate triangles, and fails the build if the set leaves
+  its 20,000-triangle / 650,000-byte budget (see below). Set
+  `YR_SKIP_PREVIEW=1` to skip the Cycles contact sheet while iterating.
+
+## Painted vertex shading (`COLOR_0`)
+
+`scripts/blender/yr_shading.py` (shared with the enemy pipeline) fakes the
+anime-background painting pass per vertex instead of with textures:
+
+- a soft vertical gradient (≈0.84 at the floor → 1.0 near the top of each
+  piece);
+- gentle cavity/contact occlusion from a deterministic 48-ray hemisphere
+  (`mathutils` BVH, 0.3 m reach, plus a half-weight virtual floor), remapped
+  to 0.74–1.0 — the game's SSAO does the heavy lifting, the bake only paints
+  form;
+- a faint catch-light on convex top edges (bevel strips, cushion shoulders),
+  a slightly cool tint in shadow and slightly warm on the catch-light;
+- the final multiplier is clamped to ≥ 0.64 (never toward black); status
+  LEDs stay at 1.0.
+
+Values are keyed per (vertex, corner normal), so the attribute never splits
+extra vertices. Every material is `Base Color = ColorAttribute × part color`
+(Mix/Multiply), which the glTF exporter writes as `baseColorFactor` +
+`COLOR_0`; the source `.blend` and the contact sheet show the same shading.
+After export, `compact_glb()` repacks `COLOR_0` from the exporter's float
+VEC3 to normalized `UNSIGNED_BYTE` VEC4 (4 B/vertex) and rewrites JSON floats
+as their shortest exact float32 literals. At load, GLTFLoader enables
+`material.vertexColors` and `bakeFurnitureGeometry` multiplies the two, so the
+palette in `palette.js` stays the single colour source.
+
+Paper-thin surface details (labels, notes, screens, key fields, whiteboard
+strokes, seams) are single-quad `decal()`s, and `cull_hidden()` deletes faces
+on the floor or sunk inside another part (book bottoms, leg tops) after the
+occlusion bake — both keep the vertex count, and so the byte budget, down.
 
 ## Runtime path
 
@@ -57,6 +92,8 @@ results after disposal. A failed kind keeps its procedural fallback.
   AABB + overhang tolerance, so the 2D AABB sweep in `player/collision.js`
   never clips through visible geometry;
 - no cameras/lights/required extensions or unused UVs in the GLBs;
+- every primitive carries a normalized `UNSIGNED_BYTE` VEC4 `COLOR_0`, and the
+  painted multiplier stays gentle (min ≥ 0.6, mean > 0.72 per model);
 - finite positions, unit normals, nondegenerate triangles and consistent
   winding for every exported model;
 - downward raycasts see recessed interiors in the sink, toilet and tub,
@@ -112,3 +149,29 @@ Transfer size fell 77.3%, triangles 51.4%, and baked geometry buffer storage
 | wardrobe | 52,488 → 10,788 | 720 → 336 |
 | washer | 51,428 → 22,388 | 960 → 640 |
 | whiteboard | 91,304 → 15,464 | 1,260 → 556 |
+
+## September 2026 art pass (painted shading + model polish)
+
+Every model gained the painted `COLOR_0` pass, plus targeted polish kept to
+structural edges: separate sagging/puffed seat and back cushions and rolled
+arms on the sofa/armchair (with a throw pillow and an arm throw), a draped
+blanket that rolls over the mattress edge and hangs down the sides/foot,
+pinched pillows and a turned-down sheet on the bed, a contoured office chair
+with a curved back, armrests, spine bar and twin-wheel casters, arching
+twisting snake-plant blades in a lipped pot, a monitor with a thin bezel and
+a cable into a desk grommet, an articulated desk lamp, varied/leaning/stacked
+books with a two-step cornice, marker tray with capped markers, raised door
+panels and mouldings, appliance handles on standoffs and door seams, fridge
+notes, one-piece porcelain lathes for the toilet (raised lid, seat ring), a
+rounded-rectangle tub with a sloped backrest, gooseneck taps and a towel
+folded over its rail.
+
+| Measure | Before | After |
+| --- | ---: | ---: |
+| GLB transfer bytes (23 kinds) | 503,288 | 621,548 |
+| Triangles | 17,416 | 18,598 |
+| Exported vertices | 13,334 | 14,490 |
+
+The byte growth is the `COLOR_0` attribute (4 B/vertex) plus the added
+detail; JSON float shortening, decals and hidden-face culling pay for most
+of the new geometry. Both totals stay inside the unchanged budgets.

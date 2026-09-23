@@ -95,6 +95,16 @@ export class Settings {
     return this.data[k]
   }
 
+  // Coerce and store several keys with ONE persistence write (a graphics
+  // preset pins seven keys at once).
+  setMany(values) {
+    for (const [k, v] of Object.entries(values)) {
+      const coerce = COERCE[k]
+      this.data[k] = coerce ? coerce(v, DEFAULTS[k]) : v
+    }
+    this._save()
+  }
+
   reset() {
     this.data = { ...DEFAULTS }
     this._save()

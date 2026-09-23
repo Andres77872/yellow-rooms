@@ -1,4 +1,7 @@
 const lerp = (a, b, t) => a + (b - a) * t
+// Exponential approach factor: the same easing at 30, 60 or 144 Hz (a plain
+// `dt * rate` weight eases faster on long frames and can overshoot past 1).
+const approach = (dt, rate) => 1 - Math.exp(-rate * dt)
 
 // Accumulates a bob phase only while moving on the ground; the offset is applied
 // to the camera AFTER collision (never to the collider). Amplitude eases to 0
@@ -19,9 +22,9 @@ export class HeadBob {
       // sign-crossing (Controller.applyFrame), so the motion-sickness toggle
       // must only zero the AMPLITUDE, never silence the footsteps.
       this.t += dt * (4 + speed * 0.9)
-      this.amp = lerp(this.amp, this.enabled ? 1 : 0, dt * 8)
+      this.amp = lerp(this.amp, this.enabled ? 1 : 0, approach(dt, 8))
     } else {
-      this.amp = lerp(this.amp, 0, dt * 8)
+      this.amp = lerp(this.amp, 0, approach(dt, 8))
     }
   }
 

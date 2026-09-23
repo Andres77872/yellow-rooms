@@ -150,8 +150,11 @@ function pushBoxBatch(node, geom, materials, records) {
 // The furniture node owns only its InstancedMesh GPU buffers: geometries and
 // materials are shared (model library / gbuffer materials) and disposed with
 // their owners.
+// Idempotent: a chunk whose furniture was swapped by refreshFurniture() owns
+// two generations of parts, and both teardown paths may reach the first.
 export function disposeFurniturePart(node) {
-  if (!node) return
+  if (!node || node.userData.disposed) return
+  node.userData.disposed = true
   for (const child of node.children) child.dispose()
   node.parent?.remove(node)
 }

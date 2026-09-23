@@ -47,6 +47,24 @@ describe('PathFollower', () => {
     expect(ent.pos.x).toBeCloseTo(0.5)
   })
 
+  it('throttles a FAILED search like a successful one instead of retrying every frame', () => {
+    findPath.mockReturnValue(null)
+    const f = makeFollower()
+    const ent = makeEnt()
+    const tx = 30 * CELL
+    const r = f.step(ent, 0.1, tx, 0, 0, 0.01)
+    expect(r.repathed).toBe(true)
+    expect(r.hasPath).toBe(false)
+    for (let i = 0; i < 3; i++) expect(f.step(ent, 0.1, tx, 0, 0, 0.01).repathed).toBe(false)
+    expect(findPath).toHaveBeenCalledTimes(1)
+    expect(followPath).not.toHaveBeenCalled()
+    f.step(ent, 0.3, tx, 0, 0, 0.01) // cadence elapsed -> one retry
+    expect(findPath).toHaveBeenCalledTimes(2)
+    f.reset() // an explicit reset still forces an immediate search
+    f.step(ent, 0.01, tx, 0, 0, 0.01)
+    expect(findPath).toHaveBeenCalledTimes(3)
+  })
+
   it('throttles recomputes to the cadence while the target holds still', () => {
     const f = makeFollower()
     const ent = makeEnt()
