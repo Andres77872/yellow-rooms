@@ -329,6 +329,45 @@ describe('LightGrid.raycast (the bounce light)', () => {
       expect(h.x).toBeCloseTo(5.2 * CELL + oy * 2, 4)
     })
 
+    it('follows a deep shaft past any fixed storey count', () => {
+      // A void through ten storeys; the hand five storeys up looks straight
+      // down (mapped floors 2..7 around the player's floor 5).
+      const voidAt = (lx, lz) => lx >= 4 && lx <= 9 && lz >= 5 && lz <= 7
+      const grid = new LightGrid()
+      for (let cy = 0; cy < 10; cy++) {
+        const d = chunk(0, cy, 0)
+        d.hasCeilHole = voidAt
+        d.hasFloorHole = cy > 0 ? voidAt : () => false
+        grid.addChunk(d)
+      }
+      grid.setPlayerFloor(5)
+      const oy = layerY(5) + 1.44
+      const down = grid.raycast(6.5 * CELL, oy, 6.5 * CELL, 0, -1, 0, 26)
+      // Mapped floors are 2..7. The lowest one's floor-hole flag opens the
+      // slab below it; the unmapped storey 1's floor reads solid and stops
+      // the ray 15.8 m down (an 8-step walk used to give up at ~4 storeys).
+      const low = Math.min(...[...grid._slots.values()].map((r) => r.cy))
+      expect(down.kind).toBe('floor')
+      expect(down.y).toBeCloseTo(layerY(low - 1), 5)
+      // A slanted ray lands on that floor too, never under it.
+      const len = Math.hypot(0.1, 1)
+      const slant = grid.raycast(4.2 * CELL, oy, 6.5 * CELL, 0.1 / len, -1 / len, 0, 26)
+      expect(slant.kind).toBe('floor')
+      expect(slant.y).toBeCloseTo(layerY(low - 1), 5)
+    })
+
+    it('puts an origin just under a slab top in the band below', () => {
+      const grid = atrium()
+      for (const eps of [0.005, 0.019]) {
+        const oy = layerY(1) - eps
+        const side = grid.raycast(6.5 * CELL, oy, 6.5 * CELL, 1, 0, 0, 26)
+        expect(side.kind).toBe('wall')
+        expect(side.x).toBeCloseTo(8 * CELL, 5) // the void's cut face, not the first cell edge
+        const down = grid.raycast(2.5 * CELL + 0.1, oy, 6.5 * CELL, 0, -1, 0, 26)
+        expect(down.t).toBeGreaterThan(0)
+      }
+    })
+
     it('starts inside the slab band (on a stair through the void)', () => {
       const grid = atrium()
       const oy = layerY(0) + WALL_H + 0.2

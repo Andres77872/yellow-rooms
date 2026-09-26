@@ -3,6 +3,7 @@ import {
   CHUNK,
   COL_HALF,
   FRAME_W,
+  LAYER_H,
   LIGHT_RANGE,
   MONUMENTAL_COL_HALF,
   STALKER_AMBIENT,
@@ -841,9 +842,14 @@ export class LightGrid {
   // capsule) knows whether the attenuation applies to it.
   raycast(ox, oy, oz, dx, dy, dz, maxDist, out = {}) {
     // Vertical state: storey cy, or the slab band above it (inside a hole
-    // between its ceiling and the next storey's floor).
-    let cy = floorOfY(oy)
+    // between its ceiling and the next storey's floor). Unbiased floor: the
+    // hand 1 cm under a slab top is in the band below, not the storey above
+    // (floorOfY's +2 cm bias is for surfaces lying on a plane).
+    let cy = Math.floor(oy / LAYER_H)
     let inBand = oy - layerY(cy) > WALL_H
+    // Each storey or band costs one step of the vertical walk; a shaft can be
+    // deeper than any fixed count, so the cap follows the ray's reach.
+    const planeCap = 2 * Math.ceil(maxDist / LAYER_H) + 4
     let gx = Math.floor(ox / CELL)
     let gz = Math.floor(oz / CELL)
     const stepX = dx > 0 ? 1 : dx < 0 ? -1 : 0
@@ -878,7 +884,8 @@ export class LightGrid {
       // order: occluders inside each storey, then its floor or ceiling plane
       // (a hole lets the ray on into the band and the next storey).
       let tS = tEnter
-      for (let k = 0; k < 8; k++) {
+      let k = 0
+      for (; k < planeCap; k++) {
         const base = layerY(cy)
         let tP = Infinity
         if (dy < 0) tP = ((inBand ? base + WALL_H : base) - oy) / dy
@@ -903,6 +910,7 @@ export class LightGrid {
         }
         tS = tP
       }
+      if (k === planeCap) return null // never continue from a stale storey
       if (tExit >= maxDist) return null
       // Cross the next wall edge at the ray's height.
       const axis = tMaxX < tMaxZ ? 0 : 1

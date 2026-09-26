@@ -389,7 +389,13 @@ export class Engine {
     if (typeof renderer.domElement?.addEventListener === 'function') {
       this._listen(renderer.domElement, 'webglcontextrestored', () => {
         if (!this._drs) return
-        this._drsGpu = !!this.deferred.frameTimer?.supported
+        const gpu = !!this.deferred.frameTimer?.supported
+        if (gpu !== this._drsGpu) {
+          this._drsGpu = gpu
+          // The budget follows the mode (_configureDynamicResolution): gpu
+          // keeps 60 fps, raf the measured display rate.
+          this._drs.configure({ displayHz: gpu ? 60 : (this._displayHz ?? 60) })
+        }
         this._drs.reset(performance.now())
         this._bench = null
       })
