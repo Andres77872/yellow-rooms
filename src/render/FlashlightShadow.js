@@ -124,9 +124,12 @@ export class FlashlightShadow {
     this._up.set(0, 1, 0).transformDirection(viewCamera.matrixWorld)
     // The view -> shadow matrices depend on the PLAYER camera even when the
     // map itself is reused, so refresh them every frame.
+    // The revision numbers one scene's casters: another scene (the debug
+    // light room, the PBR reference) never reuses the map.
     const still =
       revision !== null &&
       revision === this._lastRevision &&
+      scene === this._lastScene &&
       this._posW.distanceToSquared(this._lastPos) < SKIP_POS * SKIP_POS &&
       this._dirW.dot(this._lastDir) > SKIP_DIR
     if (!still) {
@@ -157,6 +160,7 @@ export class FlashlightShadow {
       this._lastPos.copy(this._posW)
       this._lastDir.copy(this._dirW)
       this._lastRevision = revision
+      this._lastScene = scene
       this.stats.renders++
     } else {
       this.stats.skips++

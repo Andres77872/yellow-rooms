@@ -94,6 +94,27 @@ describe('occupancy encoding', () => {
     expect(decodeOccBox(0, 0)).toBeNull()
   })
 
+  it('masks furniture across a chunk seam (editor maps ignore FURN_MARGIN), in either load order', () => {
+    // A cabinet in the last column of chunk (0,0,0); chunk (1,0,0) east of it.
+    const west = () => chunk(0, 0, 0, (d) => d.furniture.push(piece(FURN_CABINET, CHUNK - 1, 5)))
+    const east = () => chunk(1, 0, 0)
+    const bit = (grid, gx, gz, dx, dz) => (grid.occ[texelIndex(gx, gz, 0) * 4 + 3] >>> occMaskBit(dx, dz)) & 1
+    for (const order of [[west, east], [east, west]]) {
+      const grid = withFurniture(new LightGrid())
+      for (const make of order) grid.addChunk(make())
+      // The east chunk's first two columns see the piece one and two cells west.
+      expect(bit(grid, CHUNK, 5, -1, 0)).toBe(1)
+      expect(bit(grid, CHUNK + 1, 6, -2, -1)).toBe(1)
+      expect(bit(grid, CHUNK + 2, 5, -2, 0)).toBe(0) // out of ring 2 (3 cells)
+      // Unloading the furnished chunk clears the neighbour's bits.
+      grid.removeChunk(0, 0, 0)
+      expect(bit(grid, CHUNK, 5, -1, 0)).toBe(0)
+      expect(bit(grid, CHUNK + 1, 6, -2, -1)).toBe(0)
+      // The neighbour's re-masked strip is queued for upload.
+      expect(grid.takeDirty().occ.length).toBeGreaterThan(0)
+    }
+  })
+
   it('bakes proxies and same-chunk ring masks at ingest, and clears them on unload', () => {
     const grid = withFurniture(new LightGrid())
     const a = FURN_MARGIN + 1
@@ -115,7 +136,7 @@ describe('occupancy encoding', () => {
     const t2 = texelIndex(a + 1, a + 2, 0) * 4
     const mask2 = occ[t2 + 3] & OCC_MASK_BITS
     expect(mask2 & (1 << occMaskBit(-1, -2))).not.toBe(0)
-    // Masks never reach outside the chunk (FURN_MARGIN keeps ring 2 inside).
+    // With FURN_MARGIN (generated maps) masks never reach outside the chunk.
     for (let lz = 0; lz < CHUNK; lz++) {
       for (let lx = 0; lx < CHUNK; lx++) {
         const m = occ[texelIndex(lx, lz, 0) * 4 + 3] & OCC_MASK_BITS

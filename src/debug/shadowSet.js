@@ -77,7 +77,12 @@ export const SHADOW_SET = Object.freeze([
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 
-export async function runShadowSet(engine, { frames = 30 } = {}) {
+// The set's clock: fixture hum and the bad-tube strobe are functions of
+// time, so a set run at the live clock would measure a different flicker
+// phase every run. Pinned, two runs of one build agree to the last digit.
+export const SHADOW_SET_TIME = 6
+
+export async function runShadowSet(engine, { frames = 30, time = SHADOW_SET_TIME } = {}) {
   const d = engine.deferred
   const timed = d.setTiming(true)
   const base = engine.capture()
@@ -86,6 +91,7 @@ export async function runShadowSet(engine, { frames = 30 } = {}) {
     const desc = {
       ...base,
       schema: CAPTURE_SCHEMA,
+      time,
       world: { family: 'office', seed: SHADOW_SET_SEED, level: 1 },
       // No feet height: the pose stands on the ground under it, never at the
       // height the base capture happened to be taken at.
@@ -96,6 +102,9 @@ export async function runShadowSet(engine, { frames = 30 } = {}) {
       enemies: (engine.enemies ?? []).map(() => ({ pos: null, active: false, visible: false })),
     }
     engine.applyCapture(desc)
+    // A look/tier change in the base capture commits with its lighting build.
+    await d.whenLightingReady?.()
+    d.resetAdaptation?.()
     d.timer?.resetSamples()
     for (let i = 0; i < frames; i++) {
       d.render(engine._time + i * 0.001)

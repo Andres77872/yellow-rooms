@@ -47,6 +47,15 @@ export class TorchBounce {
     this._hit = {}
   }
 
+  // Drop the smoothed state: the next update snaps to its hit (capture
+  // replay, teleports) instead of easing from the previous pose.
+  reset() {
+    this.active = false
+    this.color.x = 0
+    this.color.y = 0
+    this.color.z = 0
+  }
+
   // Family albedos (linear rgb triples), e.g. from the palette the GI uses.
   setAlbedo({ floor, wall, ceiling }) {
     this.albedo = { floor, wall, ceiling }

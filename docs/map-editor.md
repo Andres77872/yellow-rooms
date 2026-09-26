@@ -133,7 +133,11 @@ ordinary-theme option; labels via `roomRoleLabel` (`debug/mapInspect.js`).
 - **3D preview** (`Preview3D`, toggle): plain `WebGLRenderer`, per-chunk
   `buildChunkMeshes` with standard materials, hemisphere + directional light,
   lamp panels, and an orbit camera (LightRoom idiom). Dirty chunks re-mesh on
-  edit.
+  edit. Its look selector can instead render any look profile through the
+  production deferred renderer at the `high` quality tier, with a `LightGrid`
+  baked from the edited chunks, furniture proxy shadows (ring masks cross chunk
+  seams, since the editor places pieces anywhere) and the look's panel glow and
+  troffer face (see engine-improvement chapters 13 and 14).
 
 ## `.yrmap` format
 

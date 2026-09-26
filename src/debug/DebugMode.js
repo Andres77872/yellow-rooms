@@ -361,6 +361,10 @@ export class DebugMode {
       // The isolated room is not part of the world grid: shade it from its
       // authored lamp set (the legacy path) for this frame.
       d.gridSuspended = true
+      // Its fixtures and entities move without a mesh revision: never reuse
+      // the torch map there (restored in postRender).
+      this._savedRevision = d.casterRevision
+      d.casterRevision = null
       this.lightRoom.applyLamps(d)
       if (this.lightRoomReference) {
         // Stock-material A/B of the same room (engine-improvement R1). The
@@ -380,6 +384,10 @@ export class DebugMode {
     const d = this.engine.deferred
     if (this._savedScene) d.scene = this._savedScene
     if (this._savedCam) d.camera = this._savedCam
+    if (this._savedRevision !== undefined) {
+      d.casterRevision = this._savedRevision
+      this._savedRevision = undefined
+    }
     d.gridSuspended = false
     d.referenceScene = null
   }

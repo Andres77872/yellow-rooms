@@ -44,6 +44,7 @@ import {
   LIST_UINTS,
   OCC_MASK_BITS,
   OCC_OFFSETS,
+  OCC_RING,
   OCC_T_SHIFT_A,
   OCC_T_SHIFT_B,
   OWNER_H,
@@ -310,6 +311,7 @@ export class LightGrid {
     this.owner.fill(0, o, o + 4)
     this._pushDirty('owner', rec.oi % OWNER_W, Math.floor(rec.oi / OWNER_W), 1, 1)
     this._clearCells(rec)
+    this._remaskAround(rec)
     this._jobs.delete(rec.key)
     // Lists around a vanished chunk reference its fixtures and its walls.
     if (removed) this._invalidateAround(rec, true)
@@ -362,13 +364,17 @@ export class LightGrid {
     this._writeOcc(rec)
     const [x0, z0] = this._chunkRect(rec)
     this._pushCellDirty(['edge', 'lamp', 'list', 'gi', 'occ'], x0, z0, cy, CHUNK, CHUNK)
+    this._remaskAround(rec)
   }
 
   // Furniture proxy boxes of the chunk (gridSpec OCC_*): each furnished cell
   // stores its piece's boxes; every cell stores the ring-ordered mask of the
-  // furnished cells within ring 2. FURN_MARGIN keeps furniture two cells off
-  // the chunk border, so the masks never reach into another chunk. Cosmetic
-  // only: lightAt and the lists ignore furniture.
+  // furnished cells within ring 2. Generated maps keep furniture FURN_MARGIN
+  // (2) cells off the chunk border, but the editor places pieces anywhere, so
+  // masks read every owned cell in reach, across chunk seams, and the
+  // neighbours' border strips are re-masked whenever a chunk is mapped or
+  // unmapped (_remaskAround). Cosmetic only: lightAt and the lists ignore
+  // furniture.
   _writeOcc(rec) {
     const { data, cx, cy, cz } = rec
     const x0 = cx * CHUNK
@@ -377,44 +383,73 @@ export class LightGrid {
       for (let lx = 0; lx < CHUNK; lx++) this.occ.fill(0, texelIndex(x0 + lx, z0 + lz, cy) * 4, texelIndex(x0 + lx, z0 + lz, cy) * 4 + 4)
     }
     const pieces = data.furniture
-    if (!pieces?.length || !this.proxyBoxes) return
-    const furnished = new Uint8Array(CHUNK * CHUNK)
-    const boxes = this._occBoxes
-    for (const f of pieces) {
-      if (f.lx < 0 || f.lz < 0 || f.lx >= CHUNK || f.lz >= CHUNK) continue
-      boxes.length = 0
-      const n = this.proxyBoxes(f, boxes)
-      if (!n) continue
-      const t = texelIndex(x0 + f.lx, z0 + f.lz, cy) * 4
-      // Boxes arrive chunk-local; store them relative to the cell corner.
-      const ox = f.lx * CELL
-      const oz = f.lz * CELL
-      for (let i = 0; i < Math.min(2, n); i++) {
-        const b = boxes[i]
-        const p = packOccBox({ x0: b.x0 - ox, x1: b.x1 - ox, z0: b.z0 - oz, z1: b.z1 - oz, y0: b.y0, y1: b.y1, t: b.t })
-        if (i === 0) {
-          this.occ[t] = p.xz
-          this.occ[t + 1] = (this.occ[t + 1] & 0xffff0000) | p.y
-          this.occ[t + 3] = (this.occ[t + 3] & ~(7 << OCC_T_SHIFT_A)) | (p.t << OCC_T_SHIFT_A)
-        } else {
-          this.occ[t + 2] = p.xz
-          this.occ[t + 1] = (this.occ[t + 1] & 0xffff) | (p.y << 16)
-          this.occ[t + 3] = (this.occ[t + 3] & ~(7 << OCC_T_SHIFT_B)) | (p.t << OCC_T_SHIFT_B)
+    if (pieces?.length && this.proxyBoxes) {
+      const boxes = this._occBoxes
+      for (const f of pieces) {
+        if (f.lx < 0 || f.lz < 0 || f.lx >= CHUNK || f.lz >= CHUNK) continue
+        boxes.length = 0
+        const n = this.proxyBoxes(f, boxes)
+        if (!n) continue
+        const t = texelIndex(x0 + f.lx, z0 + f.lz, cy) * 4
+        // Boxes arrive chunk-local; store them relative to the cell corner.
+        const ox = f.lx * CELL
+        const oz = f.lz * CELL
+        for (let i = 0; i < Math.min(2, n); i++) {
+          const b = boxes[i]
+          const p = packOccBox({ x0: b.x0 - ox, x1: b.x1 - ox, z0: b.z0 - oz, z1: b.z1 - oz, y0: b.y0, y1: b.y1, t: b.t })
+          if (i === 0) {
+            this.occ[t] = p.xz
+            this.occ[t + 1] = (this.occ[t + 1] & 0xffff0000) | p.y
+            this.occ[t + 3] = (this.occ[t + 3] & ~(7 << OCC_T_SHIFT_A)) | (p.t << OCC_T_SHIFT_A)
+          } else {
+            this.occ[t + 2] = p.xz
+            this.occ[t + 1] = (this.occ[t + 1] & 0xffff) | (p.y << 16)
+            this.occ[t + 3] = (this.occ[t + 3] & ~(7 << OCC_T_SHIFT_B)) | (p.t << OCC_T_SHIFT_B)
+          }
         }
       }
-      furnished[f.lz * CHUNK + f.lx] = 1
     }
-    for (let lz = 0; lz < CHUNK; lz++) {
-      for (let lx = 0; lx < CHUNK; lx++) {
+    this._maskOcc(x0, z0, x0 + CHUNK - 1, z0 + CHUNK - 1, cy)
+  }
+
+  // A cell holds furniture: box A present in its owned occupancy texel.
+  _furnishedAt(gx, gz, cy) {
+    const t = this._texel(gx, gz, cy)
+    return t >= 0 && ((this.occ[t * 4 + 1] >>> 8) & 255) !== 0
+  }
+
+  // Rebuild the ring masks of the owned cells in a global cell rectangle.
+  _maskOcc(gx0, gz0, gx1, gz1, cy) {
+    for (let gz = gz0; gz <= gz1; gz++) {
+      for (let gx = gx0; gx <= gx1; gx++) {
+        const ti = this._texel(gx, gz, cy)
+        if (ti < 0) continue
         let mask = 0
         for (let b = 0; b < OCC_OFFSETS.length; b++) {
-          const nx = lx + OCC_OFFSETS[b][0]
-          const nz = lz + OCC_OFFSETS[b][1]
-          if (nx < 0 || nz < 0 || nx >= CHUNK || nz >= CHUNK) continue
-          if (furnished[nz * CHUNK + nx]) mask |= 1 << b
+          if (this._furnishedAt(gx + OCC_OFFSETS[b][0], gz + OCC_OFFSETS[b][1], cy)) mask |= 1 << b
         }
-        const t = texelIndex(x0 + lx, z0 + lz, cy) * 4 + 3
+        const t = ti * 4 + 3
         this.occ[t] = ((this.occ[t] & ~OCC_MASK_BITS) | mask) >>> 0
+      }
+    }
+  }
+
+  // The same-floor neighbours' cells within ring 2 of this chunk: their masks
+  // can reference its furniture, which just appeared or went away.
+  _remaskAround(rec) {
+    const { cx, cy, cz } = rec
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dz) continue
+        const nb = this._slots.get(ownerIndex(cx + dx, cy, cz + dz))
+        if (!nb || nb.cx !== cx + dx || nb.cz !== cz + dz || nb.cy !== cy) continue
+        const gx0 = Math.max(nb.cx * CHUNK, cx * CHUNK - OCC_RING)
+        const gx1 = Math.min(nb.cx * CHUNK + CHUNK - 1, cx * CHUNK + CHUNK - 1 + OCC_RING)
+        const gz0 = Math.max(nb.cz * CHUNK, cz * CHUNK - OCC_RING)
+        const gz1 = Math.min(nb.cz * CHUNK + CHUNK - 1, cz * CHUNK + CHUNK - 1 + OCC_RING)
+        if (gx0 > gx1 || gz0 > gz1) continue
+        this._maskOcc(gx0, gz0, gx1, gz1, cy)
+        this._pushCellDirty(['occ'], gx0, gz0, cy, gx1 - gx0 + 1, gz1 - gz0 + 1)
       }
     }
   }

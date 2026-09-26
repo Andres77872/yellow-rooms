@@ -50,12 +50,22 @@ G-buffer v2 (albedo+matID, viewNormal+roughness, metal/materialAO/gloss, depth)
   ├─ Outline       colour-traced ink (Classic look only)
   ├─ Motion blur   reprojection, opt-in / Camcorder                  [medium+]
   ├─ Grade         lens + CA, scene-linear WB, exposure, tone mapper (AgX /
-  │                filmic / Neutral / video knee), toe, split, pedestal, vignette
+  │                filmic / Neutral / video knee), sensor noise, white clip,
+  │                toe, split, pedestal, vignette
   └─ FXAA | tape signal (Camcorder: YIQ bandwidths, noise, head switching)
 ```
 
 The Classic look keeps the v1 occlusion path (hemisphere SSAO + a 1.8 m
 screen-space contact mask) in place of GTAO/contact/resolve.
+
+**Identity clears and context loss.** A skipped pass leaves its target at the
+identity value, and array identities must have alpha 1: three premultiplies the
+clear colour by alpha, so the occlusion-v2 contact identity is (1, 1, 1, 1).
+On `webglcontextrestored` the renderer re-creates the flashlight depth
+attachment and invalidates the torch-map skip, forces a whole grid-texture
+upload, and re-requests the GPU timer extension (the engine then re-reads
+whether dynamic resolution is GPU-timed and restarts the auto benchmark
+window).
 
 **Sampler precision.** GLSL ES 3.00 predeclares `sampler2D` as lowp, and ANGLE
 honours it: depth read through an undeclared sampler arrives at half precision

@@ -156,9 +156,10 @@ export const ownerTag = (v) => v & 255
 //   w  bits 0..24: furnished cells within ring 2, RING ORDER (bit 0 = own
 //      cell, 1..8 = ring 1, 9..24 = ring 2); bits 25..27 A.t, 28..30 B.t
 //      (light transmission in eighths)
-// FURN_MARGIN (2) keeps furniture two cells off every chunk border, so ring
-// 2 of any cell only ever meets furniture of its own chunk: masks never
-// reference another chunk and need no invalidation when neighbours stream.
+// Masks may reference cells of the neighbouring same-floor chunks (editor
+// maps place furniture anywhere; generated maps keep it FURN_MARGIN = 2 cells
+// off the border, so theirs stay inside the chunk). LightGrid re-masks the
+// neighbours' border strips whenever a chunk streams in or out.
 export const OCC_RING = 2
 // Tallest proxy top (floor-local): rays from a receiver clear every piece of
 // furniture above this height, which bounds the cells a light's shadow

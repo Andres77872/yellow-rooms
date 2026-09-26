@@ -2,8 +2,9 @@ import * as THREE from 'three'
 import { describe, expect, it, vi } from 'vitest'
 import { CAPTURE_SCHEMA, applyCapture, captureState } from '../capture.js'
 import { CELL, EYE_H, WORLD_GEN_VERSION, layerY } from '../../world/constants.js'
-import { SHADOW_SET, runShadowSet } from '../shadowSet.js'
+import { SHADOW_SET, SHADOW_SET_TIME, runShadowSet } from '../shadowSet.js'
 import { GRAPHICS_KEYS } from '../../core/graphics.js'
+import { TorchBounce } from '../../render/torchBounce.js'
 
 function fakeEngine() {
   const camera = new THREE.PerspectiveCamera(72, 1.5, 0.1, 180)
@@ -139,7 +140,8 @@ describe('capture replay rebuilds the frame-loop state', () => {
     const e = fakeEngine()
     const order = []
     e._updateOccluders = vi.fn(() => order.push('occluders'))
-    e.torchBounce = { active: true }
+    e.torchBounce = new TorchBounce()
+    e.torchBounce.active = true
     e._updateTorch = vi.fn((dt) => order.push(['torch', dt, e.torchBounce.active]))
     // No enemies in the capture (schema 1, runShadowSet): the previous
     // world's capsules must still be cleared.
@@ -148,6 +150,17 @@ describe('capture replay rebuilds the frame-loop state', () => {
     applyCapture(e, desc)
     // The bounce filter is cleared first, or dt = 0 would keep the old hit.
     expect(order).toEqual(['occluders', ['torch', 0, false]])
+  })
+
+  it('meters again once a pending lighting build commits', async () => {
+    const e = fakeEngine()
+    let land
+    e.deferred.whenLightingReady = vi.fn(() => new Promise((r) => (land = r)))
+    applyCapture(e, captureState(e))
+    expect(e.deferred.resetAdaptation).toHaveBeenCalledTimes(1)
+    land()
+    await Promise.resolve()
+    expect(e.deferred.resetAdaptation).toHaveBeenCalledTimes(2)
   })
 
   it('an enemy entry without a position still parks the enemy', () => {
@@ -177,6 +190,7 @@ describe('shadow evidence set', () => {
     expect(descs).toHaveLength(SHADOW_SET.length)
     for (const d of descs) {
       expect(d.camera.y).toBeUndefined()
+      expect(d.time).toBe(SHADOW_SET_TIME) // the flicker phase is pinned, not the live clock
       expect(d.enemies).toEqual([
         { pos: null, active: false, visible: false },
         { pos: null, active: false, visible: false },

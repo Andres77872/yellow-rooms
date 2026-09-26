@@ -149,10 +149,14 @@ export function applyCapture(engine, desc, { freeze = true } = {}) {
   // cleared first: an active one would lerp towards the new hit point with
   // weight 0 at dt = 0 and keep the pre-replay position and colour.
   engine._updateOccluders?.()
-  if (engine.torchBounce) engine.torchBounce.active = false
+  engine.torchBounce?.reset?.()
   engine._updateTorch?.(0)
   engine._refreshLamps()
   engine.deferred.resetAdaptation()
+  // A look or tier change that needs a new lighting build commits only when
+  // that build links; meter again then, so a frozen capture (dt = 0) is
+  // exposed for the build it records. Tooling awaits whenLightingReady().
+  engine.deferred.whenLightingReady?.().then(() => engine.deferred.resetAdaptation())
   engine.captureFrozen = !!freeze
   return desc
 }
