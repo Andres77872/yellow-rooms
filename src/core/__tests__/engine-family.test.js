@@ -112,6 +112,8 @@ vi.mock('../../world/ChunkManager.js', () => ({
   ChunkManager: class {
     constructor(_scene, seed) {
       this.seed = seed
+      this.lightGrid = {}
+      this.enableSightCulling = vi.fn()
       this.config = {
         version: WORLD_GEN_VERSION,
         mapFamily: { selected: 'office' },
@@ -234,6 +236,13 @@ vi.mock('../../render/DeferredRenderer.js', () => ({
       this.applyPalette = vi.fn()
       this.applyQuality = vi.fn()
       this.setTiming = vi.fn()
+      this.setLook = vi.fn()
+      this.bindLightGrid = vi.fn()
+      this.setOccluders = vi.fn()
+      this.setVpl = vi.fn()
+      this.familyAlbedo = () => ({ floor: [0.4, 0.4, 0.4], wall: [0.5, 0.5, 0.5], ceiling: [0.5, 0.5, 0.5] })
+      this.panelGlow = 1
+      this.resetAdaptation = vi.fn()
     }
   },
 }))
@@ -522,6 +531,20 @@ describe('engine resource lifetime', () => {
     for (const enemy of engine.enemies) expect(enemy.reset).toHaveBeenCalled()
   })
 
+  it('clears the enemy capsules on quit: nothing ticks on the title to do it', () => {
+    const engine = createEngine()
+    engine.state.phase = Phase.PAUSED
+    // The last PLAYING tick left a capsule group behind.
+    engine._capCounts[0] = 3
+    engine.deferred.setOccluders.mockClear()
+
+    engine.quitToTitle()
+
+    expect(engine.deferred.setOccluders).toHaveBeenCalledOnce()
+    const [, counts] = engine.deferred.setOccluders.mock.calls[0]
+    expect([...counts]).toEqual([0, 0, 0, 0])
+  })
+
   it('upgrades models that finish before the first start', async () => {
     const engine = createEngine()
     expect(engine._running).toBe(false)
@@ -536,7 +559,8 @@ describe('engine resource lifetime', () => {
     expect(upgradeEnemyModels).toHaveBeenCalledWith(
       engine.enemyModels,
       { stalker: engine.stalker, pursuer: engine.pursuer, husk: engine.husk },
-      engine.materials.entityModel
+      engine.materials.entityModel,
+      engine.materials.entityModelSkinned
     )
   })
 

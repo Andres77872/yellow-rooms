@@ -2,14 +2,15 @@ import { COLOR_FNS } from './common.js'
 
 // --- Debug channel viewer: blit one intermediate buffer straight to screen. ---
 // uMode: 1 albedo · 2 matID · 3 view-normal · 4 linear depth · 5 AO · 6 lit ·
-//        7 volumetrics · 8 bloom · 9 composite · 10 lamp shadow mask.
+//        7 volumetrics · 8 bloom · 9 composite · 10 lamp shadow mask ·
+//        11 roughness · 12 metalness · 13 material AO (G-buffer v2).
 // (0 disables; the renderer skips it.)
 export const DEBUG_VIEW_FRAG = /* glsl */ `
   precision highp float;
   in vec2 vUv;
   out vec4 outColor;
   uniform int uMode;
-  uniform sampler2D tColor, tNormal, tDepth, tAO, tLit, tVol, tBloom, tScene, tShadow;
+  uniform sampler2D tColor, tNormal, tMaterial, tDepth, tAO, tLit, tVol, tBloom, tScene, tShadow;
   uniform mat4 uProjInverse;
   uniform float uDepthScale; // 1.0 / camera.far
   ${COLOR_FNS}
@@ -32,6 +33,9 @@ export const DEBUG_VIEW_FRAG = /* glsl */ `
     else if (uMode == 7) o = texture(tVol, vUv).rgb;             // volumetrics
     else if (uMode == 8) o = texture(tBloom, vUv).rgb;           // bloom
     else if (uMode == 10) o = vec3(texture(tShadow, vUv).r);     // blurred lamp shadow mask
+    else if (uMode == 11) o = vec3(texture(tNormal, vUv).a);     // perceptual roughness
+    else if (uMode == 12) o = vec3(texture(tMaterial, vUv).r);   // metalness
+    else if (uMode == 13) o = vec3(texture(tMaterial, vUv).g);   // material (cavity) AO
     else                 o = texture(tScene, vUv).rgb;           // composite (9)
     // Linear HDR channels need the sRGB encode; the rest are already display-ready.
     if (uMode == 1 || (uMode >= 6 && uMode <= 9)) o = linearToSRGB(o);

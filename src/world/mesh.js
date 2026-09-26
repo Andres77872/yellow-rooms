@@ -72,6 +72,18 @@ function leafTint(part, out) {
   return out.setRGB(b, b * 0.99, b * 0.955)
 }
 
+// Per-instance variation for GLB furniture (engine-improvement §3.4): the
+// instanceColor attribute was bound but always white, so every copy of a
+// desk read as the same object. A deterministic +-5% brightness drift with a
+// slight warm/cool lean — keyed by the piece's GLOBAL cell, so a chunk
+// reload never re-rolls it — reads as age and batch variation, not paint.
+function furnitureInstanceTint(data, f, out) {
+  const h = hash2i(0x5f1d, data.cx * CHUNK + f.lx, data.cz * CHUNK + f.lz)
+  const b = 0.95 + ((h & 1023) / 1023) * 0.1
+  const lean = (((h >>> 10) & 1023) / 1023 - 0.5) * 0.04
+  return out.setRGB(b * (1 + lean), b, b * (1 - lean))
+}
+
 // --- Furniture node ------------------------------------------------------
 // One Group per chunk holding the collision-real furniture. Two render paths
 // with identical placement semantics (record x/z chunk-local centre, facing
@@ -102,7 +114,6 @@ export function buildFurniturePart(data, geom, materials, models = null) {
       byKind.get(f.kind).push(f)
     }
     _s.set(1, 1, 1)
-    _c.setRGB(1, 1, 1)
     for (const [kind, list] of byKind) {
       const batch = new THREE.InstancedMesh(geometries.get(kind), materials.furnitureModel, list.length)
       for (let i = 0; i < list.length; i++) {
@@ -111,7 +122,7 @@ export function buildFurniturePart(data, geom, materials, models = null) {
         _qf.setFromAxisAngle(_Y_AXIS, FURN_FACING_ANGLE[f.facing & 3])
         _m.compose(_p, _qf, _s)
         batch.setMatrixAt(i, _m)
-        batch.setColorAt(i, _c)
+        batch.setColorAt(i, furnitureInstanceTint(data, f, _c))
       }
       batch.instanceMatrix.needsUpdate = true
       batch.instanceColor.needsUpdate = true

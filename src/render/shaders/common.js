@@ -134,3 +134,64 @@ export const LIT_RAMP = /* glsl */ `
     return mix(paintedRamp(x), band(x + dither), ${glslFloat(CEL_HARD)});
   }
 `
+
+// Full-resolution depth helpers (texelFetch only: usable inside loops and
+// non-uniform control flow, no derivatives). Requires tDepth + uProjInverse.
+//   viewPosPx     view position of a full-res pixel (clamped to the target)
+//   geomNormalPx  geometric normal from depth (Turanszki: per axis the
+//                 neighbour with the smaller depth step), or `fallback` on
+//                 one-pixel features — never the detail-mapped G-buffer
+//                 normal, which mottles AO and shadow offsets.
+// HALF_TEXEL mapping (chapter 14 P11): scaled texel ij is produced AT
+// full-res pixel floor(ij / scale), and consumers read q = px * scale, so
+// every producer/consumer pair registers exactly, odd sizes included.
+export const DEPTH_PX = /* glsl */ `
+  vec3 viewPosPx(ivec2 px, ivec2 sz){
+    px = clamp(px, ivec2(0), sz - 1);
+    float d = texelFetch(tDepth, px, 0).x;
+    vec2 uv = (vec2(px) + 0.5) / vec2(sz);
+    vec4 v = uProjInverse * vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+    return v.xyz / v.w;
+  }
+  vec3 geomNormalPx(ivec2 px, ivec2 sz, vec3 P, vec3 fallback){
+    vec3 l = viewPosPx(px - ivec2(1, 0), sz);
+    vec3 r = viewPosPx(px + ivec2(1, 0), sz);
+    vec3 d = viewPosPx(px - ivec2(0, 1), sz);
+    vec3 u = viewPosPx(px + ivec2(0, 1), sz);
+    float dl = abs(l.z - P.z);
+    float dr = abs(r.z - P.z);
+    float dd = abs(d.z - P.z);
+    float du = abs(u.z - P.z);
+    float lim = 0.25 * abs(P.z);
+    if (min(dl, dr) > lim || min(dd, du) > lim) return fallback;
+    vec3 ex = dr < dl ? r - P : P - l;
+    vec3 ey = du < dd ? u - P : P - d;
+    vec3 n = cross(ex, ey);
+    float nl = length(n);
+    if (nl < 1e-10) return fallback;
+    n /= nl;
+    // Face the camera (view space: the eye is at the origin).
+    return dot(n, -P) < 0.0 ? -n : n;
+  }
+  ivec2 halfTexelToFull(ivec2 ij, float scale, ivec2 fullSize){
+    return min(ivec2(floor(vec2(ij) / scale)), fullSize - 1);
+  }
+  vec2 octEncode(vec3 n){
+    n /= abs(n.x) + abs(n.y) + abs(n.z);
+    vec2 e = n.z >= 0.0 ? n.xy : (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+    return e * 0.5 + 0.5;
+  }
+`
+
+// Sampler precision for every fullscreen pass. GLSL ES 3.00 predeclares
+// `precision lowp sampler2D` in fragment shaders and a texture read returns
+// its sampler's precision: drivers that honour it (observed on ANGLE) hand
+// back DEPTH at half-float resolution — 1/2048 steps near 1.0, i.e. view-z
+// quantised to centimetres at 3 m and metres at 20 m, which banded AO,
+// contact shadows, shafts and every world position the lighting pass
+// rebuilds. `precision highp float` does not cover samplers, so each pass
+// declares them explicitly (fsMaterial prepends this).
+export const SAMPLER_PRECISION = /* glsl */ `precision highp sampler2D;
+precision highp usampler2D;
+precision highp sampler2DShadow;
+`

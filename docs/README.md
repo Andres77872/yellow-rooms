@@ -5,6 +5,14 @@ editor/rendering sources.
 
 ## Current reference
 
+- [Engine improvement research](engine-improvement/README.md) — September 2026
+  source audit and primary-source research for semi-realistic materials,
+  illumination, modeling, renderer choices, performance requirements, and a
+  staged refactor plan. Includes [reference projects and examples](engine-improvement/08-reference-projects.md)
+  for games, rendering, animation, and content workflows. The revised plan
+  (chapter 12) is implemented; see the
+  [implementation record](engine-improvement/13-implementation-record.md) and
+  [shadows, quality tiers and visual style](engine-improvement/14-shadows-quality-style.md).
 - [Model and engine review](model-engine-review.md) — September 2026 model
   polish, loading/rendering/runtime fixes, comparison metrics, visual QA tools,
   the 2026-09-22 engine architecture/runtime review, and the 2026-09-22
@@ -20,7 +28,8 @@ editor/rendering sources.
 - [Furniture asset pipeline](furniture-pipeline.md) — Blender → GLB build for
   the collision-real furniture kinds and the box-builder fallback contract.
 - [Enemy asset pipeline](enemy-pipeline.md) — Blender → GLB build for the
-  Stalker, Pursuer, and Husk figures and the capsule-fallback contract.
+  Stalker, Pursuer, and Husk figures: analytic skinning, authored clips, the
+  AI-driven animator, and the capsule-fallback contract.
 
 ## Versioned design history
 

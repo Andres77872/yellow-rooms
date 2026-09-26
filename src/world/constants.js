@@ -346,6 +346,18 @@ export const SHADOW_STEPS_MAX = 32 // shadow march loop bound
 export const SHADOW_LAMPS_MAX = 8 // most lamps the shadow pass may march
 export const VOL_STEPS_MAX = 48 // volumetric march loop bound
 export const VOL_LIGHTS_MAX = 12 // most lamps that may in-scatter
+// Shadow/occlusion v2 ceilings (chapter 14). Tiers cap WORK, never light:
+// every list entry always shades; capped entries keep baked visibility.
+export const FURN_LIGHTS_MAX = 4 // fixtures tested against furniture proxy boxes
+export const FURN_CELLS_MAX = 12 // proxy cells gathered per pixel
+export const CAPSULE_MAX = 10 // 3 enemies x 3 capsules + the optional player body
+export const CAPSULE_ENEMIES_MAX = 4 // bounding spheres (3 enemies + player)
+export const FLASH_TAPS_MAX = 24 // flashlight Vogel PCF taps
+export const FLASH_BLOCKER_TAPS_MAX = 16 // PCSS blocker search taps
+export const GTAO_SLICES_MAX = 3
+export const GTAO_STEPS_MAX = 8 // per side of a slice
+export const CONTACT_STEPS_MAX = 24 // residual contact march
+export const VOL_NEAR_STEPS_MAX = 16 // near-field flashlight in-scatter steps
 
 // Effect resolution scales / step counts (perf knobs). The *_SAMPLES / *_STEPS /
 // *_MAX values below are the HIGH-tier defaults consumed by core/graphics.js —

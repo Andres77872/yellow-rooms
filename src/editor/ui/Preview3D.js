@@ -1,14 +1,42 @@
 import * as THREE from 'three'
-import { CHUNK_WORLD, LAYER_H, layerY } from '../../world/constants.js'
+import { CHUNK_WORLD, LAYER_H, PANEL_GLOW, layerY } from '../../world/constants.js'
 import { buildChunkMeshes } from '../../world/mesh.js'
 import { createGeometries, disposeGeometries } from '../../render/geometries.js'
 import { ceilingTexture, floorTexture, wallTexture } from '../../render/textures.js'
 import { familyPalette } from '../../world/familyPalette.js'
+import { createGBufferMaterials, disposeGBufferMaterials } from '../../render/gbufferMaterials.js'
+import { DeferredRenderer } from '../../render/DeferredRenderer.js'
+import { LightGrid } from '../../world/lightGrid/LightGrid.js'
+import { furnitureProxyBoxes } from '../../world/objects/furniture/proxies.js'
+import { GRAPHICS_PRESETS, resolveGraphics } from '../../core/graphics.js'
 
 // 3D preview of the edited document. Reuses the game's chunk mesher
-// (world/mesh.js) verbatim, but with standard lit materials under the same
-// keys instead of the deferred G-buffer shaders — a faithful geometry preview
-// with conventional lighting, not the game's final look.
+// (world/mesh.js) verbatim. Two modes (engine-improvement gap G8):
+//   geometry  standard lit materials under the same keys — a fast, readable
+//             geometry preview with conventional lighting (the default);
+//   look id   the PRODUCTION path: G-buffer materials, the deferred renderer,
+//             the chosen look profile and a world light grid baked from the
+//             edited chunks, so authors approve the look the game ships.
+// Orbit views sit far above the plate, so the game-look fog is thinned.
+export const PREVIEW_GEOMETRY = 'geometry'
+const EDITOR_FOG_DENSITY = 0.0035
+// The quality tier the look preview renders at: the desktop default. Without
+// one the renderer never builds the furniture shadow/box AO variant, and the
+// passes run on constructor placeholders instead of real tier values.
+const PREVIEW_PRESET = 'high'
+// Mean of the game's fluorescent hum (Engine._updateFlicker), so a still
+// preview panel reads as bright as the game's on average.
+const PANEL_HUM_MEAN = 0.92
+
+// The look's fixture brightness and troffer face on the panel material. The
+// game sets both every frame (Engine._updateFlicker), and so does the preview
+// (render): a look whose lighting build differs commits asynchronously, so
+// deferred.panelGlow/panelPattern change some frames after setLook.
+export function applyPreviewPanelLook(materials, deferred) {
+  const u = materials.panel.uniforms
+  u.uIntensity.value = PANEL_HUM_MEAN * PANEL_GLOW * (deferred.panelGlow ?? 1)
+  if (u.uPanelPattern) u.uPanelPattern.value = deferred.panelPattern ?? 0
+}
 
 function buildMaterials(renderer, family) {
   const pal = familyPalette(family)
@@ -51,6 +79,9 @@ export class Preview3D {
     this.geom = createGeometries()
     this.materials = buildMaterials(this.renderer, app.map.meta.family)
     this._family = app.map.meta.family
+    this.mode = PREVIEW_GEOMETRY
+    this.game = null // { scene, materials, grid, deferred } while a look is previewed
+    this._ceiling = true
     this.built = new Map() // key3 -> {group, dispose}
     this.orbit = { tx: 0, ty: 0, tz: 0, radius: 60, theta: -0.7, phi: 1.0 }
     this._bind()
@@ -66,6 +97,67 @@ export class Preview3D {
     this.renderer.setSize(w, h, true)
     this.camera.aspect = w / h
     this.camera.updateProjectionMatrix()
+    this.game?.deferred.setSize()
+  }
+
+  // Switch between the geometry preview and a production look profile id
+  // (render/lookProfile.js). Rebuilds every chunk with the matching materials.
+  setMode(mode) {
+    if (mode === this.mode) return
+    this.mode = mode
+    if (mode === PREVIEW_GEOMETRY) {
+      this._disposeGame()
+    } else if (this.game) {
+      this.game.deferred.setLook(mode)
+    } else {
+      this._createGame(mode)
+    }
+    this.sync(null)
+  }
+
+  _createGame(look) {
+    const family = this._family
+    const scene = new THREE.Scene()
+    const materials = createGBufferMaterials(this.renderer, family)
+    const grid = new LightGrid()
+    // Furniture occupancy, as ChunkManager wires it: box shadows, box AO and
+    // contact ownership need the proxies. Only together with the quality
+    // tier below: with the furniture variant off, owned proxies would only
+    // lose their screen-space contact shadows.
+    grid.proxyBoxes = furnitureProxyBoxes
+    const deferred = new DeferredRenderer(this.renderer, scene, this.camera)
+    deferred.bindLightGrid(grid)
+    deferred.applyPalette(familyPalette(family))
+    deferred.setLook(look)
+    const preset = GRAPHICS_PRESETS[PREVIEW_PRESET]
+    deferred.applyQuality(
+      resolveGraphics(
+        { get: (k) => (k === 'preset' ? PREVIEW_PRESET : preset[k]) },
+        { maxTextureSize: this.renderer.capabilities.maxTextureSize }
+      )
+    )
+    deferred.lightUniforms.uFogDensity.value = EDITOR_FOG_DENSITY
+    applyPreviewPanelLook(materials, deferred)
+    this.game = { scene, materials, grid, deferred }
+    this._applyCeiling()
+  }
+
+  _disposeGame() {
+    if (!this.game) return
+    for (const [, built] of this.built) this._drop(built)
+    this.built.clear()
+    this.game.deferred.dispose()
+    disposeGBufferMaterials(this.game.materials)
+    this.game = null
+  }
+
+  _applyCeiling() {
+    for (const set of [this.materials, this.game?.materials]) {
+      if (!set) continue
+      set.ceiling.visible = this._ceiling
+      set.panel.visible = this._ceiling
+      set.panelDead.visible = this._ceiling
+    }
   }
 
   fit() {
@@ -79,9 +171,8 @@ export class Preview3D {
   }
 
   setCeiling(visible) {
-    this.materials.ceiling.visible = visible
-    this.materials.panel.visible = visible
-    this.materials.panelDead.visible = visible
+    this._ceiling = visible
+    this._applyCeiling()
   }
 
   _bind() {
@@ -125,11 +216,21 @@ export class Preview3D {
       this._family = map.meta.family
       for (const m of Object.values(this.materials)) m.dispose?.()
       this.materials = buildMaterials(this.renderer, this._family)
+      if (this.game) {
+        const look = this.mode
+        this._disposeGame()
+        this._createGame(look)
+      }
+      this._applyCeiling()
       dirtyKeys = null // full rebuild with the new palette
     }
+    const game = this.game
+    const scene = game ? game.scene : this.scene
+    const materials = game ? game.materials : this.materials
     if (dirtyKeys === null) {
       for (const [, built] of this.built) this._drop(built)
       this.built.clear()
+      if (game) game.grid.reset()
       dirtyKeys = new Set(map.chunks.keys())
     }
     for (const key of dirtyKeys) {
@@ -137,20 +238,30 @@ export class Preview3D {
       if (prev) {
         this._drop(prev)
         this.built.delete(key)
+        if (game) game.grid.removeChunk(prev.cx, prev.cy, prev.cz)
       }
       const d = map.chunks.get(key)
       if (!d) continue
       const built = buildChunkMeshes(
-        d, this.geom, this.materials,
+        d, this.geom, materials,
         d.cx * CHUNK_WORLD, layerY(d.cy), d.cz * CHUNK_WORLD
       )
-      this.scene.add(built.group)
+      built.cx = d.cx
+      built.cy = d.cy
+      built.cz = d.cz
+      scene.add(built.group)
       this.built.set(key, built)
+      if (game) game.grid.addChunk(d)
+    }
+    if (game) {
+      // Edits are small; bake the affected light lists and bounce now.
+      game.grid.setPlayerFloor(this.app.floor ?? 0)
+      game.grid.flush()
     }
   }
 
   _drop(built) {
-    this.scene.remove(built.group)
+    built.group.parent?.remove(built.group)
     built.dispose()
   }
 
@@ -160,12 +271,19 @@ export class Preview3D {
     const r = o.radius * Math.sin(o.phi)
     this.camera.position.set(o.tx + r * Math.sin(o.theta), y, o.tz + r * Math.cos(o.theta))
     this.camera.lookAt(o.tx, o.ty, o.tz)
-    this.renderer.render(this.scene, this.camera)
+    if (this.game) {
+      this.camera.updateMatrixWorld(true)
+      applyPreviewPanelLook(this.game.materials, this.game.deferred)
+      this.game.deferred.render(performance.now() / 1000)
+    } else {
+      this.renderer.render(this.scene, this.camera)
+    }
   }
 
   dispose() {
     for (const [, built] of this.built) this._drop(built)
     this.built.clear()
+    this._disposeGame()
     disposeGeometries(this.geom)
     for (const m of Object.values(this.materials)) m.dispose?.()
     this.renderer.dispose()

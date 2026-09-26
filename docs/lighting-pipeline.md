@@ -4,36 +4,70 @@ Verified on 2026-07-24 against the current renderer, shaders, graphics settings,
 debug tools, and light-field implementation. The semi-realistic anime look pass
 (lighting model, two-scale bloom, colour-traced ink, filmic grade) was added on
 2026-09-22 — see [Art direction](#art-direction-semi-realistic-anime).
+**Updated 2026-09-26** for the engine-improvement implementation (world-grid
+lighting, cell-graph bounce, G-buffer v2 PBR surfaces, look profiles,
+auto-exposure, shadowed flashlight, capsule shadows, grid culling). The full
+record, evidence and open items are in
+[engine-improvement/13-implementation-record.md](engine-improvement/13-implementation-record.md);
+this page keeps the pipeline reference current. **Updated again 2026-09-26** for
+the shadow, occlusion, tier and look rework (occlusion v2, emitter-source
+fixtures, furniture and capsule shadows, flashlight PCSS, shafts v1, quality
+tiers v2, look schema v2): see
+[engine-improvement/14-shadows-quality-style.md](engine-improvement/14-shadows-quality-style.md).
 
-The game renders through a custom deferred toon pipeline (`src/render/DeferredRenderer.js`).
-There are **no real three.js lights**: lamps are shaded from a uniform field, the
-flashlight is an analytic cone, and every effect is a fullscreen pass over a
-G-buffer. Per-pass GLSL lives in `src/render/shaders/`; the renderer module owns
-render targets, uniforms and per-frame orchestration only.
+The game renders through a custom deferred pipeline (`src/render/DeferredRenderer.js`).
+There are **no three.js lights**. Ceiling fixtures are shaded from the
+world-grid light lists (`src/world/lightGrid/`), or from the nearest-lamp set
+where no grid data exists. The flashlight is an analytic spot with its own
+shadow map, and every effect is a fullscreen pass over the G-buffer. Per-pass
+GLSL lives in `src/render/shaders/`; the renderer module owns render targets,
+uniforms and per-frame orchestration only. The **look profile**
+(`src/render/lookProfile.js`: Semi-realistic by default, Liminal photo,
+Camcorder '96, Classic, Neutral) selects the shading model, the shadow
+character, the camera model and every stylisation lever.
 
 ## Frame anatomy
 
 ```
-G-buffer (albedo+matID, viewNormal+gloss, depth)
-  ├─ SSAO          half-res hemisphere kernel + bilateral blur      [tier: off/low/high/ultra]
-  ├─ Shadow mask   half-res screen-space march to N nearest lamps   [tier: off/low/high/ultra]
-  │                + bilateral blur (luminance-contribution-weighted)
-  ├─ Lighting      hemispheric ambient + ≤72 painted/cel lamps
-  │                (+ terminator band, gloss highlight, one-bounce fill)
-  │                + flashlight cone + rim + analytic exp² fog
-  ├─ Volumetrics   half-res in-scatter raymarch (lamps + flashlight) [tier: off/low/high/ultra]
-  ├─ Bloom         emissives + soft-kneed lit excess; tight half-res blur,
-  │                then a wide quarter-res re-blur                   [toggle]
-  ├─ Composite     lit + shafts·intensity + tight + wide bloom
-  ├─ Outline       depth/normal Sobel, colour-traced ink, fog-faded  [toggle]
-  ├─ Grade         filmic tone map → tint → sat → split tone/lift →
-  │                faint posterize → vignette/grain → sRGB
-  └─ FXAA          final LDR pass to screen                          [toggle]
+G-buffer v2 (albedo+matID, viewNormal+roughness, metal/materialAO/gloss, depth)
+  ├─ Flashlight    spot map from the hand, world-unit bias; Vogel PCF or PCSS
+  │                (R16F blocker attachment); skipped when nothing moved [flash tier]
+  ├─ GTAO          half-res XeGTAO slices + bent normal               [AO tier]
+  ├─ Contact       half-res residual march: per-light channels for list
+  │                entries 0/1 + aggregate; hits owned by the analytic
+  │                systems (walls, jambs, columns, proxies, capsules) ignored
+  ├─ Resolve       one MRT joint-bilateral pass for both (5x5, noise period)
+  ├─ Lighting      unified loop: grid entries (emitter-source, parallelogram
+  │                footprint trace through doors/jambs/columns, cross-floor
+  │                slab holes), furniture box coverage, capsule groups, the
+  │                raycast bounce VPL, the torch; crease/box/capsule AO,
+  │                multi-bounce, specular occlusion, bent-normal GI; exp² fog
+  ├─ Exposure      emissive-aware meter -> 2x1 spring adapt + AWB
+  ├─ Volumetrics   half-res shafts: quadratic steps, near-field torch march,
+  │                traced doorway shafts, capsule haze cuts; depth-aware blur
+  ├─ Bloom         tight + wide + tail (1/16), emissive clamp        [toggle]
+  ├─ Composite     depth-aware shaft upsample, bloom, halation
+  ├─ Outline       colour-traced ink (Classic look only)
+  ├─ Motion blur   reprojection, opt-in / Camcorder                  [medium+]
+  ├─ Grade         lens + CA, scene-linear WB, exposure, tone mapper (AgX /
+  │                filmic / Neutral / video knee), toe, split, pedestal, vignette
+  └─ FXAA | tape signal (Camcorder: YIQ bandwidths, noise, head switching)
 ```
 
-Debug channel viewer (`shaders/debugView.js`, F2 → LIGHT tab): modes 1–10 blit
-albedo / matID / normal / depth / AO / lit / vol / bloom / composite / **shadow
-mask** straight to screen.
+The Classic look keeps the v1 occlusion path (hemisphere SSAO + a 1.8 m
+screen-space contact mask) in place of GTAO/contact/resolve.
+
+**Sampler precision.** GLSL ES 3.00 predeclares `sampler2D` as lowp, and ANGLE
+honours it: depth read through an undeclared sampler arrives at half precision
+(steps of 2⁻¹¹), which banded AO and every reconstructed world position. Every
+fullscreen pass prepends `SAMPLER_PRECISION` (`shaders/common.js`) to declare
+`highp` samplers.
+
+Debug channel viewer (`shaders/debugView.js`, F2 → LIGHT tab): modes 1–13 blit
+albedo / matID / normal / depth / AO / lit / vol / bloom / composite / shadow
+mask / **roughness / metalness / material AO** straight to screen. Lighting
+diagnostics (list size, grid coverage, direct only, indirect only, traced
+fixtures) are written by the lighting pass itself and viewed through 'lit'.
 
 ## Render-target lifetime
 
@@ -43,7 +77,11 @@ depth-test and sample the G-buffer depth texture instead.
 
 The MRT uses mixed precision without changing its shader contract: `gColor`
 stays `RGBA16F` because emissive panels deliberately exceed 1.0 and its alpha
-stores material IDs 0/1/2, while normalized view normals use `RGBA8`. Sampled
+stores material IDs 0/1/2, while normalized view normals use `RGBA8`.
+G-buffer v2 adds a third `RGBA8` attachment (`gMaterial`: metalness, material
+AO, legacy gloss) and moves perceptual roughness into the normal alpha — 4
+more bytes per pixel; `render/capabilities.js` probes this exact layout for
+framebuffer completeness at boot. Sampled
 normals are renormalized by their consumers; the UNORM8 direction error is below
 0.38° and the attachment drops from eight to four bytes per render pixel. That
 saves 7.91 MiB at 1080p (31.64 MiB at 4K), plus G-buffer write and normal-sample
@@ -64,6 +102,14 @@ still shows the true lighting output. Resize and disposal iterate unique scratch
 targets rather than the effect aliases.
 
 ## The lamp field
+
+Since the engine-improvement implementation the lamp field is the **fallback**
+light source: grid pixels shade from their cell's baked light list, and only
+pixels without grid data (the debug light room, the streaming edge, a
+vertically aliased floor slot) use the set below. The compacted visible set
+now travels as one `LIGHT_MAX × 2` RGBA32F data texture (`shaders/lampData.js`)
+instead of two uniform arrays, which freed 144 fragment uniform vectors in each
+lamp pass.
 
 `LightField` (12 Hz refresh) collects the nearest lit lamps from
 `ChunkManager.collectLampsNear` (floor-filtered, stair-spill aware), ranks them
@@ -124,6 +170,19 @@ debug `LightRoom`); visible `.w` is always recombined from it, which keeps the
 fold idempotent while the sim is frozen.
 
 ## Runtime graphics quality (`core/graphics.js`)
+
+> **Tiers v2 (2026-09-26).** Presets are `low / medium / high / ultra /
+> cinematic`, plus `auto` (GPU class, then a benchmark on the first real
+> frames, persisted per GPU hash). Each feature has five tiers (off → ultra):
+> world shadows, flashlight shadows, AO, light shafts. Tiers cap *work*
+> (traces, capsules, taps, steps), never light: every list entry always
+> shades. Structural choices (occlusion path, furniture, PCSS, bent normals,
+> haze) are shader variants keyed by `_variantKey()` and swapped after a
+> background `compileAsync`; everything else stays a uniform. Dynamic
+> resolution runs on `auto` (opt-in otherwise). The generated tier tables live
+> in [chapter 14 §4](engine-improvement/14-shadows-quality-style.md#4-quality-tiers).
+> The text below describes the v1 mechanism, which still holds for the
+> uniform-driven trip counts.
 
 Shaders compile **once** against compile-time ceilings
 (`AO_SAMPLES_MAX`/`SHADOW_STEPS_MAX`/`SHADOW_LAMPS_MAX`/`VOL_STEPS_MAX`/`VOL_LIGHTS_MAX`
@@ -223,7 +282,16 @@ press.
   (`render/PassTimer.js`, EMA per pass, "n/a" where the extension is missing).
   Timing switches off automatically when the panel closes.
 - **light room**: isolated scene + orbit camera with a controllable lamp grid
-  writing straight into the deferred uniforms.
+  writing straight into the deferred uniforms (world-grid lighting is
+  suspended while it draws). **standard PBR reference (A/B)** swaps in a stock
+  `MeshStandardMaterial` mirror of the room, lit by point lights at the same
+  power and window and graded by the same output pass (`debug/PbrReference.js`).
+- **engine: look + grid**: look-profile selector; toggles for world-grid
+  lighting, sight culling and the flashlight shadow map; lighting diagnostics;
+  GI and ambient-floor sliders; live bake/culling/exposure readouts; **copy
+  capture** (deterministic replay descriptor, `debug/capture.js`) and **copy
+  timings** (capture + capabilities + PassTimer percentiles) for evidence
+  records.
 
 ## Cheap projection helpers
 
@@ -342,6 +410,11 @@ on tile-based mobile GPUs (the `medium`/touch preset) and at higher lamp counts.
 **Re-measure on the target device before treating either as a budget saving.**
 
 ## Art direction: semi-realistic anime
+
+> This section describes the **Classic** look profile, the pre-2026-09-26
+> default kept as a named rollback. The Semi-realistic and Neutral profiles use
+> the physical model summarised in
+> [engine-improvement/13](engine-improvement/13-implementation-record.md#s1-look-profiles-r1).
 
 Reference points: Makoto Shinkai / Kyoto Animation background painting and
 the Genshin Impact / Honkai: Star Rail toon pipelines. The rules this pass

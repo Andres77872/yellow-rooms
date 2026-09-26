@@ -9,6 +9,7 @@ import { LightTool, CHANNELS } from './LightTool.js'
 import { AiTool } from './AiTool.js'
 import { PerfTool } from './PerfTool.js'
 import { LightRoom } from './LightRoom.js'
+import { PbrReference } from './PbrReference.js'
 
 const CSS = `
 #dbg-panel{ position:fixed; top:8px; right:8px; width:348px; max-height:calc(100vh - 16px);
@@ -294,7 +295,7 @@ export class DebugMode {
     s.active = true
     s.cy = cy
     s.pos.set(wx, groundHeightAt(e.cm, wx, wz, cy), wz)
-    s.mesh.position.set(wx, s.pos.y + s.mesh.scale.y * 0.95, wz)
+    s.mesh.position.set(wx, s.pos.y + s.meshYOffset, wz)
     s.mesh.visible = true
   }
 
@@ -357,7 +358,20 @@ export class DebugMode {
     if (this.lightRoomActive && this.lightRoom) {
       d.scene = this.lightRoom.scene
       d.camera = this.lightRoom.camera
+      // The isolated room is not part of the world grid: shade it from its
+      // authored lamp set (the legacy path) for this frame.
+      d.gridSuspended = true
       this.lightRoom.applyLamps(d)
+      if (this.lightRoomReference) {
+        // Stock-material A/B of the same room (engine-improvement R1). The
+        // mirror is rebuilt whenever the room's fixtures were rebuilt.
+        this._pbrRef ??= new PbrReference()
+        if (this._pbrRefKey !== this.lightRoom._fixtures) {
+          this._pbrRef.build(this.lightRoom, d)
+          this._pbrRefKey = this.lightRoom._fixtures
+        }
+        d.referenceScene = this._pbrRef.scene
+      }
     }
   }
 
@@ -366,6 +380,15 @@ export class DebugMode {
     const d = this.engine.deferred
     if (this._savedScene) d.scene = this._savedScene
     if (this._savedCam) d.camera = this._savedCam
+    d.gridSuspended = false
+    d.referenceScene = null
+  }
+
+  // Light-room A/B: show the stock MeshStandardMaterial mirror instead of the
+  // deferred image (same camera, lamps, exposure and output transform).
+  setLightRoomReference(on) {
+    this.lightRoomReference = !!on
+    this._pbrRefKey = null
   }
 
   resize(w, h) {
@@ -398,6 +421,7 @@ export class DebugMode {
     removeEventListener('keydown', this._onKeyDown)
     if (this.lightRoomActive) this.enterLightRoom(false)
     if (this.lightRoom) this.lightRoom.dispose()
+    this._pbrRef?.dispose()
     if (this._tools) for (const t of TABS) this._tools[t].dispose?.()
     if (this.root) this.root.remove()
     document.getElementById('dbg-style')?.remove()

@@ -5,6 +5,7 @@ vi.mock('../textures.js', () => ({
   floorTexture: (anisotropy) => Object.assign(new THREE.Texture(), { anisotropy }),
   wallTexture: (anisotropy) => Object.assign(new THREE.Texture(), { anisotropy }),
   ceilingTexture: (anisotropy) => Object.assign(new THREE.Texture(), { anisotropy }),
+  surfaceDetailTexture: (albedo) => Object.assign(new THREE.Texture(), { anisotropy: albedo.anisotropy }),
 }))
 
 import { applyFamilyMaterials, createGBufferMaterials, disposeGBufferMaterials } from '../gbufferMaterials.js'

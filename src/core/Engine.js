@@ -10,6 +10,9 @@ import {
   SPAWN_WORLD,
   STALKER_AMBIENT,
   PANEL_GLOW,
+  CAPSULE_MAX,
+  CAPSULE_ENEMIES_MAX,
+  FLASH_RANGE,
   worldToCell,
 } from '../world/constants.js'
 import { applyFamilyMaterials, createGBufferMaterials, disposeGBufferMaterials } from '../render/gbufferMaterials.js'
@@ -33,10 +36,36 @@ import { Pursuer } from '../entities/Pursuer.js'
 import { Husk } from '../entities/Husk.js'
 import { mergeEnemy } from './enemyMerge.js'
 import { DeferredRenderer } from '../render/DeferredRenderer.js'
+import { DeferredUnsupportedError, probeDeferredSupport } from '../render/capabilities.js'
 import { LightField } from '../render/LightField.js'
+import { TorchBounce } from '../render/torchBounce.js'
+import { DynamicResolution, drsCeiling } from '../render/DynamicResolution.js'
+import { PLAYER_CAPSULE, capsuleBound, capsuleSet, transformCapsules } from '../render/enemyOccluders.js'
 import { GameState, Phase } from './GameState.js'
-import { Settings } from './Settings.js'
-import { GRAPHICS_KEYS, GRAPHICS_PRESETS, resolveGraphics } from './graphics.js'
+import { Settings, dynamicResEnabled } from './Settings.js'
+import {
+  AUTO_FALLBACK_PRESET,
+  GRAPHICS_KEYS,
+  GRAPHICS_PRESETS,
+  concretePreset,
+  resolveGraphics,
+} from './graphics.js'
+import {
+  BENCH_MAX_SAMPLE_MS,
+  BENCH_VERSION,
+  PRESET_COST_WEIGHT,
+  choosePreset,
+  classifyRenderer,
+  defaultPresetForClass,
+  guardScore,
+  loadGpuProfile,
+  readRendererString,
+  rendererKeyHash,
+  saveGpuProfile,
+  summarizeBenchmark,
+  toScore,
+  viewportMegapixels,
+} from '../render/gpuProfile.js'
 import {
   IS_TOUCH,
   MAX_DPR,
@@ -44,6 +73,7 @@ import {
   enterImmersive,
 } from './device.js'
 import { DebugOverlay } from './DebugOverlay.js'
+import { applyCapture, captureState } from '../debug/capture.js'
 import { isEditableFocused } from './input.js'
 import { LazyDebugMode } from './LazyDebugMode.js'
 import { UI } from '../ui/overlays.js'
@@ -73,6 +103,14 @@ const SPAWN = SPAWN_WORLD
 // wasteful at 60–144 Hz while no gameplay is advancing. RAF itself stays live
 // for immediate Start/Resume input; only canvas submissions are capped.
 const IDLE_RENDER_INTERVAL_MS = 1000 / 30
+// The GPU timer reports a frame a few frames after it was submitted: after the
+// backing size changes, this many results still belong to the old size.
+const BENCH_SKIP_AFTER_RESIZE = 4
+// Clean rAF intervals behind one display refresh estimate (see
+// _trackDisplayRate), and the run of rendering callbacks after which an idle
+// screen skips one due render so a clean interval exists at all.
+const DISPLAY_RATE_SAMPLES = 30
+const DISPLAY_PROBE_STREAK = 3
 
 export class Engine {
   constructor(app) {
@@ -87,13 +125,36 @@ export class Engine {
       antialias: false,
       powerPreference: 'high-performance',
       stencil: false,
+      // Every pass that depth-tests renders into the G-buffer's own depth
+      // texture; the canvas only ever receives fullscreen triangles. Its
+      // default depth renderbuffer was ~4 B/px of dead memory (~8 MiB at
+      // 1080p, ~32 MiB at 4K; engine-improvement §4.7).
+      depth: false,
     })
+    // Program-link validation (getProgramInfoLog + a synchronous status read)
+    // stalls the first use of every material. Keep it for development builds,
+    // where a broken shader must shout, and drop it in production.
+    if (renderer.debug) renderer.debug.checkShaderErrors = !!import.meta.env?.DEV
+    // A device that cannot allocate the G-buffer used to render black instead
+    // of reaching the fatal panel (main.js). Fail loudly and early.
+    const caps = probeDeferredSupport(renderer)
+    this.capabilities = caps
+    if (!caps.ok) {
+      renderer.dispose?.()
+      throw new DeferredUnsupportedError(caps)
+    }
     // This engine owns a multipass deferred pipeline. Three.js normally clears
     // renderer.info before every renderer.render() call, which would leave the
     // overlays reporting only the final fullscreen pass instead of the frame.
     // Reset explicitly once per engine frame so every pass accumulates.
     renderer.info.autoReset = false
     this.renderer = renderer
+    // The 'auto' graphics preset: GPU class first (discrete/Apple -> high,
+    // integrated/mobile -> medium, software -> low), refined by a stored
+    // per-device benchmark. Classified BEFORE any preset is applied, so an
+    // integrated GPU never boots into the heavier 'high'. The renderer string
+    // never leaves the machine; only its hash is stored.
+    this.gpu = this._classifyGpu(renderer)
     this._renderScale = 1
     this._applyPixelRatio()
     renderer.setSize(innerWidth, innerHeight)
@@ -126,6 +187,9 @@ export class Engine {
     // capsule silhouettes when the library resolves below.
     this.enemyModels = createEnemyModelLibrary()
     this.cm = new ChunkManager(scene, hashStr('lobby'), this.materials, this.geom, this.furnitureModels)
+    // Same-floor occlusion culling over the thin-wall grid: chunks no sight
+    // line from the eye can reach are not submitted at all.
+    this.cm.enableSightCulling(true)
     // Apply the ?family= selection before anything reads cm.config — the title
     // backdrop prewarm below must already render the requested family's world.
     // Unknown/disabled values fall back to Office rather than crash the boot.
@@ -155,7 +219,20 @@ export class Engine {
     this.enemies = [this.stalker, this.pursuer, this.husk]
 
     this.deferred = new DeferredRenderer(renderer, scene, camera)
+    // World-grid lighting: the ChunkManager's headless light lists and
+    // cell-graph bounce become the renderer's GPU light source.
+    this.deferred.bindLightGrid(this.cm.lightGrid)
     this.lightField = new LightField(this.deferred.lamps)
+    // Enemy capsules for the analytic soft shadows and capsule AO (packed
+    // for DeferredRenderer.setOccluders; reused every tick).
+    this._caps = new Float32Array(CAPSULE_MAX * 8)
+    this._capCounts = new Int32Array(CAPSULE_ENEMIES_MAX)
+    this._capBounds = new Float32Array(CAPSULE_ENEMIES_MAX * 4)
+    this._enemyCapCount = 0
+    this._bound4 = [0, 0, 0, 0]
+    this._playerM = new Float32Array(16)
+    // The flashlight's bounce light, placed by a grid raycast each frame.
+    this.torchBounce = new TorchBounce()
     // Materials/lighting were built with the Office defaults; retarget them to
     // the URL-selected family before the title prewarm renders its backdrop.
     this._applyFamilyVisuals(this.state.mapFamily)
@@ -164,7 +241,10 @@ export class Engine {
     // Blender models when it resolves (each load failure keeps the fallback).
     loadFurnitureModels(this.furnitureModels).then((lib) => {
       if (this._disposed) disposeFurnitureModels(lib)
-      else if (lib.loaded) this.cm.upgradeFurnitureModels(lib)
+      else if (lib.loaded) {
+        this.cm.upgradeFurnitureModels(lib)
+        this._precompile()
+      }
     })
 
     // Same upgrade path for the entities: capsule silhouettes until the
@@ -175,13 +255,16 @@ export class Engine {
         upgradeEnemyModels(
           lib,
           { stalker: this.stalker, pursuer: this.pursuer, husk: this.husk },
-          this.materials.entityModel
+          this.materials.entityModel,
+          this.materials.entityModelSkinned
         )
+        this._precompile()
       }
     })
 
     this.debug = new DebugOverlay(renderer)
     this.ui = new UI(this.settings)
+    this.ui.setAutoPreset?.(this.gpu.autoPreset)
     this._wireUI()
 
     this.touchControls = null
@@ -299,11 +382,160 @@ export class Engine {
     this.exitInfo = null
 
     this._listen(globalThis, 'resize', () => this._onResize())
+    // A restored context re-requests the timer extension (DeferredRenderer's
+    // listener, registered first, already did): re-read whether frames are
+    // GPU-timed, drop the samples of the dead context and restart the
+    // benchmark window, so dynamic resolution never waits on null samples.
+    if (typeof renderer.domElement?.addEventListener === 'function') {
+      this._listen(renderer.domElement, 'webglcontextrestored', () => {
+        if (!this._drs) return
+        this._drsGpu = !!this.deferred.frameTimer?.supported
+        this._drs.reset(performance.now())
+        this._bench = null
+      })
+    }
     // First paint needs only the fog-visible neighbourhood. The title loop's
     // first update immediately starts filling the normal box within the
     // streaming count/time budget.
     this.cm.prewarmTitleBackdrop(SPAWN, SPAWN)
     this._animate = this._animate.bind(this)
+  }
+
+  // Auto preset benchmark (chapter 14 P23), measured on real gameplay: the
+  // first ~90 resolved GPU frames of a live run on the class default (after
+  // a 2 s warm-up) become a score in ms per REFERENCE_MP at 'high';
+  // choosePreset then picks the highest preset that fits 70% of the frame
+  // budget within the class caps. Each frame is normalised by the backing
+  // pixels it was actually rendered at: dynamic resolution leaves the
+  // ceiling within a second on exactly the over-budget GPU the benchmark
+  // exists to catch, so "only at full scale" never finished there (costs that
+  // do not scale with pixels overstate the score slightly below the ceiling,
+  // which errs towards the cheaper preset). Persisted per GPU (key = renderer
+  // hash, never the string) so the next boot skips it; never overrides a
+  // manual preset, never picks cinematic.
+  _benchSample(ms, now) {
+    const g = this.gpu
+    const drs = this._drs
+    if (!g || !drs || g.score !== null || g.benchDone || this.settings.get('preset') !== 'auto') return
+    if (this.state.phase !== Phase.PLAYING || this.captureFrozen || !(ms > 0) || ms > BENCH_MAX_SAMPLE_MS) return
+    const mp = this._backingMegapixels(drs.scale)
+    if (!(mp > 0)) return
+    const b = (this._bench ??= { startAt: now, samples: [], mp, skip: 0 })
+    // A DRS step or a resize: the next few timer results were rendered at
+    // the old size and would be divided by the wrong pixel count.
+    if (Math.abs(mp - b.mp) > 1e-9) {
+      b.mp = mp
+      b.skip = BENCH_SKIP_AFTER_RESIZE
+      return
+    }
+    if (b.skip > 0) {
+      b.skip--
+      return
+    }
+    if (now - b.startAt < 2000) return
+    b.samples.push(ms / mp)
+    if (b.samples.length < 90) return
+    g.benchDone = true
+    const { median } = summarizeBenchmark(b.samples, { maxMs: Infinity })
+    const cur = g.autoPreset
+    const mps = this._autoViewportMegapixels()
+    // Measured at the current preset: normalise to 'high' by its cost weight.
+    const at = toScore(median, 1)
+    const score = at ? at / (PRESET_COST_WEIGHT[cur] ?? 1) : null
+    const { preset } = choosePreset({ score, cls: g.cls, viewportMP: mps, deviceMemory: globalThis.navigator?.deviceMemory })
+    g.score = score
+    saveGpuProfile(globalThis.localStorage, { key: g.key, score, preset, cls: g.cls, benchVersion: BENCH_VERSION })
+    if (preset !== cur) {
+      g.autoPreset = preset
+      this._runSetting('preset', 'auto')
+      this.ui.setAutoPreset?.(preset)
+    }
+  }
+
+  _classifyGpu(renderer) {
+    let str = ''
+    try {
+      str = readRendererString(renderer.getContext?.())
+    } catch {
+      str = ''
+    }
+    const cls = classifyRenderer(str, { mobile: !!this.touch })
+    const key = rendererKeyHash(str)
+    let stored = null
+    try {
+      stored = loadGpuProfile(globalThis.localStorage, key)
+    } catch {
+      stored = null
+    }
+    // No renderer information at all: keep the pre-classification default.
+    const byClass = str ? defaultPresetForClass(cls) : AUTO_FALLBACK_PRESET
+    const score = stored?.score ?? null
+    // The score is per REFERENCE_MP precisely so it can be re-applied: pick
+    // the preset for THIS viewport (a first run in a 720p window must not
+    // boot 'ultra' fullscreen at 4K, nor a 4K benchmark keep a 1080p screen
+    // on 'medium'). The stored name only stands in when there is no score.
+    let autoPreset = stored?.preset ?? byClass
+    if (score !== null) {
+      autoPreset = choosePreset({
+        score,
+        cls,
+        viewportMP: this._autoViewportMegapixels(),
+        deviceMemory: globalThis.navigator?.deviceMemory,
+      }).preset
+    }
+    return { cls, key, rendererKnown: !!str, autoPreset, score }
+  }
+
+  // Link any program the scene now references before gameplay touches it.
+  // Streaming reuses ~16 shared G-buffer materials, but the first GLB
+  // furniture / enemy model draws used to compile synchronously mid-frame.
+  // compileAsync polls KHR_parallel_shader_compile where available; failures
+  // are non-fatal (the draw simply compiles on first use as before).
+  _precompile() {
+    const r = this.renderer
+    if (this._disposed || typeof r.compileAsync !== 'function') return
+    try {
+      r.compileAsync(this.scene, this.camera).catch(() => {})
+    } catch {
+      /* compile on first use */
+    }
+  }
+
+  // Deterministic capture/replay (debug/capture.js): describe the current
+  // frame, or rebuild the world and camera from such a description and hold
+  // it frozen for comparison screenshots. resumeFromCapture() lets the
+  // simulation run again.
+  capture() {
+    return captureState(this)
+  }
+
+  applyCapture(desc, options) {
+    return applyCapture(this, desc, options)
+  }
+
+  // Float probe readback of a pipeline target (DeferredRenderer.probe).
+  probe(points, options) {
+    return this.deferred.probe(points, options)
+  }
+
+  // Replay the chapter-14 shadow evidence set (debug/shadowSet.js).
+  async runShadowSet(options) {
+    const { runShadowSet } = await import('../debug/shadowSet.js')
+    return runShadowSet(this, options)
+  }
+
+  // n samples along the world segment a -> b (penumbra profiles).
+  probeLine(a, b, n = 16, options) {
+    const pts = []
+    for (let i = 0; i < n; i++) {
+      const t = n > 1 ? i / (n - 1) : 0
+      pts.push({ world: [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t] })
+    }
+    return this.deferred.probe(pts, options)
+  }
+
+  resumeFromCapture() {
+    this.captureFrozen = false
   }
 
   _listen(target, type, listener) {
@@ -367,6 +599,7 @@ export class Engine {
   _applyFamilyVisuals(family) {
     const pal = applyFamilyMaterials(this.materials, this.renderer, family)
     this.deferred.applyPalette(pal)
+    this.torchBounce.setAlbedo(this.deferred.familyAlbedo())
     this.renderer.setClearColor(pal.fog, 1)
   }
 
@@ -376,18 +609,37 @@ export class Engine {
     else if (k === 'invertX') this.controller.invertX = v
     else if (k === 'volume') this.audio.setVolume(v)
     else if (k === 'bob') this.controller.setBobEnabled(v)
-    else if (k === 'cameraFx') this.controller.setCameraFxEnabled(v)
+    else if (k === 'cameraFx') {
+      this.controller.setCameraFxEnabled(v)
+      this.deferred.setCameraFx?.(v)
+      this.deferred.setSignalAccess?.({ noise: this.settings.get('noise') !== 'off', fx: v })
+    }
+    else if (k === 'motionBlur') this.deferred.setMotionBlur?.(v)
     else if (k === 'noise') {
       this._noiseMode = v
+      this.deferred.setSignalAccess?.({ noise: v !== 'off', fx: this.settings.get('cameraFx') !== false })
       // Outside PLAYING nothing else re-derives the grade (title/pause).
       if (this.state.phase !== Phase.PLAYING) this._applyFX(0)
     }
     else if (k === 'outline') this.deferred.setOutline(v)
+    else if (k === 'look') this.deferred.setLook(v)
+    else if (k === 'dynamicRes') {
+      // Not preset-owned: only the resolution controller changes. Under
+      // 'auto' (always on) and 'cinematic' (always off) the toggle changes
+      // nothing, and must not snap a running controller back to its ceiling.
+      if (dynamicResEnabled(this.settings) !== !!this._drs) {
+        this._configureDynamicResolution({ renderScale: this._renderScale })
+        this._applyPixelRatio()
+        this.deferred.setSize()
+      }
+    }
     else if (k === 'minimap') this.minimap.setVisible(v)
     else if (k === 'preset') {
       // A named preset pins every advanced graphics key; 'custom' pins nothing
-      // (the stored advanced values already ARE the truth).
-      if (v !== 'custom') this.settings.setMany(GRAPHICS_PRESETS[v])
+      // (the stored advanced values already ARE the truth); 'auto' pins the
+      // preset this device resolved to.
+      const name = concretePreset(v, this.gpu?.autoPreset)
+      if (name) this.settings.setMany(GRAPHICS_PRESETS[name])
       this._applyGraphics()
     } else if (GRAPHICS_KEYS.includes(k)) this._applyGraphics()
   }
@@ -397,8 +649,9 @@ export class Engine {
   // deferred pipeline's pass enables / loop trip counts. Cheap enough to run
   // per changed key — same-size setSize calls early-return inside three.
   _applyGraphics() {
-    const q = resolveGraphics(this.settings)
+    const q = resolveGraphics(this.settings, { maxTextureSize: this.capabilities?.maxTextureSize ?? 4096 })
     this._renderScale = q.renderScale
+    this._configureDynamicResolution(q)
     this._applyPixelRatio()
     this.deferred.setSize()
     this.deferred.applyQuality(q)
@@ -458,6 +711,8 @@ export class Engine {
 
   resume() {
     if (this.touch) enterImmersive()
+    // The first frames after an unpause are not representative.
+    this._resetDynamicResolution()
     // The pause may have interrupted a level TRANSITION (Esc mid-fade): resume
     // back INTO it so _transT keeps counting down and _advance() still runs —
     // forcing PLAYING here would strand the player at the old level's exit.
@@ -509,6 +764,8 @@ export class Engine {
     this._updateCameraMatrices()
     this._refreshLamps()
     this._resetPresentation()
+    // Level load: the first frames (uploads, compiles) must not drive DRS.
+    this._resetDynamicResolution()
     // resetLevel() clears flashlightOn without the toggle callback firing.
     this.touchControls?.setFlashlight(state.flashlightOn)
   }
@@ -650,7 +907,12 @@ export class Engine {
   // level entry and by quit-to-title so none of them can drift apart.
   _resetPresentation() {
     this.deferred.lightUniforms.uFlashOn.value = 0
+    this.deferred.resetAdaptation()
     this._applyFX(0) // grade.dead follows state.deadAmount (0 after resetLevel)
+    // Every caller has just reset the enemies. Nothing ticks on the title,
+    // so without this their last capsules keep casting shadows, AO and haze
+    // cuts where no enemy is drawn.
+    this._updateOccluders()
   }
 
   // Replace the lamp set with the one for whatever the camera presents now
@@ -690,7 +952,11 @@ export class Engine {
     }
     controller.applyFrame(dt)
     this._updateCameraMatrices()
+    // Streaming spikes are CPU work the resolution controller must not
+    // mistake for GPU load.
+    const streamT = performance.now()
     cm.update(controller.pos.x, controller.pos.z, controller.floor)
+    if (performance.now() - streamT > 4) this._hitch = true
     // Cross-floor visibility: recompute when the player's stair-transit state
     // changes (entering/leaving a stair footprint flips the far floor fully
     // visible BEFORE the eye crosses the slab plane; floor changes re-gate via
@@ -723,6 +989,10 @@ export class Engine {
     const res = stalker.update(dt, controller.pos, this.camera, ctx)
     const res2 = this.pursuer.update(dt, controller.pos, this.camera, ctx)
     const res3 = this.husk.update(dt, controller.pos, this.camera, ctx)
+    // Rigged enemies pose from what their AI just did (speed, state, range).
+    for (const enemy of this.enemies) enemy.animate?.(dt, controller.pos)
+    this._updateOccluders()
+    this._updateTorch(dt)
     // Combine all threats: closest drives proximity-slow, any-seen stresses
     // sanity, tension is the max. Beam/stare stay Stalker-only (pass it first).
     const merged = mergeEnemy(res, res2, res3)
@@ -776,11 +1046,71 @@ export class Engine {
         floor: controller.floor,
       })
     }
+    this._tension = merged.tension
     this._applyFX(merged.tension)
 
     const inv = this.debugMode.active && this.debugMode.invincible
     if (merged.caught && !inv) this.die('caught')
     else if (state.sanity <= 0 && !inv) this.die('lost')
+  }
+
+  // Visible enemies as capsules for the lighting pass's analytic soft
+  // shadows and capsule AO (render/enemyOccluders.js): up to three capsules
+  // per enemy fitted to the silhouette actually shown (GLB or the capsule
+  // fallback), transformed by the mesh's own matrixWorld so yaw, fallback
+  // scales and meshYOffset are all honoured. Group 3 is the optional player
+  // body (look.shadow.playerBody), which never shadows its own torch.
+  _updateOccluders() {
+    const caps = this._caps
+    const counts = this._capCounts
+    const bounds = this._capBounds
+    caps.fill(0)
+    counts.fill(0)
+    bounds.fill(0)
+    const kinds = ['stalker', 'pursuer', 'husk']
+    // One-capsule tiers get a set fitted as ONE capsule (floor to head),
+    // never a truncated multi-capsule set (a lifted torso ungrounds a figure).
+    const perEnemy = this.deferred.quality?.shadow?.capsulesPerEnemy ?? 3
+    for (let g = 0; g < this.enemies.length && g < 3; g++) {
+      const enemy = this.enemies[g]
+      const mesh = enemy.mesh
+      if (!enemy.active || !mesh?.visible || !mesh.matrixWorld?.elements) continue
+      mesh.updateMatrixWorld?.()
+      const table = capsuleSet(kinds[g], enemy.modelState ?? 'fallback', perEnemy)
+      const n = transformCapsules(table, mesh.matrixWorld, caps, g * 3 * 8, g)
+      counts[g] = n
+      bounds.set(capsuleBound(caps, g * 3 * 8, n, this._bound4), g * 4)
+    }
+    this._enemyCapCount = 9
+    if ((this.deferred.look?.shadow?.playerBody ?? 0) > 0 && this.state.phase === Phase.PLAYING) {
+      const p = this.controller.pos
+      const m = this._playerM
+      m.fill(0)
+      m[0] = m[5] = m[10] = m[15] = 1
+      m[12] = p.x
+      m[13] = p.y // controller.pos is the feet
+      m[14] = p.z
+      const n = transformCapsules([PLAYER_CAPSULE], m, caps, 9 * 8, 3)
+      counts[3] = n
+      bounds.set(capsuleBound(caps, 9 * 8, n, this._bound4), 12)
+    }
+    this.deferred.setOccluders(caps, counts, bounds)
+  }
+
+  // Flashlight bounce light + the shadow map's caster revision: a still
+  // emitter over an unchanged world may reuse last frame's map, unless an
+  // animated enemy is near enough to cast into the beam.
+  _updateTorch(dt) {
+    const on = !!this.state.flashlightOn
+    const tb = this.torchBounce
+    tb.update(dt, this.cm.lightGrid, this.camera, on, this._caps, this._enemyCapCount)
+    this.deferred.setVpl(tb.active, tb.pos, tb.normal, tb.color)
+    let near = false
+    const p = this.controller.pos
+    for (const e of this.enemies) {
+      if (e.active && e.mesh?.visible && e.pos.distanceToSquared(p) < (FLASH_RANGE + 4) ** 2) near = true
+    }
+    this.deferred.casterRevision = near ? null : this.cm.meshRevision
   }
 
   // Seconds the player may hold the flashlight on the entity before the freeze
@@ -806,7 +1136,9 @@ export class Engine {
     // PANEL_GLOW pushes the tube emissive into HDR (>1) so the tone map rolls
     // the core toward white and the selective bloom halos it — the fixture
     // reads as a light SOURCE instead of blending into the lit ceiling.
-    this.materials.panel.uniforms.uIntensity.value = f * PANEL_GLOW
+    const panel = this.materials.panel.uniforms
+    panel.uIntensity.value = f * PANEL_GLOW * (this.deferred.panelGlow ?? 1)
+    if (panel.uPanelPattern) panel.uPanelPattern.value = this.deferred.panelPattern ?? 0
     // Couple the CAST light to the hum so floors/walls actually dip with the tubes
     // (the signature backrooms flicker) — previously only the tube emissive moved.
     // Keep a floor so a dip darkens the room without snapping to black; the
@@ -831,17 +1163,183 @@ export class Engine {
     g.dead.value = this.state.deadAmount
   }
 
+  // Viewport inputs of the backing-store math; headless runs get 1080p.
+  _viewport() {
+    const w = globalThis.innerWidth
+    const h = globalThis.innerHeight
+    if (!(w > 0) || !(h > 0)) return { w: 1920, h: 1080, dpr: 1 }
+    return { w, h, dpr: globalThis.devicePixelRatio }
+  }
+
+  // Native backing ratio: the DPR clamp and the 4K pixel budget, no scale.
+  _nativeRatio() {
+    const { w, h, dpr } = this._viewport()
+    return computeEffectivePixelRatio(w, h, dpr, MAX_DPR, 1)
+  }
+
+  // DRS ceiling (a fraction of native) for a preset render scale.
+  _drsCeiling(renderScale) {
+    const { w, h, dpr } = this._viewport()
+    return drsCeiling(computeEffectivePixelRatio(w, h, dpr, MAX_DPR, renderScale), this._nativeRatio())
+  }
+
+  // Backing megapixels at a DRS scale (what _applyPixelRatio renders).
+  _backingMegapixels(scale) {
+    const { w, h } = this._viewport()
+    const r = this._nativeRatio() * scale
+    return (w * h * r * r) / 1e6
+  }
+
+  // Backing megapixels per auto-pickable preset as 'auto' renders them: DRS
+  // is always on there, so each preset runs at its native-terms ceiling.
+  _autoViewportMegapixels() {
+    const { w, h } = this._viewport()
+    const native = this._nativeRatio()
+    return viewportMegapixels(w, h, (p) => native * this._drsCeiling(GRAPHICS_PRESETS[p].renderScale))
+  }
+
   // Backing-store scale = render scale x DPR clamp x 4K-equivalent pixel
   // ceiling. Every input can change at runtime (settings, zoom, monitor move).
+  // With dynamic resolution the controller's scale multiplies the NATIVE
+  // ratio (after both clamps), as its contract asks: fed through the render
+  // scale argument it came before the budget clamp, and on a 1440p Retina
+  // or 5K screen the first five down-steps changed no pixels at all.
   _applyPixelRatio() {
+    const { w, h, dpr } = this._viewport()
     this.renderer.setPixelRatio(
-      computeEffectivePixelRatio(innerWidth, innerHeight, devicePixelRatio, MAX_DPR, this._renderScale)
+      this._drs
+        ? this._nativeRatio() * this._drs.scale
+        : computeEffectivePixelRatio(w, h, dpr, MAX_DPR, this._renderScale)
     )
+  }
+
+  // Dynamic resolution (chapter 14 P24): on for the 'auto' preset or the
+  // DYNAMIC RESOLUTION toggle, never for cinematic. The controller works on
+  // the NATIVE backing store (after the DPR / pixel-budget clamps). A quality
+  // change starts at the new ceiling; a resize (`resize`) keeps the measured
+  // scale, clamped into the new bounds, and only drops the samples taken at
+  // the old pixel count.
+  _configureDynamicResolution(q, { resize = false } = {}) {
+    if (!dynamicResEnabled(this.settings)) {
+      this._drs = null
+      this.deferred.setFrameTiming?.(false)
+      return
+    }
+    const params = {
+      ceiling: this._drsCeiling(q.renderScale),
+      nativeLines: Math.round(this._viewport().h * this._nativeRatio()),
+    }
+    if (!this._drs) {
+      this._drs = new DynamicResolution(params)
+      this._drsGpu = !!this.deferred.setFrameTiming?.(true)
+    }
+    // Only raf mode reads the display rate: its samples are rAF intervals,
+    // which a 30 Hz cap or a 50 Hz panel stretches. The GPU timer measures
+    // GPU load directly, so gpu mode keeps the 60 fps budget the benchmark
+    // chose presets against, and a low estimate can never lengthen it.
+    this._drs.configure({ ...params, displayHz: this._drsGpu ? undefined : this._displayHz })
+    this._drs.reset(performance.now(), { toCeiling: !resize })
+    this._pinnedFor = 0
+  }
+
+  // Level load and unpause (the DynamicResolution contract): drop the
+  // samples and ignore the next second, keep the scale.
+  _resetDynamicResolution() {
+    this._drs?.reset(performance.now())
+    this._pinnedFor = 0
+  }
+
+  // Display refresh estimate for the raf-mode frame budget. The controller
+  // reads rAF intervals there, so a 30 Hz Low Power Mode cap or a 50 Hz panel
+  // read as a GPU over a 60 Hz budget and walked it to the floor. Measured
+  // only on the title and pause screens, and only on intervals that follow a
+  // callback which submitted nothing: a rendered frame that costs more than a
+  // refresh pushes the next callback out by a whole vsync, which on a slow
+  // device made every interval ~33 ms and a 60 Hz panel read as 30 Hz. When
+  // every callback renders (a 30 Hz cap, or a slow device), _shouldRender
+  // skips one due render after DISPLAY_PROBE_STREAK in a row to make a clean
+  // interval. A low percentile errs high, which is harmless: the budget is
+  // 1000 / min(displayHz, 60), so a high reading leaves the 60 fps one.
+  _trackDisplayRate(rafMs, phase, rendered) {
+    const clean = this._renderStreak === 0
+    this._renderStreak = rendered ? (this._renderStreak ?? 0) + 1 : 0
+    if (phase !== Phase.TITLE && phase !== Phase.PAUSED) return
+    if (!clean) return
+    if (!(rafMs > 2 && rafMs < 100)) return // first frame, background tab
+    const r = (this._rafIntervals ??= [])
+    r.push(rafMs)
+    if (r.length < DISPLAY_RATE_SAMPLES) return
+    r.sort((a, b) => a - b)
+    // Never below 30 Hz: a GPU too slow to keep even the capped title
+    // frames inside two refreshes must not buy itself a longer budget.
+    const hz = Math.max(30, Math.round(1000 / r[Math.floor(r.length / 4)]))
+    r.length = 0
+    if (Math.abs(hz - (this._displayHz ?? 60)) <= 2) return
+    this._displayHz = hz
+    if (this._drs && !this._drsGpu) {
+      this._drs.configure({ displayHz: hz })
+      this._pinnedFor = 0
+    }
+  }
+
+  // One controller sample per rendered frame; a new scale reallocates the
+  // targets (at most one change per 5 s in steady state).
+  _sampleDynamicResolution(now, intervalMs) {
+    const drs = this._drs
+    if (!drs) return
+    const gpu = this._drsGpu
+    const ms = gpu ? (this.deferred.pollFrameMs?.() ?? null) : intervalMs
+    if (gpu) this._benchSample(ms, now)
+    const next = drs.sample(ms, {
+      now,
+      gpu,
+      paused: this.state.phase !== Phase.PLAYING || !!this.captureFrozen,
+      hitch: this._hitch,
+      tension: this._tension ?? 0,
+      intervalMs,
+    })
+    this._hitch = false
+    if (next !== null) {
+      this._applyPixelRatio()
+      this.deferred.setSize()
+    }
+    // In-session guard (P23): 10 s of live play in which the controller was
+    // over budget AT its floor (starved: not CPU-bound, nothing left to
+    // lower) means the auto preset is too heavy — drop one preset, once per
+    // session. Never "scale == floor": where the floor equals the ceiling
+    // (phones in landscape) that held from the first frame on an idle GPU.
+    // Only a GPU timer proves GPU load, so only a gpu-mode drop is kept for
+    // this GPU, as a raised score (the next boot re-derives the drop at this
+    // viewport, and a smaller one can earn the preset back); rAF intervals
+    // cannot tell a slow GPU from a capped display, so a raf-mode drop lasts
+    // this session only.
+    const frozen = !!this.captureFrozen || !!(this.debugMode.active && this.debugMode.freeze)
+    const starved = this.state.phase === Phase.PLAYING && !frozen && drs.starved
+    this._pinnedFor = starved ? (this._pinnedFor ?? 0) + intervalMs : 0
+    const g = this.gpu
+    if (this._pinnedFor > 10000 && !this._guardDropped && g && this.settings.get('preset') === 'auto') {
+      const order = ['low', 'medium', 'high', 'ultra']
+      const i = order.indexOf(g.autoPreset)
+      if (i > 0) {
+        this._guardDropped = true
+        const cur = g.autoPreset
+        g.autoPreset = order[i - 1]
+        if (gpu) {
+          g.score = guardScore(g.score, cur, this._autoViewportMegapixels())
+          saveGpuProfile(globalThis.localStorage, { key: g.key, score: g.score, preset: g.autoPreset, cls: g.cls, benchVersion: BENCH_VERSION })
+        }
+        this._runSetting('preset', 'auto')
+        this.ui.setAutoPreset?.(g.autoPreset)
+      }
+    }
   }
 
   _onResize() {
     this.camera.aspect = innerWidth / innerHeight
     this.camera.updateProjectionMatrix()
+    // The native line count (and with the pixel budget, the ceiling) moved:
+    // re-bound the controller, keeping its measured scale.
+    if (this._drs) this._configureDynamicResolution({ renderScale: this._renderScale }, { resize: true })
     // Re-apply the DPR, graphics scale, and backing-pixel ceiling: browser zoom
     // or moving the window between monitors can change every input here.
     this._applyPixelRatio()
@@ -876,6 +1374,10 @@ export class Engine {
     }
 
     if (now < this._nextIdleRenderAt) return false
+    // Display-rate probe: a due render waits one callback when the last few
+    // all rendered, so _trackDisplayRate sees a vsync spacing that no frame
+    // stretched. The deadline is kept; the next callback draws.
+    if ((this._renderStreak ?? 0) >= DISPLAY_PROBE_STREAK) return false
     const elapsedIntervals =
       Math.floor((now - this._nextIdleRenderAt) / IDLE_RENDER_INTERVAL_MS) + 1
     this._nextIdleRenderAt += elapsedIntervals * IDLE_RENDER_INTERVAL_MS
@@ -886,13 +1388,15 @@ export class Engine {
     if (this._disposed) return
     if (this._running) this._raf = requestAnimationFrame(this._animate)
     const now = performance.now()
-    const dt = Math.min((now - this._last) / 1000, 0.05)
+    const rafMs = now - this._last
+    const dt = Math.min(rafMs / 1000, 0.05)
     this._last = now
-    this._time += dt
+    // A replayed capture pins the clock so flicker/grain/noise hold still.
+    if (!this.captureFrozen) this._time += dt
     const p = this.state.phase
 
     this.debugMode.update(dt)
-    const frozen = this.debugMode.active && this.debugMode.freeze
+    const frozen = (this.debugMode.active && this.debugMode.freeze) || this.captureFrozen
 
     if (frozen) {
       this._updateCameraMatrices() // keep the player camera valid while paused
@@ -929,7 +1433,9 @@ export class Engine {
     // Keep RAF-time simulation/title animation current, but omit the expensive
     // deferred submission between idle deadlines. renderer.info deliberately
     // retains the previous completed frame on skipped callbacks.
-    if (!this._shouldRender(now, p)) return
+    const render = this._shouldRender(now, p)
+    this._trackDisplayRate(rafMs, p, render)
+    if (!render) return
 
     // DebugMode.update() runs first so PerfTool can sample the last completed
     // frame. Start the new renderer-info interval immediately before its first
@@ -941,6 +1447,8 @@ export class Engine {
     } finally {
       this.debugMode.postRender()
     }
+    this._sampleDynamicResolution(now, (now - (this._lastRenderAt ?? now)) || 16.7)
+    this._lastRenderAt = now
     this.debug.update(dt, { chunks: this.cm.loadedCount })
   }
 
@@ -970,6 +1478,7 @@ export class Engine {
     disposeGBufferMaterials(this.materials)
     disposeGeometries(this.geom)
     disposeFurnitureModels(this.furnitureModels)
+    for (const enemy of this.enemies) enemy.anim?.dispose()
     disposeEnemyModels(this.enemyModels)
     this.deferred.dispose()
     this.renderer.dispose()

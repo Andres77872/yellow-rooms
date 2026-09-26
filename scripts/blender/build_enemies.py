@@ -30,6 +30,17 @@
 # corridor, and detail kept to structural edges (lapels, ribs, vertebrae,
 # knuckles, the hood lip).
 #
+# Rig contract: every figure is skinned to its own armature (RIGS) and ships
+# named in-place clips (CLIPS) the runtime drives from the AI state
+# (src/render/enemyAnimator.js). Weights are analytic, not heat-diffused: each
+# part is built inside a `bind(...)` block naming the bones it may follow, and
+# every vertex is weighted by its distance from those bone segments measured
+# at an ANCHOR — the sweep axis for limbs and lofts, the body axis for trim
+# that sits on a torso, the centre for rigid knobs. Anchors on the axis make a
+# limb rigid between joints and split exactly 50/50 at a joint, with `blend`
+# setting how far the bend spreads. Clips are authored as pose functions of a
+# loop phase in the game frame and keyed into NLA-stashed actions.
+#
 # The module is import-safe (no bpy side effects at import): main() wipes the
 # factory scene, builds, audits, exports, saves the source blend and renders a
 # contact sheet. The interactive MCP session execs this file and calls the
@@ -41,7 +52,7 @@ import sys
 
 import bmesh
 import bpy
-from mathutils import Euler, Vector
+from mathutils import Euler, Quaternion, Vector
 
 SCRIPT = os.path.abspath(__file__)
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT)))
@@ -103,6 +114,11 @@ def reset_data():
         bpy.data.objects.remove(obj)
     for mesh in [m for m in bpy.data.meshes if m.name.startswith("mesh_")]:
         bpy.data.meshes.remove(mesh)
+    for arm in [a for a in bpy.data.armatures if a.name.startswith("rig_")]:
+        bpy.data.armatures.remove(arm)
+    figures = {name for name, *_ in MODELS}
+    for action in [a for a in bpy.data.actions if a.name.split(".")[0] in figures]:
+        bpy.data.actions.remove(action)
     for material in list(bpy.data.materials):
         if material.name.startswith("yr_enemy_"):
             bpy.data.materials.remove(material)
@@ -141,9 +157,11 @@ def G(u, y, v):
 
 
 def make_mesh(parts, name, verts, faces, key, shading="soft", recalc=True,
-              location=None, rot=None, face_keys=None):
+              location=None, rot=None, face_keys=None, anchors=None):
     """verts: Blender-space. shading: soft (all smooth) | smooth (by angle) | flat.
-    face_keys: optional per-face palette key list (multi-material part)."""
+    face_keys: optional per-face palette key list (multi-material part).
+    anchors: optional per-vertex Blender-space skin anchors (default: the
+    vertices themselves) — see bind()."""
     mesh = bpy.data.meshes.new(name)
     mesh.from_pydata([tuple(v) for v in verts], [], faces)
     mesh.update()
@@ -180,6 +198,7 @@ def make_mesh(parts, name, verts, faces, key, shading="soft", recalc=True,
         except Exception:
             for polygon in mesh.polygons:
                 polygon.use_smooth = True
+    _skin(obj, anchors if anchors is not None else verts)
     parts.append(obj)
     return obj
 
@@ -230,23 +249,25 @@ def loft_y(parts, sections, key, seg=14, sub=2, caps=(True, True)):
     half-width hw, front/back half-depths, superellipse squareness sq (2 =
     ellipse, >2 tailored/boxy). Sections are Catmull-Rom smoothed."""
     rows = catmull_rows(sections, sub)
-    verts = []
+    verts, anchors = [], []
     for y, cu, cv, hw, df, db, sq in rows:
         for k in range(seg):
             x, z = _superellipse(TAU * k / seg, sq)
             verts.append(G(cu + hw * x, y, cv + (df if z > 0 else db) * z))
-    return make_mesh(parts, "loft", verts, _cap_faces(seg, len(rows), *caps), key)
+            anchors.append(G(cu, y, cv))
+    return make_mesh(parts, "loft", verts, _cap_faces(seg, len(rows), *caps), key, anchors=anchors)
 
 
 def loft_v(parts, sections, key, seg=12, sub=2, caps=(True, True)):
     """Horizontal body (a crawler) from sections (v, cu, cy, hw, h_top, h_bot, sq)."""
     rows = catmull_rows(sections, sub)
-    verts = []
+    verts, anchors = [], []
     for v, cu, cy, hw, ht, hb, sq in rows:
         for k in range(seg):
             x, z = _superellipse(TAU * k / seg, sq)
             verts.append(G(cu + hw * x, cy + (ht if z > 0 else hb) * z, v))
-    return make_mesh(parts, "loft", verts, _cap_faces(seg, len(rows), *caps), key)
+            anchors.append(G(cu, cy, v))
+    return make_mesh(parts, "loft", verts, _cap_faces(seg, len(rows), *caps), key, anchors=anchors)
 
 
 def limb(parts, pts, radii, key, seg=8, sub=2, flat=1.0, up=(0.0, 0.0, 1.0),
@@ -264,14 +285,16 @@ def limb(parts, pts, radii, key, seg=8, sub=2, flat=1.0, up=(0.0, 0.0, 1.0),
         ref = Vector((1, 0, 0)) if abs(T[0].x) < 0.9 else Vector((0, 1, 0))
     N = ref - T[0] * ref.dot(T[0])
     N.normalize()
-    verts = []
+    verts, anchors = [], []
     for i in range(n):
         N = (N - T[i] * N.dot(T[i])).normalized()
         B = T[i].cross(N)
         for k in range(seg):
             a = TAU * k / seg
             verts.append(P[i] + N * (math.cos(a) * rad[i]) + B * (math.sin(a) * rad[i] * flat))
-    return make_mesh(parts, "limb", verts, _cap_faces(seg, n, *caps), key, shading=shading)
+            anchors.append(P[i])
+    return make_mesh(parts, "limb", verts, _cap_faces(seg, n, *caps), key, shading=shading,
+                     anchors=anchors)
 
 
 def egg(parts, center, radii, key, segments=14, rings=10, deform=None, rot=(0, 0, 0)):
@@ -308,7 +331,8 @@ def egg(parts, center, radii, key, segments=14, rings=10, deform=None, rot=(0, 0
     base = 1 + (rings - 2) * segments
     for j in range(segments):
         faces.append((base + j, base + (j + 1) % segments, last))
-    return make_mesh(parts, "egg", verts, faces, key)
+    # Rigid by default: every vertex skins like the centre (a knob, a skull).
+    return make_mesh(parts, "egg", verts, faces, key, anchors=[G(*center)] * len(verts))
 
 
 def egg_point(center, radii, direction, deform=None, rot=(0, 0, 0)):
@@ -341,6 +365,7 @@ def spike(parts, base, direction, r, length, key, verts=5):
         bpy.ops.object.shade_smooth_by_angle(angle=1.2)
     except Exception:
         pass
+    _skin(o, [b] * len(o.data.vertices))
     parts.append(o)
     return o
 
@@ -397,6 +422,258 @@ class Body:
         return p, nrm
 
 
+# --- Rig: skin binding, analytic weights, armature, authored clips ------------
+
+FPS = 30
+MAX_INFLUENCES = 4
+SIDES = (("L", 1), ("R", -1))  # bone suffix, u sign (Blender .L = +x = +u)
+
+_RIG = {}   # current figure: bone -> (head, tail) Blender-space segment
+_BIND = []  # bind() context stack
+
+
+class bind:
+    """Skin every part built inside the block to `bones` of the current rig.
+
+    A bone may be a name or a (name, y_max) pair: the bone then only
+    influences anchors at or below y_max (a jacket skirt follows the thighs,
+    the chest above it never does). `blend` is the joint blend radius in
+    metres: an anchor within about that distance of a joint splits between
+    the two bones. `anchor` optionally maps each game-frame vertex (u, y, v)
+    to the game-frame point its weights are evaluated at, overriding the part's
+    own anchors — e.g. the torso axis at that height, so trim plates and ribs
+    move exactly like the body loft they sit on."""
+
+    def __init__(self, *bones, blend=0.05, anchor=None):
+        self.bones = [b if isinstance(b, tuple) else (b, None) for b in bones]
+        self.blend = blend
+        self.anchor = anchor
+
+    def __enter__(self):
+        _BIND.append(self)
+        return self
+
+    def __exit__(self, *exc):
+        _BIND.pop()
+
+
+def game(p):
+    """Blender (x, y, z) -> game frame (u, y, v)."""
+    return (p[0], p[2], -p[1])
+
+
+def _seg_dist(p, a, b):
+    ab = b - a
+    t = max(0.0, min(1.0, (p - a).dot(ab) / max(ab.length_squared, 1e-12)))
+    return (a + ab * t - p).length
+
+
+def _weights(anchor, ctx):
+    """Normalized (bone, weight) pairs for one anchor: inverse-quartic falloff
+    from each allowed bone segment, softened by the joint blend radius."""
+    ws = []
+    eps2 = ctx.blend * ctx.blend
+    for name, y_max in ctx.bones:
+        if y_max is not None and anchor.z > y_max:
+            continue
+        head, tail = _RIG[name]
+        d = _seg_dist(anchor, head, tail)
+        ws.append((1.0 / (d * d + eps2) ** 2, name))
+    if not ws:
+        raise RuntimeError(f"no bone of {[b for b, _ in ctx.bones]} may skin anchor {tuple(anchor)}")
+    ws.sort(reverse=True)
+    ws = ws[:MAX_INFLUENCES]
+    total = sum(w for w, _ in ws)
+    kept = [(n, w / total) for w, n in ws if w / total >= 0.02]
+    total = sum(w for _, w in kept)
+    return [(n, w / total) for n, w in kept]
+
+
+def _skin(obj, anchors):
+    """Write vertex groups for a freshly built part (see bind())."""
+    if not _RIG:
+        return
+    if not _BIND:
+        raise RuntimeError(f"{obj.name}: part built outside a bind() block")
+    ctx = _BIND[-1]
+    cache, groups = {}, {}
+    for vi, a in enumerate(anchors):
+        if ctx.anchor is not None:
+            a = G(*ctx.anchor(game(a)))
+        key = (round(a.x, 5), round(a.y, 5), round(a.z, 5))
+        w = cache.get(key)
+        if w is None:
+            w = cache[key] = _weights(Vector(a), ctx)
+        for name, val in w:
+            groups.setdefault((name, round(val, 6)), []).append(vi)
+    for (name, val), idx in groups.items():
+        vg = obj.vertex_groups.get(name) or obj.vertex_groups.new(name=name)
+        vg.add(idx, val, "REPLACE")
+
+
+def at_vertex(q):
+    """Anchor callable: weights follow each vertex's own position (a throat
+    that stretches between skull and jaw)."""
+    return q
+
+
+def on_axis(body, skirt=None):
+    """Anchor callable: the torso axis (section centre) at the vertex height.
+    skirt=(y_top, y_bottom, k) spreads anchors below y_top sideways toward
+    the vertex — by k at y_bottom — so a jacket hem follows the thigh under
+    it instead of shearing across the stride."""
+    def f(q):
+        u, y, v = q
+        _y, cu, cv, *_ = body.section(y)
+        au = cu
+        if skirt and y < skirt[0]:
+            t = min(1.0, (skirt[0] - y) / (skirt[0] - skirt[1]))
+            au = cu + (u - cu) * skirt[2] * t * t * (3 - 2 * t)
+        return (au, y, cv)
+    return f
+
+
+def around(pts, radii, i, d):
+    """Insert extra sweep points `d` before and after joint pts[i] (linear
+    along the polyline) so a bending joint gets rings to bend through."""
+    p = Vector(pts[i])
+    out_p, out_r = [tuple(q) for q in pts[:i]], list(radii[:i])
+    for j in (i - 1, i + 1):
+        q = Vector(pts[j])
+        t = min(0.45, d / max((q - p).length, 1e-6))
+        out_p.append(tuple(p.lerp(q, t)))
+        out_r.append(radii[i] + (radii[j] - radii[i]) * t)
+        if j == i - 1:
+            out_p.append(tuple(p))
+            out_r.append(radii[i])
+    out_p += [tuple(q) for q in pts[i + 1:]]
+    out_r += list(radii[i + 1:])
+    return out_p, out_r
+
+
+def set_rig(spec):
+    global _RIG
+    _RIG = {name: (G(*h), G(*t)) for name, h, t, _parent in spec}
+
+
+def make_armature(name, spec):
+    """Armature object for a figure; bones in the game frame (roll 0)."""
+    data = bpy.data.armatures.new("rig_" + name)
+    arm = bpy.data.objects.new("enemy_rig_" + name, data)
+    COLLECTION.objects.link(arm)
+    activate(arm)
+    bpy.ops.object.mode_set(mode="EDIT")
+    made = {}
+    for bone, head, tail, parent in spec:
+        eb = data.edit_bones.new(bone)
+        eb.head = G(*head)
+        eb.tail = G(*tail)
+        eb.roll = 0.0
+        eb.use_deform = True
+        if parent:
+            eb.parent = made[parent]
+            eb.use_connect = False
+        made[bone] = eb
+    bpy.ops.object.mode_set(mode="OBJECT")
+    for pb in arm.pose.bones:
+        pb.rotation_mode = "QUATERNION"
+    return arm
+
+
+_AXES = (("rx", G(1, 0, 0)), ("ry", G(0, 1, 0)), ("rz", G(0, 0, 1)))
+
+
+def _pose_local(arm, bone, spec):
+    """Game-frame pose spec -> bone-local (quaternion, location).
+
+    rx/ry/rz are degrees about the game u (right), y (up) and v (front) axes
+    as seen in the rest pose; the rotation rides along with any posed parent,
+    exactly like FK. Quick reference: +rx leans an up-pointing bone forward
+    and swings a hanging one backward; +ry turns the front toward +u; +rz
+    tilts an up-pointing bone's top toward -u and swings a hanging bone's
+    end toward +u. `t` is a game-frame offset of the bone head (root bones)."""
+    rest = arm.data.bones[bone].matrix_local.to_3x3()
+    inv = rest.transposed()
+    q = Quaternion()
+    for key, axis in _AXES:
+        deg = spec.get(key, 0.0)
+        if deg:
+            q = q @ Quaternion(inv @ axis, math.radians(deg))
+    loc = inv @ G(*spec["t"]) if "t" in spec else Vector()
+    return q, loc
+
+
+def reset_pose(arm):
+    for pb in arm.pose.bones:
+        pb.rotation_quaternion = Quaternion()
+        pb.location = Vector()
+
+
+def author_clip(arm, figure, name, seconds, pose_fn, step=2):
+    """Key pose_fn(t) (t in [0, 1], a seamless loop: pose_fn(0) == pose_fn(1))
+    every `step` frames into a new action, stashed on its own NLA track so
+    the glTF exporter picks it up as the animation `name`."""
+    frames = max(2, round(seconds * FPS))
+    arm.animation_data_create()
+    action = bpy.data.actions.new(f"{figure}.{name}")
+    arm.animation_data.action = action
+    keys = list(range(0, frames, step)) + [frames]
+    moved = {b for b, s in pose_fn(0.0).items() if "t" in s}
+    for f in keys:
+        reset_pose(arm)
+        pose = pose_fn(f / frames)
+        for pb in arm.pose.bones:
+            spec = pose.get(pb.name)
+            if spec is None:
+                pb.keyframe_insert("rotation_quaternion", frame=f)
+                continue
+            pb.rotation_quaternion, pb.location = _pose_local(arm, pb.name, spec)
+            pb.keyframe_insert("rotation_quaternion", frame=f)
+            if pb.name in moved:
+                pb.keyframe_insert("location", frame=f)
+    track = arm.animation_data.nla_tracks.new()
+    track.name = action.name
+    track.strips.new(action.name, 0, action)
+    arm.animation_data.action = None
+    reset_pose(arm)
+    return action
+
+
+def dominant_bone(obj):
+    """Face index -> the bone most of its corners follow (cull grouping)."""
+    names = {g.index: g.name for g in obj.vertex_groups}
+    best = []
+    for v in obj.data.vertices:
+        g = max(v.groups, key=lambda e: e.weight, default=None)
+        best.append(names.get(g.group) if g else None)
+    polys = obj.data.polygons
+    face = []
+    for p in polys:
+        votes = {}
+        for vi in p.vertices:
+            votes[best[vi]] = votes.get(best[vi], 0) + 1
+        face.append(max(votes, key=votes.get))
+    return lambda i: face[i]
+
+
+def audit_skin(obj, name):
+    """Every vertex follows 1..MAX_INFLUENCES bones with unit total weight."""
+    known = {g.index for g in obj.vertex_groups}
+    for v in obj.data.vertices:
+        ws = [e.weight for e in v.groups if e.group in known and e.weight > 0]
+        if not ws or len(ws) > MAX_INFLUENCES or abs(sum(ws) - 1.0) > 1e-3:
+            raise RuntimeError(f"{name}: vertex {v.index} has bad skin weights {ws}")
+
+
+# Pose helpers: loop-phase waves (k whole cycles per clip keep loops seamless).
+def wave(t, k=1, ph=0.0):
+    return math.sin(TAU * (k * t + ph))
+
+
+def pos(x, p=1.0):
+    return max(0.0, x) ** p
+
+
 # --- The three entities --------------------------------------------------------
 
 def _hand(p, su, wrist, down, fwd, key, finger_len=(0.14, 0.155, 0.145, 0.12),
@@ -445,61 +722,78 @@ def m_stalker(p):
         (1.775, 0, 0.11, 0.196, 0.078, 0.096, 2.3),
         (1.81, 0, 0.122, 0.09, 0.06, 0.064, 2.0),
     ]
-    loft_y(p, torso, K, seg=16, sub=2)
     body = Body(torso)
-    # Trousers: long straight legs, a hint of knee, dress shoes.
-    for su in (-1, 1):
-        limb(p, [(su * 0.094, 1.12, 0.0), (su * 0.094, 0.9, 0.012), (su * 0.092, 0.62, 0.03),
-                 (su * 0.089, 0.36, 0.008), (su * 0.087, 0.1, -0.004)],
-             [0.086, 0.07, 0.054, 0.052, 0.047], K, seg=10, sub=2)
+    # The jacket skirt below the hips also follows the thighs, so a long
+    # stride swings the hem instead of pushing the trouser leg through it.
+    with bind("hips", "spine", "chest", "neck", ("thigh_L", 1.1), ("thigh_R", 1.1), blend=0.07,
+              anchor=on_axis(body, skirt=(1.12, 0.98, 0.9))):
+        loft_y(p, torso, K, seg=16, sub=2)
+    # Trousers: long straight legs, a hint of knee, dress shoes. Extra rings
+    # either side of the knee let the run's heel kick bend without pinching;
+    # the hem sinks into the shoe collar so no ankle gap opens mid-stride.
+    for s, su in SIDES:
+        leg, leg_r = around([(su * 0.094, 1.12, 0.0), (su * 0.094, 0.9, 0.012), (su * 0.092, 0.62, 0.03),
+                             (su * 0.089, 0.36, 0.008), (su * 0.087, 0.075, 0.0)],
+                            [0.086, 0.07, 0.054, 0.052, 0.046], 2, 0.075)
+        with bind("hips", f"thigh_{s}", f"shin_{s}", f"foot_{s}", blend=0.06):
+            limb(p, leg, leg_r, K, seg=10, sub=2)
         # Dress shoe: low pointed toe, raised heel block, flat sole.
-        egg(p, (su * 0.09, 0.046, 0.075), (0.045, 0.046, 0.15), K, segments=10, rings=7,
-            deform=lambda nu, ny, nv: (nu * (1 - 0.42 * max(0.0, nv) ** 2),
-                                       max(-0.92, ny * (1 - 0.55 * max(0.0, nv)) if ny > 0 else ny),
-                                       nv))
-    # Lapels, shirt V and tie as plates hugging the chest.
-    for su in (-1, 1):
-        pts2d = [(su * 0.045, 1.795), (su * 0.14, 1.735), (su * 0.118, 1.665), (su * 0.0, 1.36)]
-        outline, normals = [], []
-        for u, y in pts2d:
+        with bind(f"foot_{s}"):
+            egg(p, (su * 0.09, 0.046, 0.075), (0.045, 0.046, 0.15), K, segments=10, rings=7,
+                deform=lambda nu, ny, nv: (nu * (1 - 0.42 * max(0.0, nv) ** 2),
+                                           max(-0.92, ny * (1 - 0.55 * max(0.0, nv)) if ny > 0 else ny),
+                                           nv))
+    # Lapels, shirt V and tie as plates hugging the chest (skinned on the
+    # torso axis, so they ride the loft exactly).
+    with bind("spine", "chest", "neck", blend=0.07, anchor=on_axis(body)):
+        for su in (-1, 1):
+            pts2d = [(su * 0.045, 1.795), (su * 0.14, 1.735), (su * 0.118, 1.665), (su * 0.0, 1.36)]
+            outline, normals = [], []
+            for u, y in pts2d:
+                pt, nm = body.front(u, y)
+                outline.append(pt)
+                normals.append(nm)
+            plate(p, outline if su > 0 else list(reversed(outline)),
+                  normals if su > 0 else list(reversed(normals)), 0.008, 0.004, CL)
+        shirt, shirt_n = [], []
+        for u, y in ((-0.045, 1.8), (0.045, 1.8), (0.0, 1.37)):
             pt, nm = body.front(u, y)
-            outline.append(pt)
-            normals.append(nm)
-        plate(p, outline if su > 0 else list(reversed(outline)),
-              normals if su > 0 else list(reversed(normals)), 0.008, 0.004, CL)
-    shirt, shirt_n = [], []
-    for u, y in ((-0.045, 1.8), (0.045, 1.8), (0.0, 1.37)):
-        pt, nm = body.front(u, y)
-        shirt.append(pt)
-        shirt_n.append(nm)
-    plate(p, shirt, shirt_n, 0.004, 0.004, SH)
-    tie, tie_n = [], []
-    for u, y in ((-0.014, 1.79), (0.014, 1.79), (0.02, 1.52), (0.0, 1.45), (-0.02, 1.52)):
-        pt, nm = body.front(u, y)
-        tie.append(pt)
-        tie_n.append(nm)
-    plate(p, tie, tie_n, 0.009, 0.002, K)
-    btn, btn_n = body.front(0.0, 1.335)
-    limb(p, [tuple(btn - btn_n * 0.004), tuple(btn + btn_n * 0.008)], [0.014, 0.012], CL,
-         seg=8, sub=1)
+            shirt.append(pt)
+            shirt_n.append(nm)
+        plate(p, shirt, shirt_n, 0.004, 0.004, SH)
+        tie, tie_n = [], []
+        for u, y in ((-0.014, 1.79), (0.014, 1.79), (0.02, 1.52), (0.0, 1.45), (-0.02, 1.52)):
+            pt, nm = body.front(u, y)
+            tie.append(pt)
+            tie_n.append(nm)
+        plate(p, tie, tie_n, 0.009, 0.002, K)
+        btn, btn_n = body.front(0.0, 1.335)
+        limb(p, [tuple(btn - btn_n * 0.004), tuple(btn + btn_n * 0.008)], [0.014, 0.012], CL,
+             seg=8, sub=1)
     # Arms: square-ish suit shoulders, sleeves reaching mid-thigh, pale cuffs
-    # of wrist, long-fingered hands hanging past the knuckles of the knee.
-    for su in (-1, 1):
-        egg(p, (su * 0.198, 1.728, 0.1), (0.07, 0.055, 0.07), K, segments=10, rings=6)
+    # of wrist, long-fingered pale hands hanging past the knuckles of the knee.
+    for s, su in SIDES:
+        with bind(f"shoulder_{s}", f"upperarm_{s}", "chest", blend=0.05):
+            egg(p, (su * 0.198, 1.728, 0.1), (0.07, 0.055, 0.07), K, segments=10, rings=6)
         sleeve = [(su * 0.218, 1.725, 0.1), (su * 0.246, 1.52, 0.104), (su * 0.266, 1.3, 0.114),
                   (su * 0.278, 1.08, 0.132), (su * 0.284, 0.9, 0.148)]
-        limb(p, sleeve, [0.058, 0.05, 0.043, 0.043, 0.041], K, seg=10, sub=2)
-        limb(p, [(su * 0.2835, 0.915, 0.147), (su * 0.2855, 0.885, 0.15)], [0.036, 0.034], SH,
-             seg=8, sub=1)  # shirt cuff peeking out of the sleeve
-        limb(p, [(su * 0.284, 0.93, 0.145), (su * 0.286, 0.85, 0.152)], [0.023, 0.021], PALE,
-             seg=8, sub=1)
-        _hand(p, su, (su * 0.287, 0.855, 0.153), (0.01 * su, -1.0, 0.1), (0, 0, 1), PALE,
-              finger_len=(0.15, 0.17, 0.16, 0.13), palm=(0.02, 0.066, 0.044), spread=0.02,
-              curl=0.022, r0=0.0095)
+        with bind(f"shoulder_{s}", f"upperarm_{s}", f"forearm_{s}", f"hand_{s}", blend=0.06):
+            limb(p, sleeve, [0.058, 0.05, 0.043, 0.043, 0.041], K, seg=10, sub=2)
+        with bind(f"forearm_{s}", f"hand_{s}", blend=0.04):
+            limb(p, [(su * 0.2835, 0.915, 0.147), (su * 0.2855, 0.885, 0.15)], [0.036, 0.034], SH,
+                 seg=8, sub=1)  # shirt cuff peeking out of the sleeve
+            limb(p, [(su * 0.284, 0.93, 0.145), (su * 0.286, 0.85, 0.152)], [0.023, 0.021], PALE,
+                 seg=8, sub=1)
+        with bind(f"hand_{s}", f"fingers_{s}", blend=0.03):
+            _hand(p, su, (su * 0.287, 0.855, 0.153), (0.01 * su, -1.0, 0.1), (0, 0, 1), PALE,
+                  finger_len=(0.15, 0.17, 0.16, 0.13), palm=(0.02, 0.066, 0.044), spread=0.02,
+                  curl=0.022, r0=0.0095)
     # Collar, elongated pale neck craning forward, blank egg head.
-    limb(p, [(0, 1.785, 0.12), (0, 1.86, 0.142)], [0.058, 0.05], SH, seg=12, sub=1)
-    limb(p, [(0, 1.8, 0.122), (0, 1.93, 0.17), (0, 2.03, 0.205)], [0.043, 0.039, 0.037], PALE,
-         seg=10, sub=2)
+    with bind("chest", "neck", blend=0.05):
+        limb(p, [(0, 1.785, 0.12), (0, 1.86, 0.142)], [0.058, 0.05], SH, seg=12, sub=1)
+    with bind("chest", "neck", "head", blend=0.05):
+        limb(p, [(0, 1.8, 0.122), (0, 1.93, 0.17), (0, 2.03, 0.205)], [0.043, 0.039, 0.037], PALE,
+             seg=10, sub=2)
 
     def skull(nu, ny, nv):
         # Chin tapers, cranium swells back, faint brow ridge / cheekbones:
@@ -515,8 +809,9 @@ def m_stalker(p):
         nv -= 0.035 * math.exp(-((ny - 0.05) / 0.08) ** 2) * math.exp(-((abs(nu) - 0.36) / 0.16) ** 2) * front
         nu += math.copysign(0.04, nu) * math.exp(-((ny + 0.16) / 0.1) ** 2) * math.exp(-((abs(nu) - 0.6) / 0.2) ** 2) * front
         return nu, ny, nv
-    egg(p, (0, 2.145, 0.232), (0.079, 0.126, 0.094), PALE, segments=16, rings=12,
-        deform=skull, rot=(R(-11), 0, 0))
+    with bind("head"):
+        egg(p, (0, 2.145, 0.232), (0.079, 0.126, 0.094), PALE, segments=16, rings=12,
+            deform=skull, rot=(R(-11), 0, 0))
 
 
 def m_pursuer(p):
@@ -536,7 +831,6 @@ def m_pursuer(p):
         (0.37, 0, 0.565, 0.1, 0.082, 0.082, 2.0),
         (0.43, 0, 0.53, 0.05, 0.05, 0.05, 2.0),
     ]
-    loft_v(p, body, B, seg=10, sub=2)
     rows = catmull_rows(body, 4)
 
     def sec(v):
@@ -544,26 +838,36 @@ def m_pursuer(p):
             if a[0] <= v <= b[0]:
                 t = (v - a[0]) / (b[0] - a[0])
                 return tuple(x + (z - x) * t for x, z in zip(a, b))
-        return rows[-1]
-    # Spine ridge: vertebrae spikes raking backward, shrinking to the tail.
-    for i in range(12):
-        v = 0.36 - i * 0.087
-        _v, cu, cy, hw, ht, hb, sq = sec(v)
-        s = 1.0 - 0.045 * i
-        spike(p, (0, cy + ht - 0.012, v), (0, 1.0, -0.45), 0.02 * s, 0.055 * s, RG, verts=5)
-    # Ribs: ridges wrapping the starved ribcage from spine to keel.
-    for v in (-0.04, 0.06, 0.15, 0.24):
-        _v, cu, cy, hw, ht, hb, sq = sec(v)
-        for su in (-1, 1):
-            pts = []
-            for a in (78, 35, -10, -50):
-                x, z = _superellipse(R(a), sq)
-                h = ht if z > 0 else hb
-                pts.append((su * (hw * x + 0.006 * x), cy + h * z + 0.004 * z, v - 0.025 * (78 - a) / 128))
-            limb(p, pts, [0.011, 0.013, 0.011, 0.006], RG, seg=4, sub=1)
+        return rows[-1] if v > rows[-1][0] else rows[0]
+
+    def axis(q):
+        # Body-axis anchor under a surface point: ridges ride the loft.
+        _v, cu, cy, *_ = sec(q[2])
+        return (cu, cy, q[2])
+    torso_bones = ("pelvis", "spine", "chest")
+    with bind(*torso_bones, blend=0.1):
+        loft_v(p, body, B, seg=10, sub=2)
+    with bind(*torso_bones, blend=0.1, anchor=axis):
+        # Spine ridge: vertebrae spikes raking backward, shrinking to the tail.
+        for i in range(12):
+            v = 0.36 - i * 0.087
+            _v, cu, cy, hw, ht, hb, sq = sec(v)
+            s = 1.0 - 0.045 * i
+            spike(p, (0, cy + ht - 0.012, v), (0, 1.0, -0.45), 0.02 * s, 0.055 * s, RG, verts=5)
+        # Ribs: ridges wrapping the starved ribcage from spine to keel.
+        for v in (-0.04, 0.06, 0.15, 0.24):
+            _v, cu, cy, hw, ht, hb, sq = sec(v)
+            for su in (-1, 1):
+                pts = []
+                for a in (78, 35, -10, -50):
+                    x, z = _superellipse(R(a), sq)
+                    h = ht if z > 0 else hb
+                    pts.append((su * (hw * x + 0.006 * x), cy + h * z + 0.004 * z, v - 0.025 * (78 - a) / 128))
+                limb(p, pts, [0.011, 0.013, 0.011, 0.006], RG, seg=4, sub=1)
     # Neck swings down to the low-slung skull.
-    limb(p, [(0, 0.56, 0.36), (0, 0.52, 0.47), (0, 0.45, 0.56)], [0.058, 0.05, 0.045], B,
-         seg=10, sub=2)
+    with bind("chest", "neck", "head", blend=0.06):
+        limb(p, [(0, 0.56, 0.36), (0, 0.52, 0.47), (0, 0.45, 0.56)], [0.058, 0.05, 0.045], B,
+             seg=10, sub=2)
 
     def cranium(nu, ny, nv):
         front = max(0.0, nv)
@@ -577,7 +881,8 @@ def m_pursuer(p):
         nu -= math.copysign(0.08, nu) * math.exp(-((nv + 0.05) / 0.22) ** 2) * math.exp(-((ny - 0.2) / 0.3) ** 2)
         return nu, ny, nv
     skull_c, skull_r, skull_rot = (0, 0.44, 0.645), (0.086, 0.075, 0.172), (R(10), 0, 0)
-    egg(p, skull_c, skull_r, B, segments=14, rings=10, deform=cranium, rot=skull_rot)
+    with bind("head"):
+        egg(p, skull_c, skull_r, B, segments=14, rings=10, deform=cranium, rot=skull_rot)
 
     # Lower jaw: wider than the skull at the hinges, hanging open.
     def mandible(nu, ny, nv):
@@ -586,40 +891,54 @@ def m_pursuer(p):
         nu *= (1 + 0.22 * max(0.0, -nv)) * (1 - 0.38 * max(0.0, nv) ** 2)
         return nu, ny, nv
     jaw_c, jaw_r, jaw_rot = (0, 0.325, 0.66), (0.112, 0.052, 0.165), (R(30), 0, 0)
-    egg(p, jaw_c, jaw_r, L, segments=12, rings=7, deform=mandible, rot=jaw_rot)
-    # The maw between them: a dark throat filling the gape.
-    egg(p, (0, 0.375, 0.655), (0.074, 0.05, 0.14), L, segments=10, rings=5, rot=(R(20), 0, 0))
+    with bind("jaw"):
+        egg(p, jaw_c, jaw_r, L, segments=12, rings=7, deform=mandible, rot=jaw_rot)
+    # The maw between them: a dark throat that stretches as the jaw drops.
+    with bind("head", "jaw", blend=0.03, anchor=at_vertex):
+        egg(p, (0, 0.375, 0.655), (0.074, 0.05, 0.14), L, segments=10, rings=5, rot=(R(20), 0, 0))
     # Teeth: a ragged upper row on the palate rim, a lower row on the jaw rim.
-    for i, a in enumerate((-1.1, -0.8, -0.52, -0.26, 0.0, 0.26, 0.52, 0.8, 1.1)):
-        pt, nrm = egg_point(skull_c, skull_r, (0.95 * math.sin(a), -0.32, 0.95 * math.cos(a)), cranium, skull_rot)
-        ln = 0.03 + 0.016 * ((i * 5) % 3)
-        spike(p, tuple(pt - nrm * 0.008), (0.1 * math.sin(a), -1.0, 0.15), 0.008, ln, T, verts=4)
-    for i, a in enumerate((-1.0, -0.66, -0.33, 0.33, 0.66, 1.0)):
-        pt, nrm = egg_point(jaw_c, jaw_r, (0.93 * math.sin(a), 0.3, 0.93 * math.cos(a)), mandible, jaw_rot)
-        spike(p, tuple(pt - nrm * 0.006), (0.05 * math.sin(a), 1.0, 0.3), 0.0075,
-              0.026 + 0.012 * (i % 2), T, verts=4)
-    # Eyes: pale pinpoints at the bottom of dark sockets under the brow.
-    for su in (-1, 1):
-        pt, nrm = egg_point(skull_c, skull_r, (su * 0.62, 0.34, 0.7), cranium, skull_rot)
-        egg(p, tuple(pt - nrm * 0.013), (0.024, 0.017, 0.02), L, segments=6, rings=4)
-        egg(p, tuple(pt + nrm * 0.0005), (0.0068, 0.006, 0.0058), E, segments=6, rings=4)
-    # The spine ridge continues up the neck and over the crown.
-    for k, dv in enumerate((-0.55, -0.2)):
-        pt, nrm = egg_point(skull_c, skull_r, (0.0, 1.0, dv), cranium, skull_rot)
-        spike(p, tuple(pt - nrm * 0.008), (0, 1.0, -0.5), 0.014 - 0.003 * k, 0.04 - 0.008 * k, RG,
-              verts=5)
-    for k, (y, v) in enumerate(((0.588, 0.43), (0.56, 0.5))):
-        spike(p, (0, y, v), (0, 1.0, -0.4), 0.016, 0.045, RG, verts=5)
+    with bind("head"):
+        for i, a in enumerate((-1.1, -0.8, -0.52, -0.26, 0.0, 0.26, 0.52, 0.8, 1.1)):
+            pt, nrm = egg_point(skull_c, skull_r, (0.95 * math.sin(a), -0.32, 0.95 * math.cos(a)), cranium, skull_rot)
+            ln = 0.03 + 0.016 * ((i * 5) % 3)
+            spike(p, tuple(pt - nrm * 0.008), (0.1 * math.sin(a), -1.0, 0.15), 0.008, ln, T, verts=4)
+    with bind("jaw"):
+        for i, a in enumerate((-1.0, -0.66, -0.33, 0.33, 0.66, 1.0)):
+            pt, nrm = egg_point(jaw_c, jaw_r, (0.93 * math.sin(a), 0.3, 0.93 * math.cos(a)), mandible, jaw_rot)
+            spike(p, tuple(pt - nrm * 0.006), (0.05 * math.sin(a), 1.0, 0.3), 0.0075,
+                  0.026 + 0.012 * (i % 2), T, verts=4)
+    with bind("head"):
+        # Eyes: pale pinpoints at the bottom of dark sockets under the brow.
+        for su in (-1, 1):
+            pt, nrm = egg_point(skull_c, skull_r, (su * 0.62, 0.34, 0.7), cranium, skull_rot)
+            egg(p, tuple(pt - nrm * 0.013), (0.024, 0.017, 0.02), L, segments=6, rings=4)
+            egg(p, tuple(pt + nrm * 0.0005), (0.0068, 0.006, 0.0058), E, segments=6, rings=4)
+        # The spine ridge continues up the neck and over the crown.
+        for k, dv in enumerate((-0.55, -0.2)):
+            pt, nrm = egg_point(skull_c, skull_r, (0.0, 1.0, dv), cranium, skull_rot)
+            spike(p, tuple(pt - nrm * 0.008), (0, 1.0, -0.5), 0.014 - 0.003 * k, 0.04 - 0.008 * k, RG,
+                  verts=5)
+    with bind("chest", "neck", blend=0.05):
+        for k, (y, v) in enumerate(((0.588, 0.43), (0.56, 0.5))):
+            spike(p, (0, y, v), (0, 1.0, -0.4), 0.016, 0.045, RG, verts=5)
 
-    def arm_leg(su, root, joint, wrist, r, key_upper, key_lower, spur_dir):
+    def arm_leg(bones, su, root, joint, wrist, r, key_upper, key_lower, spur_dir):
+        base, upper, lower, end = bones
         rootv, jointv, wristv = Vector(root), Vector(joint), Vector(wrist)
         mid_u = rootv.lerp(jointv, 0.55) + Vector((su * 0.02, 0.04, 0.0))
-        limb(p, [root, tuple(mid_u), joint], [r[0], r[1], r[2]], key_upper, seg=8, sub=2)
         mid_l = jointv.lerp(wristv, 0.4) + Vector((su * 0.03, 0.03, 0.0))
-        limb(p, [joint, tuple(mid_l), wrist], [r[2] * 0.95, r[3], r[4]], key_lower, seg=6, sub=2)
-        egg(p, joint, (r[2] * 1.2, r[2] * 1.25, r[2] * 1.2), RG, segments=6, rings=5)
-        spike(p, tuple(jointv + Vector(spur_dir).normalized() * r[2] * 0.6), spur_dir,
-              r[2] * 0.55, 0.09, RG, verts=5)
+        # Extra rings on both sides of the reared joint: the crawl folds it.
+        up_p, up_r = around([root, tuple(mid_u), joint, tuple(mid_l)], [r[0], r[1], r[2], r[3]], 2, 0.07)
+        lo_p, lo_r = around([tuple(mid_u), joint, tuple(mid_l), wrist], [r[1], r[2] * 0.95, r[3], r[4]], 1, 0.07)
+        with bind(base, upper, lower, blend=0.05):
+            limb(p, up_p[:4], up_r[:4], key_upper, seg=8, sub=2)
+        with bind(upper, lower, end, blend=0.05):
+            limb(p, lo_p[2:], lo_r[2:], key_lower, seg=6, sub=2)
+        with bind(upper, lower, blend=0.03):
+            egg(p, joint, (r[2] * 1.2, r[2] * 1.25, r[2] * 1.2), RG, segments=6, rings=5)
+        with bind(upper):
+            spike(p, tuple(jointv + Vector(spur_dir).normalized() * r[2] * 0.6), spur_dir,
+                  r[2] * 0.55, 0.09, RG, verts=5)
 
     def claws(su, wrist, fwd_deg, key, lengths=(0.19, 0.23, 0.2), knuckle_h=0.1):
         w = Vector(wrist)
@@ -633,15 +952,19 @@ def m_pursuer(p):
             tip.y = 0.004
             limb(p, [tuple(b), tuple(kn), tuple(tip)], [0.016, 0.014, 0.003], key, seg=5, sub=2,
                  caps=(False, True))
-    for su in (-1, 1):
+    for s, su in SIDES:
         # Front limbs: elbows rear up above the shoulders, hands splay forward.
-        arm_leg(su, (su * 0.12, 0.61, 0.3), (su * 0.4, 1.06, 0.37), (su * 0.49, 0.14, 0.6),
+        arm_leg(("chest", f"upperarm_{s}", f"forearm_{s}", f"hand_{s}"), su,
+                (su * 0.12, 0.61, 0.3), (su * 0.4, 1.06, 0.37), (su * 0.49, 0.14, 0.6),
                 (0.058, 0.044, 0.04, 0.03, 0.022), B, L, (su * 0.3, 1.0, -0.4))
-        claws(su, (su * 0.49, 0.1, 0.62), 12, L)
+        with bind(f"hand_{s}"):
+            claws(su, (su * 0.49, 0.1, 0.62), 12, L)
         # Hind limbs: knees even higher, feet raking back and out.
-        arm_leg(su, (su * 0.12, 0.64, -0.5), (su * 0.42, 1.14, -0.42), (su * 0.53, 0.16, -0.6),
+        arm_leg(("pelvis", f"thigh_{s}", f"shin_{s}", f"foot_{s}"), su,
+                (su * 0.12, 0.64, -0.5), (su * 0.42, 1.14, -0.42), (su * 0.53, 0.16, -0.6),
                 (0.07, 0.05, 0.045, 0.034, 0.024), B, L, (su * 0.25, 1.0, 0.3))
-        claws(su, (su * 0.53, 0.1, -0.6), 180 - 50, L, lengths=(0.13, 0.15, 0.12), knuckle_h=0.08)
+        with bind(f"foot_{s}"):
+            claws(su, (su * 0.53, 0.1, -0.6), 180 - 50, L, lengths=(0.13, 0.15, 0.12), knuckle_h=0.08)
 
 
 def hood_head(parts, center, pitch=R(28), roll=R(7)):
@@ -680,7 +1003,7 @@ def hood_head(parts, center, pitch=R(28), roll=R(7)):
         keys.append("voidFace")
     # Topologically closed (back cap, cowl, lip, void bowl fan), so the normal
     # recalculation orients the whole sack outward — the bowl faces the viewer.
-    return make_mesh(parts, "hood", verts, faces, "ashBody", face_keys=keys)
+    return make_mesh(parts, "hood", verts, faces, "ashBody", face_keys=keys, anchors=[c] * len(verts))
 
 
 def m_husk(p):
@@ -700,51 +1023,372 @@ def m_husk(p):
         (1.445, 0, 0.124, 0.156, 0.062, 0.1, 2.2),
         (1.49, 0, 0.15, 0.08, 0.05, 0.06, 2.0),
     ]
-    loft_y(p, torso, A, seg=14, sub=2)
     body = Body(torso)
+    with bind("hips", "spine", "chest", "neck", blend=0.07):
+        loft_y(p, torso, A, seg=14, sub=2)
     # Rib ridges sloping down toward the sternum, a sternum ridge, collarbones.
     # Ribs: thin arcs sloping DOWN toward the sternum (chevrons, not slats).
-    for y in (1.17, 1.225, 1.28, 1.335, 1.39):
-        for su in (-1, 1):
-            pts = []
-            for k, ang in enumerate((80, 58, 32, 6)):
-                pt, nm = body.at(R(ang) if su > 0 else R(180 - ang), y + 0.02 * k)
-                pts.append(tuple(pt + nm * 0.0015))
-            limb(p, pts, [0.005, 0.0075, 0.0075, 0.005], RG, seg=4, sub=1)
-    st = [tuple(body.front(0, y)[0] + body.front(0, y)[1] * 0.002) for y in (1.43, 1.32, 1.18)]
-    limb(p, st, [0.009, 0.009, 0.006], RG, seg=5, sub=1)
-    for su in (-1, 1):
-        limb(p, [(su * 0.02, 1.47, 0.195), (su * 0.09, 1.478, 0.18), (su * 0.15, 1.472, 0.135)],
-             [0.009, 0.01, 0.008], RG, seg=5, sub=1)
-    # Spine bumps down the hunched back.
-    for i, y in enumerate((1.44, 1.37, 1.3, 1.23, 1.16, 1.09)):
-        pt, nm = body.at(R(-90), y)
-        spike(p, tuple(pt - nm * 0.01), (0, 0.3, -1.0), 0.016, 0.03, RG, verts=5)
+    with bind("hips", "spine", "chest", "neck", blend=0.07, anchor=on_axis(body)):
+        for y in (1.17, 1.225, 1.28, 1.335, 1.39):
+            for su in (-1, 1):
+                pts = []
+                for k, ang in enumerate((80, 58, 32, 6)):
+                    pt, nm = body.at(R(ang) if su > 0 else R(180 - ang), y + 0.02 * k)
+                    pts.append(tuple(pt + nm * 0.0015))
+                limb(p, pts, [0.005, 0.0075, 0.0075, 0.005], RG, seg=4, sub=1)
+        st = [tuple(body.front(0, y)[0] + body.front(0, y)[1] * 0.002) for y in (1.43, 1.32, 1.18)]
+        limb(p, st, [0.009, 0.009, 0.006], RG, seg=5, sub=1)
+        # Spine bumps down the hunched back.
+        for i, y in enumerate((1.44, 1.37, 1.3, 1.23, 1.16, 1.09)):
+            pt, nm = body.at(R(-90), y)
+            spike(p, tuple(pt - nm * 0.01), (0, 0.3, -1.0), 0.016, 0.03, RG, verts=5)
+    for s, su in SIDES:
+        with bind("chest", f"shoulder_{s}", blend=0.05):
+            limb(p, [(su * 0.02, 1.47, 0.195), (su * 0.09, 1.478, 0.18), (su * 0.15, 1.472, 0.135)],
+                 [0.009, 0.01, 0.008], RG, seg=5, sub=1)
     # Legs: thin, knees pressing forward, long bony feet.
-    for su in (-1, 1):
-        limb(p, [(su * 0.085, 0.86, -0.01), (su * 0.085, 0.66, 0.01), (su * 0.08, 0.47, 0.045),
-                 (su * 0.078, 0.27, 0.02), (su * 0.076, 0.07, -0.005)],
-             [0.058, 0.045, 0.04, 0.032, 0.024], A, seg=9, sub=2)
+    for s, su in SIDES:
+        with bind("hips", f"thigh_{s}", f"shin_{s}", f"foot_{s}", blend=0.05):
+            limb(p, [(su * 0.085, 0.86, -0.01), (su * 0.085, 0.66, 0.01), (su * 0.08, 0.47, 0.045),
+                     (su * 0.078, 0.27, 0.02), (su * 0.076, 0.055, -0.005)],
+                 [0.058, 0.045, 0.04, 0.032, 0.024], A, seg=9, sub=2)
         # Kneecap pressing through the skin (flat, not a doll joint).
-        egg(p, (su * 0.08, 0.47, 0.068), (0.026, 0.034, 0.014), RG, segments=8, rings=5)
-        egg(p, (su * 0.08, 0.03, 0.07), (0.034, 0.032, 0.115), A, segments=8, rings=5,
-            deform=lambda nu, ny, nv: (nu * (1 - 0.35 * max(0.0, nv)),
-                                       ny * (1 - 0.5 * max(0.0, nv)) if ny > 0 else ny, nv))
+        with bind(f"thigh_{s}", f"shin_{s}", blend=0.03):
+            egg(p, (su * 0.08, 0.47, 0.068), (0.026, 0.034, 0.014), RG, segments=8, rings=5)
+        with bind(f"foot_{s}"):
+            egg(p, (su * 0.08, 0.03, 0.07), (0.034, 0.032, 0.115), A, segments=8, rings=5,
+                deform=lambda nu, ny, nv: (nu * (1 - 0.35 * max(0.0, nv)),
+                                           ny * (1 - 0.5 * max(0.0, nv)) if ny > 0 else ny, nv))
     # Arms: shoulders hiked up by the hood, long dangling limbs, bony elbows.
-    for su in (-1, 1):
+    for s, su in SIDES:
         # Shoulders hiked up toward the hood and rolled forward.
-        egg(p, (su * 0.148, 1.47, 0.125), (0.05, 0.05, 0.05), A, segments=8, rings=6)
-        limb(p, [(su * 0.16, 1.455, 0.125), (su * 0.182, 1.28, 0.14), (su * 0.192, 1.12, 0.158),
-                 (su * 0.198, 0.97, 0.185), (su * 0.2, 0.84, 0.205)],
-             [0.042, 0.033, 0.03, 0.027, 0.02], A, seg=8, sub=2)
-        egg(p, (su * 0.194, 1.12, 0.14), (0.02, 0.026, 0.016), RG, segments=8, rings=5)
-        _hand(p, su, (su * 0.201, 0.845, 0.207), (0.0, -1.0, 0.12), (0, 0, 1), A,
-              finger_len=(0.1, 0.115, 0.105, 0.085), palm=(0.014, 0.045, 0.03), spread=0.013,
-              curl=0.03, r0=0.0065)
+        with bind(f"shoulder_{s}", f"upperarm_{s}", "chest", blend=0.04):
+            egg(p, (su * 0.148, 1.47, 0.125), (0.05, 0.05, 0.05), A, segments=8, rings=6)
+        with bind(f"shoulder_{s}", f"upperarm_{s}", f"forearm_{s}", f"hand_{s}", blend=0.05):
+            limb(p, [(su * 0.16, 1.455, 0.125), (su * 0.182, 1.28, 0.14), (su * 0.192, 1.12, 0.158),
+                     (su * 0.198, 0.97, 0.185), (su * 0.2, 0.84, 0.205)],
+                 [0.042, 0.033, 0.03, 0.027, 0.02], A, seg=8, sub=2)
+        with bind(f"upperarm_{s}", f"forearm_{s}", blend=0.03):
+            egg(p, (su * 0.194, 1.12, 0.14), (0.02, 0.026, 0.016), RG, segments=8, rings=5)
+        with bind(f"hand_{s}", f"fingers_{s}", blend=0.025):
+            _hand(p, su, (su * 0.201, 0.845, 0.207), (0.0, -1.0, 0.12), (0, 0, 1), A,
+                  finger_len=(0.1, 0.115, 0.105, 0.085), palm=(0.014, 0.045, 0.03), spread=0.013,
+                  curl=0.03, r0=0.0065)
     # Neck craning forward into the bowed hood.
-    limb(p, [(0, 1.47, 0.148), (0, 1.52, 0.2), (0, 1.555, 0.24)], [0.038, 0.034, 0.034], A,
-         seg=8, sub=1)
-    hood_head(p, (0.0, 1.6, 0.262))
+    with bind("chest", "neck", "head", blend=0.04):
+        limb(p, [(0, 1.47, 0.148), (0, 1.52, 0.2), (0, 1.555, 0.24)], [0.038, 0.034, 0.034], A,
+             seg=8, sub=1)
+    with bind("head"):
+        hood_head(p, (0.0, 1.6, 0.262))
+
+
+# --- Rigs (game frame: name, head, tail, parent) ---------------------------------
+#
+# Joint positions follow the sweeps above: every limb bone runs along the axis
+# its limb() points trace, so ring anchors land ON the bone.
+
+def rig_stalker():
+    b = [
+        ("hips", (0, 1.0, 0.0), (0, 1.14, 0.0), None),
+        ("spine", (0, 1.14, 0.0), (0, 1.42, 0.03), "hips"),
+        ("chest", (0, 1.42, 0.03), (0, 1.76, 0.105), "spine"),
+        ("neck", (0, 1.79, 0.12), (0, 2.02, 0.2), "chest"),
+        ("head", (0, 2.02, 0.2), (0, 2.27, 0.25), "neck"),
+    ]
+    for s, su in SIDES:
+        b += [
+            (f"shoulder_{s}", (su * 0.04, 1.73, 0.1), (su * 0.2, 1.73, 0.1), "chest"),
+            (f"upperarm_{s}", (su * 0.218, 1.725, 0.1), (su * 0.266, 1.3, 0.114), f"shoulder_{s}"),
+            (f"forearm_{s}", (su * 0.266, 1.3, 0.114), (su * 0.286, 0.87, 0.15), f"upperarm_{s}"),
+            (f"hand_{s}", (su * 0.286, 0.87, 0.15), (su * 0.29, 0.755, 0.165), f"forearm_{s}"),
+            (f"fingers_{s}", (su * 0.29, 0.755, 0.165), (su * 0.292, 0.6, 0.17), f"hand_{s}"),
+            (f"thigh_{s}", (su * 0.094, 1.12, 0.0), (su * 0.092, 0.62, 0.03), "hips"),
+            (f"shin_{s}", (su * 0.092, 0.62, 0.03), (su * 0.087, 0.09, -0.004), f"thigh_{s}"),
+            (f"foot_{s}", (su * 0.087, 0.09, -0.004), (su * 0.09, 0.03, 0.2), f"shin_{s}"),
+        ]
+    return b
+
+
+def rig_pursuer():
+    b = [
+        ("spine", (0, 0.61, -0.25), (0, 0.6, 0.08), None),
+        ("pelvis", (0, 0.61, -0.25), (0, 0.655, -0.62), "spine"),
+        ("chest", (0, 0.6, 0.08), (0, 0.565, 0.36), "spine"),
+        ("neck", (0, 0.565, 0.36), (0, 0.46, 0.55), "chest"),
+        ("head", (0, 0.46, 0.55), (0, 0.44, 0.82), "neck"),
+        ("jaw", (0, 0.405, 0.52), (0, 0.245, 0.8), "head"),
+    ]
+    for s, su in SIDES:
+        b += [
+            (f"upperarm_{s}", (su * 0.12, 0.61, 0.3), (su * 0.4, 1.06, 0.37), "chest"),
+            (f"forearm_{s}", (su * 0.4, 1.06, 0.37), (su * 0.49, 0.14, 0.6), f"upperarm_{s}"),
+            (f"hand_{s}", (su * 0.49, 0.14, 0.6), (su * 0.53, 0.02, 0.82), f"forearm_{s}"),
+            (f"thigh_{s}", (su * 0.12, 0.64, -0.5), (su * 0.42, 1.14, -0.42), "pelvis"),
+            (f"shin_{s}", (su * 0.42, 1.14, -0.42), (su * 0.53, 0.16, -0.6), f"thigh_{s}"),
+            (f"foot_{s}", (su * 0.53, 0.16, -0.6), (su * 0.64, 0.02, -0.7), f"shin_{s}"),
+        ]
+    return b
+
+
+def rig_husk():
+    b = [
+        ("hips", (0, 0.84, 0.0), (0, 1.0, 0.012), None),
+        ("spine", (0, 1.0, 0.012), (0, 1.22, 0.045), "hips"),
+        ("chest", (0, 1.22, 0.045), (0, 1.46, 0.135), "spine"),
+        ("neck", (0, 1.46, 0.148), (0, 1.555, 0.24), "chest"),
+        ("head", (0, 1.555, 0.24), (0, 1.78, 0.29), "neck"),
+    ]
+    for s, su in SIDES:
+        b += [
+            (f"shoulder_{s}", (su * 0.03, 1.46, 0.135), (su * 0.148, 1.47, 0.125), "chest"),
+            (f"upperarm_{s}", (su * 0.16, 1.455, 0.125), (su * 0.192, 1.12, 0.158), f"shoulder_{s}"),
+            (f"forearm_{s}", (su * 0.192, 1.12, 0.158), (su * 0.201, 0.845, 0.207), f"upperarm_{s}"),
+            (f"hand_{s}", (su * 0.201, 0.845, 0.207), (su * 0.2, 0.775, 0.215), f"forearm_{s}"),
+            (f"fingers_{s}", (su * 0.2, 0.775, 0.215), (su * 0.2, 0.66, 0.225), f"hand_{s}"),
+            (f"thigh_{s}", (su * 0.085, 0.86, -0.01), (su * 0.08, 0.47, 0.045), "hips"),
+            (f"shin_{s}", (su * 0.08, 0.47, 0.045), (su * 0.076, 0.07, -0.005), f"thigh_{s}"),
+            (f"foot_{s}", (su * 0.076, 0.07, -0.005), (su * 0.08, 0.03, 0.17), f"shin_{s}"),
+        ]
+    return b
+
+
+# --- Clips -----------------------------------------------------------------------
+#
+# Pose functions of the loop phase t in [0, 1]. All clips animate in place:
+# the AI owns the root, and the runtime scales locomotion playback by the
+# measured ground speed over each clip's STRIDE (metres per loop).
+#
+# Sign reference (see _pose_local): swing a hanging limb FORWARD with -rx,
+# bend a knee with +rx on the shin, lift the toes with -rx on the foot, lean
+# the torso forward with +rx, swing a hanging limb OUTWARD with rz = +su*a,
+# and curl a hanging hand's fingers (palm toward the body) with rz = -su*a.
+
+def gait_leg(p, duty):
+    """One leg at gait phase p: (sweep, lift). Stance [0, duty): the foot is
+    planted and sweeps from front (-1) to back (+1) at constant speed while
+    the body passes over it, so a playback rate matched to ground speed keeps
+    it from skating. Swing: an eased recovery forward with lift 0..1..0."""
+    p %= 1.0
+    if p < duty:
+        return -1.0 + 2.0 * p / duty, 0.0
+    u = (p - duty) / (1.0 - duty)
+    return 1.0 - 2.0 * u * u * (3 - 2 * u), math.sin(math.pi * u)
+
+
+def _legs(P, t, duty, fwd, back, knee, stance_bend=4.0, foot=0.75, leg=1.03):
+    """Biped legs: left heel-strikes at t=0, right at t=0.5. Thigh sweeps
+    from `fwd` degrees ahead to `back` degrees behind during stance, the knee
+    folds by `knee` at mid-swing, and the foot stays near flat. Returns the
+    hip drop that keeps the planted foot(s) on the floor: a straight leg of
+    length `leg` at angle a shortens by leg*(1 - cos a); 0 in flight."""
+    drop = 0.0
+    for s, off in (("L", 0.0), ("R", 0.5)):
+        sweep, lift = gait_leg(t + off, duty)
+        th = -fwd + (fwd + back) * 0.5 * (sweep + 1.0)
+        sh = stance_bend + knee * pos(lift, 0.9)
+        P[f"thigh_{s}"] = dict(rx=th)
+        P[f"shin_{s}"] = dict(rx=sh)
+        P[f"foot_{s}"] = dict(rx=-(th + sh) * foot)
+        if lift == 0.0:
+            drop = max(drop, leg * (1.0 - math.cos(math.radians(th))))
+    return drop
+
+
+def stalker_idle(t):
+    # 4 s: shallow breaths, a slow uncanny head tilt side to side, weight
+    # drifting between the feet, long fingers curling and letting go.
+    br = wave(t, 2)
+    sway = wave(t)
+    P = {
+        "hips": dict(rz=1.2 * sway, t=(0.004 * sway, 0.003 * br, 0.0)),
+        "spine": dict(rx=2.0 + 0.6 * br),
+        "chest": dict(rx=1.5 - 1.2 * br, rz=-0.8 * sway),
+        "neck": dict(rx=-3.0 + 1.5 * wave(t, 1, 0.1)),
+        "head": dict(rz=11.0 * wave(t, 1, 0.15), ry=6.0 * wave(t, 1, 0.4), rx=3.0 * wave(t, 2, 0.3)),
+    }
+    for s, su in SIDES:
+        P[f"thigh_{s}"] = dict(rz=-1.2 * sway)
+        P[f"shoulder_{s}"] = dict(rz=su * 0.8 * br)
+        P[f"upperarm_{s}"] = dict(rz=su * (2.5 + 0.8 * sway * su), rx=-2.0)
+        P[f"forearm_{s}"] = dict(rx=-7.0 - 2.0 * wave(t, 1, 0.3 + 0.2 * su))
+        P[f"fingers_{s}"] = dict(rz=-su * (8.0 + 12.0 * pos(wave(t, 2, 0.25 * su), 2)))
+    return P
+
+
+def stalker_walk(t):
+    # 1.1 s, two stiff long steps (60% stance: double support); the head
+    # holds dead level and cocked while the body sways under it, arms barely
+    # swinging. Left heel strike at t=0, right at t=0.5.
+    ph = TAU * t
+    P = {
+        # Pelvis turns with the leading leg; chest and head counter-turn.
+        "hips": dict(ry=-5.0 * math.cos(ph), rz=2.0 * math.sin(ph)),
+        "spine": dict(rx=5.0),
+        "chest": dict(rx=1.0, ry=4.0 * math.cos(ph)),
+        "neck": dict(rx=-5.0),
+        "head": dict(rz=7.0 + 1.5 * math.sin(2 * ph), ry=1.0 * math.cos(ph), rx=-1.0),
+    }
+    # Knee and ankle give absorb part of the drop (a real walk bobs ~5 cm).
+    drop = _legs(P, t, 0.6, 24.0, 24.0, 40.0)
+    P["hips"]["t"] = (0.012 * math.sin(ph), -0.7 * drop - 0.008, 0.0)
+    for s, su in SIDES:
+        sgn = 1 if s == "L" else -1
+        # Opposite arm to the leg: the left arm is back when the left heel lands.
+        P[f"upperarm_{s}"] = dict(rx=7.0 * math.cos(ph - 0.4) * sgn, rz=su * 3.0)
+        P[f"forearm_{s}"] = dict(rx=-8.0 - 3.0 * pos(-math.cos(ph) * sgn))
+        P[f"fingers_{s}"] = dict(rz=-su * 10.0)
+    return P
+
+
+def stalker_run(t):
+    # A long-legged sprint pitched forward, arms pinned stiffly behind it,
+    # the head craned level at its target — wrong in every silhouette. Short
+    # stances (36%) with a flight phase between them cover the ground its
+    # dark-boosted chase speed demands without the feet skating.
+    ph = TAU * t
+    P = {
+        "hips": dict(ry=-8.0 * math.cos(ph), rz=3.0 * math.sin(ph)),
+        "spine": dict(rx=14.0),
+        "chest": dict(rx=6.0, ry=8.0 * math.cos(ph)),
+        "neck": dict(rx=-14.0),
+        "head": dict(rx=-6.0, rz=5.0),
+    }
+    # The bent stance knee takes half the drop; hips rise in the flight.
+    drop = _legs(P, t, 0.36, 40.0, 24.0, 95.0, stance_bend=14.0, foot=0.65)
+    P["hips"]["t"] = (0.015 * math.sin(ph), -0.5 * drop - 0.03, 0.0)
+    for s, su in SIDES:
+        sgn = 1 if s == "L" else -1
+        P[f"shoulder_{s}"] = dict(rz=su * 4.0)
+        P[f"upperarm_{s}"] = dict(rx=32.0 + 6.0 * math.cos(ph) * sgn, rz=su * 7.0)
+        P[f"forearm_{s}"] = dict(rx=-6.0)
+        P[f"fingers_{s}"] = dict(rz=-su * 4.0)
+    return P
+
+
+def stalker_reach(t):
+    # 2 s ADDITIVE layer (arms, shoulders, head only): the arms rise toward
+    # the player, fingers grasping and trembling, the head cocking further.
+    # The runtime adds it over walk/run/idle as it closes in.
+    P = {
+        "chest": dict(rx=4.0),
+        "neck": dict(rx=6.0),
+        "head": dict(rz=12.0 + 3.0 * wave(t, 1), rx=-4.0),
+    }
+    for s, su in SIDES:
+        P[f"shoulder_{s}"] = dict(rz=su * 6.0)
+        P[f"upperarm_{s}"] = dict(rx=-72.0 + 4.0 * wave(t, 1, 0.2 * su), rz=su * 6.0, ry=-su * 8.0)
+        P[f"forearm_{s}"] = dict(rx=-12.0 + 5.0 * wave(t, 2, 0.1 * su))
+        P[f"hand_{s}"] = dict(rx=8.0)
+        P[f"fingers_{s}"] = dict(rz=-su * (14.0 + 18.0 * pos(wave(t, 2, 0.1 * su)) + 2.5 * wave(t, 9)))
+    return P
+
+
+def pursuer_idle(t):
+    # 3.2 s: heaving breath, an owl-slow head roll, the jaw hanging slack and
+    # snapping shut twice, claws tapping in turn.
+    br = wave(t, 2)
+    P = {
+        "spine": dict(t=(0.0, 0.012 * br, 0.0), rz=1.5 * wave(t)),
+        "chest": dict(rx=-2.0 * br),
+        "pelvis": dict(rx=1.0 * br),
+        "neck": dict(rx=3.0 * wave(t, 1, 0.2), ry=6.0 * wave(t, 1, 0.55)),
+        "head": dict(rz=16.0 * wave(t), ry=8.0 * wave(t, 1, 0.3)),
+        "jaw": dict(rx=12.0 + 3.0 * br - 11.0 * pos(wave(t, 2, 0.1), 6)),
+    }
+    for i, (s, su) in enumerate(SIDES):
+        P[f"upperarm_{s}"] = dict(rz=su * 2.0 * wave(t, 1, 0.25 * i))
+        P[f"thigh_{s}"] = dict(rz=su * 1.5 * wave(t, 1, 0.5 + 0.25 * i))
+        P[f"hand_{s}"] = dict(rx=-18.0 * pos(wave(t, 1, 0.1 + 0.5 * i), 8))
+        P[f"foot_{s}"] = dict(rx=-14.0 * pos(wave(t, 1, 0.35 + 0.5 * i), 8))
+    return P
+
+
+def pursuer_crawl(t):
+    # A diagonal skitter (front-left with hind-right, 62% stance): each limb
+    # yaws about its root — heights stay put, so planted claws stay planted —
+    # while the swinging pair rears its joints higher. The front limbs point
+    # further forward, so they yaw wider to cover the same ground as the
+    # hind pair. The body snakes, the skull stays locked forward and the jaw
+    # chatters.
+    ph = TAU * t
+    P = {
+        # Body lowest as each diagonal pair plants (t 0 / 0.5).
+        "spine": dict(t=(0.0, -0.01 * math.cos(2 * ph), 0.0), ry=6.0 * math.sin(ph)),
+        "pelvis": dict(ry=-5.0 * math.sin(ph)),
+        "chest": dict(ry=5.0 * math.sin(ph), rx=0.6 * math.cos(2 * ph)),
+        "neck": dict(ry=-9.0 * math.sin(ph), rx=2.0 * math.cos(2 * ph)),
+        "head": dict(rx=3.0 * math.sin(2 * ph + 0.6), rz=4.0 * math.sin(ph)),
+        "jaw": dict(rx=10.0 + 9.0 * pos(math.sin(3 * ph), 0.5)),
+    }
+    for s, su in SIDES:
+        front_phase = 0.0 if s == "L" else 0.5
+        for upper, lower, end, off, yaw in (("upperarm", "forearm", "hand", front_phase, 40.0),
+                                             ("thigh", "shin", "foot", front_phase + 0.5, 30.0)):
+            sweep, lift = gait_leg(t + off, 0.62)
+            P[f"{upper}_{s}"] = dict(ry=su * yaw * sweep, rz=su * 16.0 * lift)
+            P[f"{lower}_{s}"] = dict(rz=-su * 18.0 * lift)
+            P[f"{end}_{s}"] = dict(rx=-28.0 * lift)
+    return P
+
+
+def husk_idle(t):
+    # 5 s: a slow sway from the ankles, shallow breath hiking the shoulders,
+    # the hood drifting, dangling arms lagging the sway, fingers twitching.
+    sway = wave(t)
+    br = wave(t, 2)
+    P = {
+        "hips": dict(rz=2.0 * sway, t=(0.006 * sway, 0.0, 0.0)),
+        "spine": dict(rz=-1.2 * sway, rx=1.0 * br),
+        "chest": dict(rz=-0.8 * sway, rx=-1.5 * br),
+        "neck": dict(rx=2.0 * wave(t, 2, 0.1)),
+        "head": dict(rz=8.0 * wave(t, 1, 0.3), rx=5.0 * wave(t, 2, 0.1), ry=6.0 * wave(t, 1, 0.7)),
+    }
+    for s, su in SIDES:
+        P[f"thigh_{s}"] = dict(rz=-2.0 * sway)
+        P[f"shoulder_{s}"] = dict(rz=su * 1.2 * br)
+        P[f"upperarm_{s}"] = dict(rz=su * (1.0 + 1.5 * wave(t, 1, 0.2) * su), rx=2.0 * wave(t, 1, 0.4))
+        P[f"forearm_{s}"] = dict(rx=-4.0 - 2.0 * wave(t, 1, 0.5))
+        P[f"fingers_{s}"] = dict(rz=-su * (6.0 + 16.0 * pos(wave(t, 3, 0.2 * su), 6)))
+    return P
+
+
+def husk_cornered(t):
+    # 1.4 s: cowering — hunched, shoulders hiked, forearms drawn up in front
+    # of the hood, the whole figure trembling and the hood shaking.
+    tr = wave(t, 9)
+    P = {
+        "hips": dict(t=(0.0, -0.03, -0.01)),
+        "spine": dict(rx=10.0 + 0.8 * tr),
+        "chest": dict(rx=8.0 - 0.8 * tr),
+        "neck": dict(rx=6.0),
+        "head": dict(rx=10.0, ry=7.0 * wave(t, 5), rz=5.0 * wave(t, 2)),
+    }
+    for s, su in SIDES:
+        P[f"thigh_{s}"] = dict(rx=-8.0)
+        P[f"shin_{s}"] = dict(rx=14.0)
+        P[f"foot_{s}"] = dict(rx=-6.0)
+        P[f"shoulder_{s}"] = dict(rz=su * (10.0 + 1.0 * tr))
+        P[f"upperarm_{s}"] = dict(rx=-42.0 + 1.5 * tr, rz=-su * 10.0, ry=-su * 6.0)
+        P[f"forearm_{s}"] = dict(rx=-100.0 + 2.0 * wave(t, 7, 0.3 * su))
+        P[f"hand_{s}"] = dict(rx=-14.0)
+        P[f"fingers_{s}"] = dict(rz=-su * (35.0 + 8.0 * wave(t, 7)))
+    return P
+
+
+RIGS = {"stalker": rig_stalker, "pursuer": rig_pursuer, "husk": rig_husk}
+
+# (clip, seconds per loop, pose function). Stride/overlay semantics live in
+# the runtime table (src/render/enemyAnimator.js ENEMY_CLIPS); the vitest
+# export contract checks both sides name the same clips. Locomotion playback
+# is rescaled from the measured ground speed, so the authored loop length
+# only sets sampling density: the quick gaits (run, crawl) are authored over
+# a full second to get 15 poses per stride at the 15 Hz export rate.
+CLIPS = {
+    "stalker": [("idle", 4.0, stalker_idle), ("walk", 1.1, stalker_walk),
+                ("run", 1.0, stalker_run), ("reach", 2.0, stalker_reach)],
+    "pursuer": [("idle", 3.2, pursuer_idle), ("crawl", 1.0, pursuer_crawl)],
+    "husk": [("idle", 5.0, husk_idle), ("cornered", 1.4, husk_cornered)],
+}
 
 
 # (builder, footprint budget u x v, height budget) — mirrored by the vitest
@@ -756,8 +1400,27 @@ MODELS = [
 ]
 
 TOL = 0.1  # small bevel overhang grace; entities have no collision footprint
-TRI_BUDGET = 3000
-BYTE_BUDGET = 90_000
+TRI_BUDGET = 3200  # + joint rings for the bending knees/elbows
+# Skin (JOINTS_0 + unit-sum u8 WEIGHTS_0: 8 B/vertex) and the clips (SHORT
+# quaternions at 15 Hz, rest channels pruned) roughly double the static figure.
+BYTE_BUDGET = 150_000
+
+# Rigged export: skins + every NLA-stashed clip, sampled every other frame
+# (15 Hz at FPS 30; glTF LINEAR interpolation between samples).
+ANIM_EXPORT = dict(
+    export_skins=True,
+    export_influence_nb=MAX_INFLUENCES,
+    export_animations=True,
+    export_animation_mode="ACTIONS",
+    # Only this figure's NLA tracks — never every action in the file.
+    export_anim_single_armature=False,
+    export_force_sampling=True,
+    export_frame_step=2,
+    export_optimize_animation_size=True,
+    export_reset_pose_bones=True,
+    export_rest_position_armature=True,
+    export_leaf_bone=False,
+)
 
 # Painted-shading tuning per figure: thin limbs want a short occlusion reach;
 # eyes stay pure signal colour.
@@ -780,8 +1443,12 @@ def build_all():
     os.makedirs(OUT_DIR, exist_ok=True)
     os.makedirs(os.path.dirname(BLEND_OUT), exist_ok=True)
     sel_kw = gltf_selection_kwargs()
+    for scene in {bpy.context.scene, bpy.data.scenes.get(SCENE_NAME)} - {None}:
+        scene.render.fps = FPS
     built = []
     for name, fn, ew, ed, eh in MODELS:
+        spec = RIGS[name]()
+        set_rig(spec)
         parts = []
         fn(parts)
         for o in bpy.context.view_layer.objects:
@@ -791,6 +1458,7 @@ def build_all():
         bpy.context.view_layer.objects.active = parts[0]
         # Bake part transforms into the meshes BEFORE joining (same contract as
         # the furniture pipeline: origin at the footprint centre on the floor).
+        # Vertex groups merge by bone name.
         bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
         bpy.ops.object.join()
         obj = bpy.context.view_layer.objects.active
@@ -818,24 +1486,42 @@ def build_all():
 
         keys = yr_shading.paint(obj, height=max(zs), keep_bright={"yr_enemy_eyePale"},
                                 **PAINT[name])
-        culled = yr_shading.cull_hidden(obj)
+        # The figure moves: keep soles, and only cull faces buried inside
+        # parts that follow the same bone.
+        culled = yr_shading.cull_hidden(obj, floor=False, group=dominant_bone(obj))
         triangles = yr_shading.triangle_count(obj)
         yr_shading.audit_triangles(obj, name)
+        audit_skin(obj, name)
         if triangles > TRI_BUDGET and os.environ.get("YR_NO_BUDGET") != "1":
             raise RuntimeError(f"{name}: {triangles} triangles exceeds the {TRI_BUDGET}-triangle budget")
 
+        arm = make_armature(name, spec)
+        obj.parent = arm
+        mod = obj.modifiers.new("rig", "ARMATURE")
+        mod.object = arm
+        clips = [c for c, _s, _f in CLIPS[name]]
+        for clip, seconds, pose_fn in CLIPS[name]:
+            author_clip(arm, name, clip, seconds, pose_fn)
+
         path = os.path.join(OUT_DIR, name + ".glb")
         activate(obj)
-        _before, size = yr_shading.export_glb(path, sel_kw)
+        arm.select_set(True)
+        prefix = name + "."
+        _before, size = yr_shading.export_glb(
+            path, sel_kw, extra=ANIM_EXPORT,
+            rename_animation=lambda n: n[len(prefix):] if n.startswith(prefix) else n)
+        exported = yr_shading.glb_animation_names(path)
+        if sorted(exported) != sorted(clips):
+            raise RuntimeError(f"{name}: exported clips {exported} != authored {clips}")
         if size >= BYTE_BUDGET and os.environ.get("YR_NO_BUDGET") != "1":
             raise RuntimeError(f"{name}: {size} bytes exceeds the {BYTE_BUDGET}-byte budget")
         print(f"[yr] {name:<8} {w:.2f}x{d:.2f}x{h:.2f}  tris={triangles:<5} culled={culled:<4} "
-              f"shade={keys:<5} {size} B")
-        built.append(obj)
+              f"shade={keys:<5} bones={len(spec)} clips={','.join(clips)}  {size} B")
+        built.append(arm)
 
-    # Line the joined models up for the source blend + contact sheet.
-    for obj, x in zip(built, (-1.9, 0.0, 1.9)):
-        obj.location = (x, 0, 0)
+    # Line the rigs up (rest pose) for the source blend + contact sheet.
+    for arm, x in zip(built, (-1.9, 0.0, 1.9)):
+        arm.location = (x, 0, 0)
     return built
 
 

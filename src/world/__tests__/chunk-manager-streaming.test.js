@@ -350,6 +350,7 @@ describe('ChunkManager furniture model upgrade', () => {
     cm.chunks.set('near', near)
     const lib = { geometries: new Map([[1, {}]]) }
 
+    const rev0 = cm.meshRevision
     cm.upgradeFurnitureModels(lib)
     expect(near.refreshFurniture).not.toHaveBeenCalled() // deferred to update()
 
@@ -363,12 +364,19 @@ describe('ChunkManager furniture model upgrade', () => {
     expect(near.refreshFurniture).toHaveBeenCalledOnce()
     expect(far.refreshFurniture).not.toHaveBeenCalled()
     expect(cm._furnitureStale).toBe(true)
+    // Every frame that swaps geometry invalidates the flashlight's cached
+    // caster map, not just the upgrade call (the swap spans frames).
+    const rev1 = cm.meshRevision
+    expect(rev1).toBeGreaterThan(rev0)
 
     cm.update(0, 0, 0)
     expect(far.refreshFurniture).toHaveBeenCalledOnce()
+    const rev2 = cm.meshRevision
+    expect(rev2).toBeGreaterThan(rev1)
     cm.update(0, 0, 0)
     expect(cm._furnitureStale).toBe(false)
     expect(near.refreshFurniture).toHaveBeenCalledOnce() // already current
+    expect(cm.meshRevision).toBe(rev2) // nothing swapped, nothing to re-render
     clock.mockRestore()
   })
 })

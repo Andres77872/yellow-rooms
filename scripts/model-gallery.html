@@ -13,6 +13,7 @@
   <h1>Yellow Rooms · Model review</h1>
   <label>Model <select id="model"><option value="all">All 26 models</option></select></label>
   <label>Lighting <select id="lighting"><option value="studio">Studio</option><option value="game">Game pipeline</option></select></label>
+  <label>Enemy clip <select id="clip"><option value="idle">idle</option></select></label>
   <button id="reset">Reset view</button>
   <p>Drag to orbit · Scroll to zoom · Right-drag to pan</p>
   <p id="stats">Loading models…</p><p id="error" role="alert"></p>
@@ -23,7 +24,8 @@
   import { DeferredRenderer } from '../src/render/DeferredRenderer.js'
   import { createGBufferMaterials, disposeGBufferMaterials } from '../src/render/gbufferMaterials.js'
   import { createFurnitureModelLibrary, loadFurnitureModels, disposeFurnitureModels, FURNITURE_MODEL_FILES } from '../src/render/furnitureModels.js'
-  import { createEnemyModelLibrary, loadEnemyModels, disposeEnemyModels, ENEMY_MODEL_FILES } from '../src/render/enemyModels.js'
+  import { createEnemyModelLibrary, loadEnemyModels, disposeEnemyModels, createEnemyRig, ENEMY_MODEL_FILES } from '../src/render/enemyModels.js'
+  import { ENEMY_CLIPS } from '../src/render/enemyAnimator.js'
 
   const renderer = new THREE.WebGLRenderer({ antialias: true })
   renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5))
@@ -56,6 +58,11 @@
   const rows = []
   const select = document.querySelector('#model')
   const lighting = document.querySelector('#lighting')
+  const clipSelect = document.querySelector('#clip')
+  for (const name of new Set(Object.values(ENEMY_CLIPS).flatMap((clips) => Object.keys(clips)))) {
+    if (name !== 'idle') clipSelect.add(new Option(name, name))
+  }
+  const clock = new THREE.Clock()
 
   function resetView() {
     controls.target.set(0, 0.7, 0)
@@ -80,7 +87,7 @@
   }
   function applyLighting() {
     floor.material = lighting.value === 'studio' ? studioFloor : materials.carpet
-    for (const row of rows) row.mesh.material = lighting.value === 'studio' ? studioMaterial : row.material
+    for (const row of rows) (row.body ?? row.mesh).material = lighting.value === 'studio' ? studioMaterial : row.material
   }
   select.addEventListener('change', applySelection)
   lighting.addEventListener('change', applyLighting)
@@ -92,8 +99,16 @@
     entries.push(...Object.keys(ENEMY_MODEL_FILES).map((name) => [name, enemies.geometries.get(name), false]))
     const loaded = entries.filter(([, geometry]) => geometry)
     for (const [index, [name, geometry, instanced]] of loaded.entries()) {
-      const material = instanced ? materials.furnitureModel : materials.entityModel
-      const mesh = instanced ? new THREE.InstancedMesh(geometry, material, 1) : new THREE.Mesh(geometry, material)
+      // Rigged enemies play their clips (the same animator the game drives).
+      const rig = instanced ? null : enemies.rigs.get(name)
+      const material = instanced ? materials.furnitureModel : rig ? materials.entityModelSkinned : materials.entityModel
+      let mesh, body = null, animator = null
+      if (rig) {
+        ({ object: mesh, animator } = createEnemyRig(name, rig, material))
+        mesh.traverse((node) => { if (node.isSkinnedMesh) body = node })
+      } else {
+        mesh = instanced ? new THREE.InstancedMesh(geometry, material, 1) : new THREE.Mesh(geometry, material)
+      }
       if (instanced) {
         mesh.setMatrixAt(0, new THREE.Matrix4())
         mesh.setColorAt(0, new THREE.Color(1, 1, 1))
@@ -102,7 +117,7 @@
       const position = new THREE.Vector3((index % 6 - 2.5) * 4, 0, (Math.floor(index / 6) - 2) * 4)
       mesh.position.copy(position)
       scene.add(mesh)
-      rows.push({ mesh, name, position, material, triangles: (geometry.index?.count ?? geometry.attributes.position.count) / 3 })
+      rows.push({ mesh, body, animator, name, position, material, triangles: (geometry.index?.count ?? geometry.attributes.position.count) / 3 })
       select.add(new Option(name, name))
     }
     if (loaded.length !== 26) throw new Error(`Loaded ${loaded.length}/26 models; inspect network/console for missing assets.`)
@@ -126,7 +141,18 @@
     camera.updateProjectionMatrix()
     deferred.setSize()
   })
+  // Locomotion plays at its authored cadence (speed = stride per loop);
+  // overlays play over idle; clips a figure lacks fall back to idle.
+  function poseFor(row) {
+    const clip = clipSelect.value
+    const def = ENEMY_CLIPS[row.name]?.[clip]
+    if (!def) return { base: 'idle' }
+    if (def.overlay) return { base: 'idle', overlays: { [clip]: 1 } }
+    return { base: clip, speed: def.stride ? def.stride / row.animator.layers.get(clip).duration : 0 }
+  }
   renderer.setAnimationLoop((time) => {
+    const dt = Math.min(clock.getDelta(), 0.1)
+    for (const row of rows) if (row.animator) row.animator.update(dt, poseFor(row))
     controls.update()
     camera.updateMatrixWorld()
     if (lighting.value === 'game') deferred.render(time / 1000)
@@ -136,7 +162,10 @@
     if (event.persisted) return // the browser may restore this same page from its history cache
     renderer.setAnimationLoop(null)
     controls.dispose()
-    for (const row of rows) if (row.mesh.isInstancedMesh) row.mesh.dispose()
+    for (const row of rows) {
+      if (row.mesh.isInstancedMesh) row.mesh.dispose()
+      row.animator?.dispose()
+    }
     deferred.dispose()
     disposeFurnitureModels(furniture)
     disposeEnemyModels(enemies)

@@ -203,9 +203,10 @@ def _shade_point(bvh, p, n, hemi, eps, dist, ao_floor, gamma, height, zmin,
 # --- Hidden-face culling ----------------------------------------------------------------
 
 def _buried(bvh, p, n, eps=0.003, probes=((0, 0, 1), (0.7, 0, 0.7), (-0.7, 0, 0.7),
-                                          (0, 0.7, 0.7), (0, -0.7, 0.7))):
+                                          (0, 0.7, 0.7), (0, -0.7, 0.7)), group=None, key=None):
     """True when a point just off the surface sits inside another closed part
-    (every probe ray meets a back face) or under the floor."""
+    (every probe ray meets a back face — of a face in the same `group`, when
+    one is given) or under the floor."""
     if n.length < 1e-6:
         return False
     n = n.normalized()
@@ -214,20 +215,28 @@ def _buried(bvh, p, n, eps=0.003, probes=((0, 0, 1), (0.7, 0, 0.7), (-0.7, 0, 0.
     b = n.cross(t)
     origin = p + n * eps
     if origin.z < -1e-4:
-        return True
+        return group is None
     for dx, dy, dz in probes:
         d = (t * dx + b * dy + n * dz).normalized()
-        loc, hn, _i, _d = bvh.ray_cast(origin, d, 4.0)
+        loc, hn, hi, _d = bvh.ray_cast(origin, d, 4.0)
         if loc is None or hn.dot(d) <= 0:
+            return False
+        if group is not None and group(hi) != key:
             return False
     return True
 
 
-def cull_hidden(obj):
+def cull_hidden(obj, floor=True, group=None):
     """Delete faces nobody can ever see: faces lying on the floor facing down,
     and faces whose corners, edge midpoints and centre are all sunk inside
     another part (book bottoms on shelves, leg tops inside table tops, joint
     spheres inside limbs). Run AFTER paint() so occlusion saw closed parts.
+
+    Skinned figures move, so a face hidden in the rest pose can surface later:
+    `floor=False` keeps soles that lift off the floor mid-stride, and `group`
+    (face index -> key, e.g. its dominant bone) only counts a face as buried
+    when every enclosing face shares its key, so a torso patch under a
+    shoulder cap survives the shrug that uncovers it.
     Returns the number of faces removed."""
     mesh = obj.data
     verts = [v.co.copy() for v in mesh.vertices]
@@ -237,7 +246,7 @@ def cull_hidden(obj):
     for poly in mesh.polygons:
         n = poly.normal
         pts = [verts[i] for i in poly.vertices]
-        if n.z < -0.95 and max(p.z for p in pts) < 0.003:
+        if floor and n.z < -0.95 and max(p.z for p in pts) < 0.003:
             doomed.append(poly.index)
             continue
         probes = pts + [(pts[i] + pts[(i + 1) % len(pts)]) / 2 for i in range(len(pts))]
@@ -245,7 +254,8 @@ def cull_hidden(obj):
         # Pull probes slightly toward the centre so contact edges shared with
         # a visible neighbour face do not count as buried by accident.
         c = poly.center
-        if all(_buried(bvh, c + (q - c) * 0.96, n) for q in probes):
+        key = group(poly.index) if group else None
+        if all(_buried(bvh, c + (q - c) * 0.96, n, group=group, key=key) for q in probes):
             doomed.append(poly.index)
     if not doomed:
         return 0
@@ -268,22 +278,7 @@ _GLB_MAGIC = 0x46546C67
 _JSON = 0x4E4F534A
 _BIN = 0x004E4942
 _COMP = {5120: np.int8, 5121: np.uint8, 5122: np.int16, 5123: np.uint16, 5125: np.uint32, 5126: np.float32}
-_NCOMP = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}
-
-
-def _read_accessor(js, binchunk, acc):
-    view = js["bufferViews"][acc["bufferView"]]
-    dtype = np.dtype(_COMP[acc["componentType"]])
-    ncomp = _NCOMP[acc["type"]]
-    start = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
-    stride = view.get("byteStride", 0) or dtype.itemsize * ncomp
-    if stride != dtype.itemsize * ncomp:
-        raise RuntimeError("interleaved accessor not supported by compact_glb")
-    arr = np.frombuffer(binchunk, dtype=dtype, count=acc["count"] * ncomp, offset=start)
-    arr = arr.reshape(acc["count"], ncomp).astype(np.float64)
-    if acc.get("normalized"):
-        arr /= float(np.iinfo(dtype).max)
-    return arr
+_NCOMP = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT4": 16}
 
 
 def _short_floats(obj, table):
@@ -302,10 +297,122 @@ def _short_floats(obj, table):
     return obj
 
 
-def compact_glb(path):
+def _accessor_bytes(js, binchunk, acc):
+    """The tightly packed bytes of a (non-interleaved, non-sparse) accessor."""
+    if "sparse" in acc or acc.get("bufferView") is None:
+        raise RuntimeError("sparse / view-less accessor not supported by compact_glb")
+    view = js["bufferViews"][acc["bufferView"]]
+    size = np.dtype(_COMP[acc["componentType"]]).itemsize * _NCOMP[acc["type"]]
+    stride = view.get("byteStride", 0) or size
+    if stride != size:
+        raise RuntimeError("interleaved accessor not supported by compact_glb")
+    start = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
+    return binchunk[start:start + size * acc["count"]]
+
+
+def _quantize_weights(data):
+    """Skin weights -> normalized UNSIGNED_BYTE rows summing to exactly 255
+    (largest remainder), so quantization never breaks the unit-sum rule."""
+    total = data.sum(axis=1, keepdims=True)
+    w = np.where(total > 0, data / np.where(total > 0, total, 1), [[1.0, 0.0, 0.0, 0.0]])
+    scaled = w * 255.0
+    out = np.floor(scaled)
+    short = (255 - out.sum(axis=1)).astype(np.int64)
+    order = np.argsort(-(scaled - out), axis=1, kind="stable")
+    rows = np.arange(len(out))
+    for k in range(4):
+        pick = short > k
+        out[rows[pick], order[pick, k]] += 1
+    return out.astype(np.uint8)
+
+
+_REST = {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0]}
+
+
+def _compact_animations(js, data, tol=2e-5):
+    """Drop channels that hold their node's rest value for the whole clip (the
+    exporter keeps them; three.js restores unbound properties to rest anyway),
+    and store rotation keys as normalized SHORT quaternions (core glTF 2.0)."""
+    for anim in js.get("animations", []):
+        keep = []
+        for ch in anim["channels"]:
+            path = ch["target"].get("path")
+            node = js["nodes"][ch["target"]["node"]]
+            smp = anim["samplers"][ch["sampler"]]
+            acc = js["accessors"][smp["output"]]
+            if path in _REST and smp.get("interpolation", "LINEAR") != "CUBICSPLINE":
+                vals = _read_accessor_from(data[smp["output"]], acc)
+                rest = np.array(node.get(path, _REST[path]))
+                if path == "rotation":
+                    # q and -q are the same rotation.
+                    same = np.minimum(np.abs(vals - rest).max(axis=1), np.abs(vals + rest).max(axis=1))
+                else:
+                    same = np.abs(vals - rest).max(axis=1)
+                if same.max() <= tol:
+                    continue
+            keep.append(ch)
+        used = sorted({ch["sampler"] for ch in keep})
+        remap = {old: new for new, old in enumerate(used)}
+        anim["samplers"] = [anim["samplers"][i] for i in used]
+        for ch in keep:
+            ch["sampler"] = remap[ch["sampler"]]
+        anim["channels"] = keep
+        for ch in keep:
+            if ch["target"].get("path") != "rotation":
+                continue
+            ai = anim["samplers"][ch["sampler"]]["output"]
+            acc = js["accessors"][ai]
+            if acc["componentType"] != 5126:
+                continue
+            vals = _read_accessor_from(data[ai], acc)
+            q = vals / np.maximum(np.linalg.norm(vals, axis=1, keepdims=True), 1e-12)
+            data[ai] = np.rint(np.clip(q, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
+            acc["componentType"] = 5122
+            acc["normalized"] = True
+            acc.pop("min", None)
+            acc.pop("max", None)
+    js["animations"] = [a for a in js.get("animations", []) if a["channels"]]
+    if not js["animations"]:
+        js.pop("animations")
+
+
+def _read_accessor_from(raw, acc):
+    dtype = np.dtype(_COMP[acc["componentType"]])
+    arr = np.frombuffer(raw, dtype=dtype).reshape(acc["count"], _NCOMP[acc["type"]]).astype(np.float64)
+    if acc.get("normalized"):
+        arr /= float(np.iinfo(dtype).max)
+    return arr
+
+
+def _accessor_refs(js):
+    """Yield (container, key) pairs that hold an accessor index."""
+    for mesh in js.get("meshes", []):
+        for prim in mesh["primitives"]:
+            for k in prim["attributes"]:
+                yield prim["attributes"], k
+            if "indices" in prim:
+                yield prim, "indices"
+            for target in prim.get("targets", []):
+                for k in target:
+                    yield target, k
+    for skin in js.get("skins", []):
+        if "inverseBindMatrices" in skin:
+            yield skin, "inverseBindMatrices"
+    for anim in js.get("animations", []):
+        for smp in anim["samplers"]:
+            yield smp, "input"
+            yield smp, "output"
+
+
+def compact_glb(path, rename_animation=None):
     """Repack COLOR_0 as normalized UNSIGNED_BYTE VEC4 (4 B/vertex instead of
     the exporter's 12 B float VEC3 / 8 B ushort VEC4) and print every JSON
-    float as its shortest exact float32 literal. Returns (before, after)."""
+    float as its shortest exact float32 literal. Skinned exports also get
+    WEIGHTS_0 as unit-sum normalized UNSIGNED_BYTE (4 B instead of 16 B),
+    rest-valued animation channels dropped, SHORT rotation keys and shared
+    keyframe-time accessors. `rename_animation(name)` rewrites clip names.
+    Every surviving accessor gets its own tightly packed bufferView.
+    Returns (before, after)."""
     raw = open(path, "rb").read()
     magic, _ver, _length = struct.unpack_from("<III", raw, 0)
     if magic != _GLB_MAGIC:
@@ -318,49 +425,71 @@ def compact_glb(path):
     assert btype == _BIN
     binchunk = raw[off + 8: off + 8 + blen]
 
-    views = js["bufferViews"]
-    view_users = {}
-    for ai, acc in enumerate(js["accessors"]):
-        view_users.setdefault(acc.get("bufferView"), []).append(ai)
-    replaced = {}
+    accessors = js["accessors"]
+    data = [_accessor_bytes(js, binchunk, acc) for acc in accessors]
+    repacked = set()
     for mesh in js["meshes"]:
         for prim in mesh["primitives"]:
             ai = prim["attributes"].get("COLOR_0")
-            if ai is None:
+            acc = accessors[ai] if ai is not None else None
+            if acc is not None and ai not in repacked and not (acc["componentType"] == 5121 and acc["type"] == "VEC4"):
+                vals = _read_accessor_from(data[ai], acc)
+                out = np.full((acc["count"], 4), 255, dtype=np.uint8)
+                out[:, :3] = np.clip(np.rint(np.clip(vals[:, :3], 0.0, 1.0) * 255.0), 0, 255)
+                data[ai] = out.tobytes()
+                acc.update(componentType=5121, type="VEC4", normalized=True)
+                acc.pop("min", None)
+                acc.pop("max", None)
+                repacked.add(ai)
+            ai = prim["attributes"].get("WEIGHTS_0")
+            acc = accessors[ai] if ai is not None else None
+            if acc is not None and ai not in repacked and acc["componentType"] == 5126:
+                data[ai] = _quantize_weights(_read_accessor_from(data[ai], acc)).tobytes()
+                acc.update(componentType=5121, normalized=True)
+                acc.pop("min", None)
+                acc.pop("max", None)
+                repacked.add(ai)
+    _compact_animations(js, data)
+    for anim in js.get("animations", []):
+        if rename_animation:
+            anim["name"] = rename_animation(anim["name"])
+
+    # Keep only referenced accessors; identical keyframe-time inputs share one.
+    order, remap, seen = [], {}, {}
+    for holder, key in _accessor_refs(js):
+        old = holder[key]
+        if old in remap:
+            holder[key] = remap[old]
+            continue
+        acc = accessors[old]
+        sig = None
+        if key == "input":
+            sig = (acc["componentType"], acc["type"], acc["count"], data[old])
+            if sig in seen:
+                remap[old] = seen[sig]
+                holder[key] = seen[sig]
                 continue
-            acc = js["accessors"][ai]
-            if acc["componentType"] == 5121 and acc["type"] == "VEC4":
-                continue
-            vi = acc["bufferView"]
-            if len(view_users[vi]) != 1:
-                raise RuntimeError("COLOR_0 shares a bufferView; cannot repack in place")
-            data = _read_accessor(js, binchunk, acc)
-            out = np.full((acc["count"], 4), 255, dtype=np.uint8)
-            out[:, :3] = np.clip(np.rint(np.clip(data[:, :3], 0.0, 1.0) * 255.0), 0, 255)
-            replaced[vi] = out.tobytes()
-            acc["componentType"] = 5121
-            acc["type"] = "VEC4"
-            acc["normalized"] = True
-            acc.pop("byteOffset", None)
-            acc.pop("min", None)
-            acc.pop("max", None)
+        remap[old] = len(order)
+        if sig is not None:
+            seen[sig] = remap[old]
+        order.append(old)
+        holder[key] = remap[old]
 
     blob = bytearray()
-    for vi, view in enumerate(views):
-        if vi in replaced:
-            chunk = replaced[vi]
-            view.pop("byteStride", None)
-        else:
-            s = view.get("byteOffset", 0)
-            chunk = binchunk[s:s + view["byteLength"]]
+    views, new_accessors = [], []
+    for old in order:
+        acc = dict(accessors[old])
         while len(blob) % 4:
             blob.append(0)
-        view["byteOffset"] = len(blob)
-        view["byteLength"] = len(chunk)
-        view.pop("target", None)  # optional hint; loaders infer it from usage
-        blob.extend(chunk)
+        acc.pop("byteOffset", None)
+        acc["bufferView"] = len(views)
+        views.append({"buffer": 0, "byteOffset": len(blob), "byteLength": len(data[old])})
+        blob.extend(data[old])
+        new_accessors.append(acc)
     while len(blob) % 4:
         blob.append(0)
+    js["accessors"] = new_accessors
+    js["bufferViews"] = views
     js["buffers"][0]["byteLength"] = len(blob)
 
     table = {}
@@ -380,8 +509,9 @@ def compact_glb(path):
     return len(raw), total
 
 
-def export_glb(path, sel_kw, extra=None):
-    """Shared glTF export settings for both pipelines (+ compaction)."""
+def export_glb(path, sel_kw, extra=None, rename_animation=None):
+    """Shared glTF export settings for both pipelines (+ compaction). Rigged
+    enemies pass `extra` to turn skins/animations back on."""
     kwargs = dict(
         filepath=path,
         export_format="GLB",
@@ -404,7 +534,7 @@ def export_glb(path, sel_kw, extra=None):
     if extra:
         kwargs.update(extra)
     bpy.ops.export_scene.gltf(**kwargs)
-    return compact_glb(path)
+    return compact_glb(path, rename_animation)
 
 
 def audit_triangles(obj, name, min_area=1e-9):
@@ -420,3 +550,10 @@ def audit_triangles(obj, name, min_area=1e-9):
 def triangle_count(obj):
     obj.data.calc_loop_triangles()
     return len(obj.data.loop_triangles)
+
+
+def glb_animation_names(path):
+    """Clip names stored in a GLB (export audit)."""
+    raw = open(path, "rb").read()
+    jlen = struct.unpack_from("<I", raw, 12)[0]
+    return [a.get("name", "") for a in json.loads(raw[20:20 + jlen]).get("animations", [])]

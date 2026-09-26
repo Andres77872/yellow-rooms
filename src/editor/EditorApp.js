@@ -287,11 +287,18 @@ export class EditorApp {
     this.onDocumentChanged()
   }
 
+  // 3D preview look: 'geometry' or a look profile id (see Preview3D).
+  setPreviewMode(mode) {
+    this.previewMode = mode
+    this.preview?.setMode(mode)
+  }
+
   setPreview(on) {
     if (on && !this.preview) {
       this.view2d.canvas.style.display = 'none'
       this.preview = new Preview3D(this, this.viewportEl)
       this.map.takeDirty()
+      if (this.previewMode) this.preview.setMode(this.previewMode)
       this.preview.sync(null)
       this.preview.fit()
     } else if (!on && this.preview) {

@@ -187,7 +187,13 @@ export class UI {
   // Pull every control back from the store. Also the way anything that changes a
   // setting outside the panels (the M key, RESET DEFAULTS) re-syncs the widgets.
   refreshSettings() {
-    for (const b of this.settingsBlocks) b.refresh(this.settings)
+    for (const b of this.settingsBlocks) b.refresh(this.settings, { autoPreset: this.autoPreset })
+  }
+
+  // The concrete preset 'auto' resolved to on this device (shown as AUTO (X)).
+  setAutoPreset(name) {
+    this.autoPreset = name
+    this.refreshSettings()
   }
 
   setSeedInput(v) {

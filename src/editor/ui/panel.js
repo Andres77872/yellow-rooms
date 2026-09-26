@@ -3,6 +3,8 @@ import { roomRoleLabel } from '../../debug/mapInspect.js'
 import { MAP_FAMILY_ORDER } from '../../world/mapFamily.js'
 import { SPACE_ROLE_NONE } from '../../world/mapTypes.js'
 import { CELL_MODES, WALL_MODES } from './tools.js'
+import { PREVIEW_GEOMETRY } from './Preview3D.js'
+import { LOOK_ORDER, LOOK_PROFILES } from '../../render/lookProfile.js'
 
 // Left-hand control panel, built from the shared debug widget kit.
 
@@ -129,6 +131,14 @@ export function buildPanel(app) {
   view.body.appendChild(previewToggle.el)
   view.body.appendChild(toggle({
     label: 'ceiling in 3D', value: true, onChange: (v) => app.preview?.setCeiling(v),
+  }).el)
+  // 3D preview look: the fast geometry preview, or the game's production
+  // deferred path with a look profile (engine-improvement gap G8).
+  const previewModes = [PREVIEW_GEOMETRY, ...LOOK_ORDER]
+  view.body.appendChild(segmented({
+    labels: ['geometry', ...LOOK_ORDER.map((id) => LOOK_PROFILES[id].label.toLowerCase())],
+    value: 0,
+    onPick: (i) => app.setPreviewMode(previewModes[i]),
   }).el)
 
   // --- tools ---

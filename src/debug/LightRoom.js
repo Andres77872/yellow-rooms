@@ -137,7 +137,9 @@ export class LightRoom {
     // the renderer's set-edge fade would dim the whole grid once the orbit
     // camera pulls past it (the wheel zooms out to 60u — the old anchor).
     L.cutoffR = Infinity
-    deferred.lightUniforms.uLampIntensity.value = this.config.intensity
+    // The slider is in legacy pool units; the active look scales fixture
+    // power (the physical looks run ~11x with a Lambert 1/pi).
+    deferred.lightUniforms.uLampIntensity.value = this.config.intensity * (deferred.look?.lampPower ?? 1)
     deferred.lightUniforms.uLampFlicker.value = 1 // isolated room: no flicker dip on the cast light
     if (deferred.volUniforms) deferred.volUniforms.uLampRange.value = deferred.lightUniforms.uLampRange.value
     this.engine.materials.panel.uniforms.uIntensity.value = 1 // stop flicker-driven dimming

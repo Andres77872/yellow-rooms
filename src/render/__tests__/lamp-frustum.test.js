@@ -41,18 +41,44 @@ describe('DeferredRenderer lamp influence-frustum culling', () => {
     expect(visible.uLampViewPos.value).not.toBe(source.uLampPos.value)
     expect(visible.uLampViewPos.value[0]).not.toBe(source.uLampPos.value[0])
 
+    // The compacted set reaches every lamp pass through ONE data texture
+    // (shaders/lampData.js) plus the shared visible count — no per-pass
+    // uniform arrays, which used to consume 144 fragment uniform vectors.
     for (const uniforms of [
       deferred.lightUniforms,
       deferred.shadowUniforms,
       deferred.volUniforms,
     ]) {
-      expect(uniforms.uLampViewPos).toBe(visible.uLampViewPos)
+      expect(uniforms.tLampData.value).toBe(deferred.lampData)
       expect(uniforms.uLampCount).toBe(visible.uLampCount)
-      expect(uniforms.uLampChar).toBe(visible.uLampChar)
       expect(uniforms.uLampCount).not.toBe(source.uLampCount)
-      expect(uniforms.uLampChar).not.toBe(source.uLampChar)
+      expect(uniforms.uLampViewPos).toBeUndefined()
+      expect(uniforms.uLampChar).toBeUndefined()
     }
 
+    deferred.dispose()
+  })
+
+  it('mirrors the compacted visible prefix into the lamp data texture', () => {
+    const deferred = makeDeferred()
+    setSourceLamp(deferred, 0, new THREE.Vector3(0, 0, -10), [0.5, 0.6, 0.7, 1], 1)
+    setSourceLamp(deferred, 1, new THREE.Vector3(100, 0, -10), [0.2, 0.2, 0.2, 1], 1)
+    setSourceLamp(deferred, 2, new THREE.Vector3(1, 2, -6), [0.9, 0.8, 0.7, 1], 0.5)
+    deferred.lamps.uLampCount.value = 3
+    deferred._updateFrame()
+
+    const n = deferred.visibleLamps.uLampCount.value
+    expect(n).toBe(2) // the lamp at x=100 is outside the frustum
+    const data = deferred.lampData.image.data
+    const row = data.length / 2
+    for (let i = 0; i < n; i++) {
+      const p = deferred.visibleLamps.uLampViewPos.value[i]
+      const c = deferred.visibleLamps.uLampChar.value[i]
+      expect([data[i * 4], data[i * 4 + 1], data[i * 4 + 2]]).toEqual([
+        Math.fround(p.x), Math.fround(p.y), Math.fround(p.z),
+      ])
+      expect([data[row + i * 4], data[row + i * 4 + 3]]).toEqual([Math.fround(c.x), Math.fround(c.w)])
+    }
     deferred.dispose()
   })
 
@@ -132,6 +158,7 @@ describe('DeferredRenderer lamp influence-frustum culling', () => {
 
   it('uses the visible count for pass skips and restores a source lamp after a camera turn', () => {
     const deferred = makeDeferred()
+    deferred.setLook('classic') // the legacy contact-mask pass skips on lamp count
     // Far enough to the side that even the glossy-highlight reach
     // (LIGHT_RANGE x SPEC_REACH) cannot touch the initial view.
     const sourcePosition = new THREE.Vector3(60, 0, 0)

@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { section, slider, colorPicker, toggle, button, segmented, buttonRow, readout, textBlock } from './widgets.js'
 import { formatTuning, copyText } from './tuningExport.js'
+import { LOOK_ORDER, LOOK_PROFILES } from '../render/lookProfile.js'
 import {
   PANEL_COLOR,
   AMBIENT_SKY,
@@ -15,11 +16,22 @@ import {
 
 // Names double as the status-line label (DebugMode) — keep them short.
 // Index == the DEBUG_VIEW_FRAG uMode that blits that channel.
-export const CHANNELS = ['final', 'albedo', 'matID', 'normal', 'depth', 'AO', 'lit', 'vol', 'bloom', 'comp', 'shadow']
+export const CHANNELS = [
+  'final', 'albedo', 'matID', 'normal', 'depth', 'AO', 'lit', 'vol', 'bloom', 'comp', 'shadow',
+  'rough', 'metal', 'matAO',
+]
+// Lighting-pass diagnostics (lighting.js uLightDebug), shown through 'lit'.
+// 6 furniture visibility (red: cell cap hit), 7 world AO (crease x box x
+// capsule), 8 flashlight visibility (chapter 14).
+export const LIGHT_DEBUG = ['off', 'lists', 'grid', 'direct', 'indirect', 'traced', 'furniture', 'worldAO', 'torch']
+const LIT_CHANNEL = CHANNELS.indexOf('lit')
 
 // Pipeline order for the GPU pass-timing table (matches _pass names in
 // DeferredRenderer.render).
-const PASS_ORDER = ['gbuffer', 'ssao', 'shadow', 'lighting', 'volumetric', 'bloom', 'composite', 'outline', 'grade', 'fxaa']
+const PASS_ORDER = [
+  'gbuffer', 'flashShadow', 'ssao', 'shadow', 'gtao', 'contact', 'occResolve', 'lighting', 'exposure',
+  'volumetric', 'bloom', 'composite', 'outline', 'motionBlur', 'grade', 'fxaa', 'signal',
+]
 
 // Lighting / post-processing tuning panel. Every control binds live to a public
 // deferred uniform. Grade controls and the light room require the sim frozen
@@ -76,6 +88,110 @@ export class LightTool {
         copyBtn,
       ]).el
     )
+
+    // --- Engine: look profile, world-grid lighting, culling, evidence ----
+    // (engine-improvement S1/S2/S6 + R0). The look selector goes through the
+    // Settings store so the pause menu stays in sync.
+    const en = section('engine: look + grid')
+    root.appendChild(en.el)
+    const lookIds = LOOK_ORDER
+    this._look = segmented({
+      labels: lookIds.map((id) => LOOK_PROFILES[id].label),
+      value: Math.max(0, lookIds.indexOf(d.look?.id)),
+      onPick: (i) => {
+        this.engine._applySetting('look', lookIds[i])
+        this.engine.ui?.refreshSettings?.()
+      },
+    })
+    en.body.appendChild(this._look.el)
+    this._gridToggle = toggle({ label: 'world-grid lighting', value: d.gridEnabled, onChange: (v) => d.setGridEnabled(v) })
+    en.body.appendChild(this._gridToggle.el)
+    this._cullToggle = toggle({
+      label: 'sight culling (chunks)',
+      value: !!this.engine.cm.sightCulling,
+      onChange: (v) => this.engine.cm.enableSightCulling(v),
+    })
+    en.body.appendChild(this._cullToggle.el)
+    this._flashShadow = toggle({
+      label: 'flashlight shadow map',
+      value: d.flashShadowEnabled,
+      onChange: (v) => (d.flashShadowEnabled = v),
+    })
+    en.body.appendChild(this._flashShadow.el)
+    this._analyticTorch = toggle({
+      label: 'analytic torch shadows (P18)',
+      value: !!d.analyticTorchDebug,
+      onChange: (v) => d.setAnalyticTorch(v),
+    })
+    en.body.appendChild(this._analyticTorch.el)
+    this._lightDebug = segmented({
+      labels: LIGHT_DEBUG,
+      value: 0,
+      onPick: (i) => {
+        d.setLightDebug(i)
+        this.dbg.setChannel(i ? LIT_CHANNEL : 0)
+      },
+    })
+    en.body.appendChild(this._lightDebug.el)
+    this._f(en, 'bounce (GI)', d.lightUniforms.uGI, 0, 3, 0.05)
+    this._f(en, 'ambient floor', d.lightUniforms.uHemi, 0, 2, 0.05)
+    this._gridStats = readout('grid lists / pending')
+    en.body.appendChild(this._gridStats.el)
+    this._pairStats = readout('pairs clear/sampled/blocked')
+    en.body.appendChild(this._pairStats.el)
+    this._cullStats = readout('chunks drawn / resident')
+    en.body.appendChild(this._cullStats.el)
+    this._exposure = readout('exposure (auto)')
+    en.body.appendChild(this._exposure.el)
+    this._variant = readout('lighting variant')
+    en.body.appendChild(this._variant.el)
+    this._tiers = readout('tiers shadow/torch/ao/vol')
+    en.body.appendChild(this._tiers.el)
+    this._torch = readout('torch map renders / skips')
+    en.body.appendChild(this._torch.el)
+    this._drs = readout('resolution scale (DRS)')
+    en.body.appendChild(this._drs.el)
+    const capBtn = button({
+      label: 'copy capture',
+      onClick: async () => {
+        const ok = await copyText(JSON.stringify(this.engine.capture(), null, 2))
+        capBtn.el.textContent = ok ? 'copied ✓' : 'copy failed'
+        setTimeout(() => (capBtn.el.textContent = 'copy capture'), 1200)
+      },
+    })
+    const timeBtn = button({
+      label: 'copy timings',
+      onClick: async () => {
+        const report = {
+          capture: this.engine.capture(),
+          capabilities: this.engine.capabilities,
+          timings: d.timer?.export() ?? null,
+          renderer: {
+            calls: this.engine.renderer.info.render.calls,
+            triangles: this.engine.renderer.info.render.triangles,
+          },
+        }
+        const ok = await copyText(JSON.stringify(report, null, 2))
+        timeBtn.el.textContent = ok ? 'copied ✓' : 'copy failed'
+        setTimeout(() => (timeBtn.el.textContent = 'copy timings'), 1200)
+      },
+    })
+    const setBtn = button({
+      label: 'run shadow set',
+      onClick: async () => {
+        setBtn.el.textContent = 'running…'
+        try {
+          const report = await this.engine.runShadowSet()
+          const ok = await copyText(JSON.stringify(report, null, 2))
+          setBtn.el.textContent = ok ? 'copied ✓' : 'copy failed'
+        } catch {
+          setBtn.el.textContent = 'failed'
+        }
+        setTimeout(() => (setBtn.el.textContent = 'run shadow set'), 1500)
+      },
+    })
+    en.body.appendChild(buttonRow('evidence', [capBtn, timeBtn, setBtn]).el)
+    this._expT = 0
 
     // --- Pipeline: light-field readouts, pass isolation, GPU timings ----
     // The pass toggles poke the live enable flags directly (bypassing the
@@ -146,6 +262,13 @@ export class LightTool {
       slider({ label: 'intensity', min: 0, max: 6, step: 0.05, value: cfg.intensity, onInput: (v) => (cfg.intensity = v) }).el
     )
     lr.body.appendChild(toggle({ label: 'orbit animate', value: false, onChange: (v) => (cfg.animate = v) }).el)
+    lr.body.appendChild(
+      toggle({
+        label: 'standard PBR reference (A/B)',
+        value: false,
+        onChange: (v) => this.dbg.setLightRoomReference(v),
+      }).el
+    )
 
     // --- Lighting -------------------------------------------------------
     const L = d.lightUniforms
@@ -307,6 +430,46 @@ export class LightTool {
       `${d.shadowUniforms.uMaxLamps.value} × ${d.shadowUniforms.uSteps.value} steps / ` +
         `${d.volUniforms.uMaxLights.value} × ${d.volUniforms.uSteps.value} steps`
     )
+    // Engine section readouts.
+    const grid = this.engine.cm.lightGrid
+    const st = grid.stats
+    this._gridStats.set(`${st.listCells} cells · ${grid.pending} jobs`)
+    this._pairStats.set(`${st.clearPairs} / ${st.sampledPairs} / ${st.blockedPairs}`)
+    const chunks = [...this.engine.cm.chunks.values()]
+    const drawn = chunks.filter((c) => c.group.visible).length
+    const sc = this.engine.cm.sightCulling
+    this._cullStats.set(`${drawn} / ${chunks.length}${sc ? ` · flood ${sc.stats.ms.toFixed(2)} ms` : ''}`)
+    this._look.set(Math.max(0, LOOK_ORDER.indexOf(d.look?.id)))
+    const v = d.variant
+    if (v) {
+      const on = Object.entries(v).filter(([, x]) => x === true).map(([k]) => k)
+      this._variant.set(`${on.join(' ')}${v.flashFilter ? ` · torch filter ${v.flashFilter}` : ''}`)
+    }
+    const q = d.quality
+    if (q) this._tiers.set(`${q.shadow.tier} / ${q.flash?.tier ?? '-'} / ${q.ao.tier} / ${q.vol.tier}${q.cinematic ? ' · cinematic' : ''}`)
+    const fs = d.flashShadow.stats
+    this._torch.set(`${fs.renders} / ${fs.skips}`)
+    const drs = this.engine._drs
+    this._drs.set(drs ? `${drs.scale.toFixed(2)} (floor ${drs.floor.toFixed(2)}, ${drs.mode})` : 'off')
+    this._gridToggle.set(d.gridEnabled)
+    this._cullToggle.set(!!sc)
+    this._flashShadow.set(d.flashShadowEnabled)
+    // A 1x1 read-back stalls the pipeline; sample it twice a second only.
+    const now = performance.now()
+    if (d.gradeUniforms.autoExposure.value > 0.5 && now - this._expT > 500 && d.exposure) {
+      this._expT = now
+      try {
+        const buf = new Float32Array(4)
+        const rt = d.exposure.adaptRTs[d.exposure._ping]
+        this.engine.renderer.readRenderTargetPixels(rt, 0, 0, 1, 1, buf)
+        this._exposure.set(`${buf[0].toFixed(3)} (target ${buf[2].toFixed(3)}, log2 L ${buf[3].toFixed(2)})`)
+      } catch {
+        this._exposure.set('n/a')
+      }
+    } else if (d.gradeUniforms.autoExposure.value <= 0.5) {
+      this._exposure.set(`fixed ${d.gradeUniforms.exposure.value.toFixed(3)}`)
+    }
+
     // Settings changes re-stamp the enable flags behind our back — mirror them
     // (and DebugMode.deactivate turns GPU timing off when the panel closes).
     for (const { w, key } of this._passToggles) w.set(d[key])

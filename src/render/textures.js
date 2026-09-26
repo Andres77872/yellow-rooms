@@ -1,4 +1,6 @@
 import * as THREE from 'three'
+import { hashStr } from '../world/core/hash.js'
+import { surfaceStyle } from './surfaces.js'
 
 // All surface albedo is generated procedurally on a <canvas> — zero asset
 // files. Anime-backrooms art direction: CLEAN flat fields with sparse, soft
@@ -17,6 +19,33 @@ function canvas(size = 256) {
   return c
 }
 
+// Seeded texture noise (engine-improvement S0). Every generator used to draw
+// from Math.random(), so the same seed and view produced different pixels on
+// each page load and no screenshot could be compared against another. The
+// stream is now keyed by the surface slot and its palette spec: a family's
+// carpet is identical on every boot, while two families (or the floor and
+// ceiling of one family) still get independent speckle.
+function mulberry32(seed) {
+  let a = seed >>> 0
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0
+    let t = a
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+let rand = mulberry32(1)
+
+export function textureSeed(slot, spec) {
+  return hashStr(`${slot}|${spec?.style ?? ''}|${spec?.base ?? ''}`)
+}
+
+function seedTextureNoise(slot, spec) {
+  rand = mulberry32(textureSeed(slot, spec))
+}
+
 function finish(c, repeat, aniso) {
   const tex = new THREE.CanvasTexture(c)
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping
@@ -27,14 +56,14 @@ function finish(c, repeat, aniso) {
   return tex
 }
 
-// Helper: deterministic-ish speckle using Math.random (visual only, not gameplay).
+// Helper: seeded speckle (visual only, not gameplay; see seedTextureNoise).
 function speckle(ctx, size, count, colors, min, max) {
   for (let i = 0; i < count; i++) {
-    ctx.fillStyle = colors[(Math.random() * colors.length) | 0]
-    const r = min + Math.random() * (max - min)
-    ctx.globalAlpha = 0.25 + Math.random() * 0.5
+    ctx.fillStyle = colors[(rand() * colors.length) | 0]
+    const r = min + rand() * (max - min)
+    ctx.globalAlpha = 0.25 + rand() * 0.5
     ctx.beginPath()
-    ctx.arc(Math.random() * size, Math.random() * size, r, 0, Math.PI * 2)
+    ctx.arc(rand() * size, rand() * size, r, 0, Math.PI * 2)
     ctx.fill()
   }
   ctx.globalAlpha = 1
@@ -47,13 +76,13 @@ function speckle(ctx, size, count, colors, min, max) {
 // seam in the repeat.
 function softBlots(ctx, size, count, colors, min, max, alpha = 0.22) {
   for (let i = 0; i < count; i++) {
-    const color = colors[(Math.random() * colors.length) | 0]
-    const r = min + Math.random() * (max - min)
-    const x = Math.random() * size
-    const y = Math.random() * size
-    const stretch = 1 + Math.random() * 0.8
-    const angle = Math.random() * Math.PI
-    ctx.globalAlpha = alpha * (0.5 + Math.random() * 0.5)
+    const color = colors[(rand() * colors.length) | 0]
+    const r = min + rand() * (max - min)
+    const x = rand() * size
+    const y = rand() * size
+    const stretch = 1 + rand() * 0.8
+    const angle = rand() * Math.PI
+    ctx.globalAlpha = alpha * (0.5 + rand() * 0.5)
     for (const ox of [-size, 0, size]) {
       for (const oy of [-size, 0, size]) {
         const cx = x + ox
@@ -107,12 +136,12 @@ function floorConcrete(ctx, s, spec) {
   ctx.lineWidth = 1
   for (let i = 0; i < 3; i++) {
     ctx.beginPath()
-    let x = Math.random() * s
-    let y = Math.random() * s
+    let x = rand() * s
+    let y = rand() * s
     ctx.moveTo(x, y)
     for (let k = 0; k < 4; k++) {
-      x += (Math.random() - 0.5) * 70
-      y += 20 + Math.random() * 40
+      x += (rand() - 0.5) * 70
+      y += 20 + rand() * 40
       ctx.lineTo(x, y)
     }
     ctx.stroke()
@@ -148,9 +177,9 @@ function floorDeck(ctx, s, spec) {
   ctx.globalAlpha = 0.55
   ctx.fillStyle = spec.seam
   for (let i = 0; i < 46; i++) {
-    const x = Math.random() * (s - 14)
-    const y = Math.random() * (s - 6)
-    if (Math.random() < 0.5) ctx.fillRect(x, y, 12, 2)
+    const x = rand() * (s - 14)
+    const y = rand() * (s - 6)
+    if (rand() < 0.5) ctx.fillRect(x, y, 12, 2)
     else ctx.fillRect(x, y, 2, 12)
   }
   ctx.globalAlpha = 1
@@ -160,6 +189,7 @@ export function floorTexture(aniso, spec) {
   const s = 256
   const c = canvas(s)
   const ctx = c.getContext('2d')
+  seedTextureNoise('floor', spec)
   ctx.fillStyle = spec.base
   ctx.fillRect(0, 0, s, s)
   if (spec.style === 'concrete') floorConcrete(ctx, s, spec)
@@ -193,7 +223,7 @@ function wallBrick(ctx, s, spec) {
     const off = (r % 2) * (bw / 2)
     for (let b = -1; b < 5; b++) {
       const x = b * bw + off
-      ctx.fillStyle = spec.variants[(Math.random() * spec.variants.length) | 0]
+      ctx.fillStyle = spec.variants[(rand() * spec.variants.length) | 0]
       ctx.fillRect(x + 1.5, r * rh + 1.5, bw - 3, rh - 3)
     }
   }
@@ -259,6 +289,7 @@ export function wallTexture(aniso, spec) {
   const s = 256
   const c = canvas(s)
   const ctx = c.getContext('2d')
+  seedTextureNoise('wall', spec)
   ctx.fillStyle = spec.base
   ctx.fillRect(0, 0, s, s)
   if (spec.style === 'brick') wallBrick(ctx, s, spec)
@@ -314,10 +345,131 @@ export function ceilingTexture(aniso, spec) {
   const s = 256
   const c = canvas(s)
   const ctx = c.getContext('2d')
+  seedTextureNoise('ceiling', spec)
   ctx.fillStyle = spec.base
   ctx.fillRect(0, 0, s, s)
   if (spec.style === 'vault') ceilingVault(ctx, s, spec)
   else if (spec.style === 'deck') ceilingDeck(ctx, s, spec)
   else ceilingTile(ctx, s, spec)
   return finish(c, 1, aniso)
+}
+
+// ---------------------------------------------------------------------------
+// Surface detail maps (engine-improvement S4 / G-buffer v2).
+//
+// One linear RGBA8 texture per architectural surface, derived from the same
+// seeded albedo canvas so relief always lines up with the painted detail:
+//   R,G  tangent-space normal xy (z is reconstructed; the vector's mip-level
+//        shortening feeds the shader's Toksvig specular anti-aliasing)
+//   B    perceptual roughness
+//   A    material cavity occlusion (1 = open surface)
+// The height field is the albedo's blurred luminance — grout, mortar, seams
+// and rivet shadows are painted darker, so they read as recessed. Tileable:
+// every neighbourhood lookup wraps, matching RepeatWrapping on the albedo.
+// Rows are written bottom-up so texel (0,0) matches the flipY canvas albedo.
+export function surfaceDetailTexture(albedo, spec) {
+  const src = albedo?.image
+  const size = src?.width ?? 0
+  const ctx = src?.getContext?.('2d')
+  if (!size || !ctx) return null
+  const style = surfaceStyle(spec?.style)
+  const px = ctx.getImageData(0, 0, size, size).data
+  const n = size * size
+  // Luminance in data-row order (row 0 = bottom = v 0).
+  const lum = new Float32Array(n)
+  for (let y = 0; y < size; y++) {
+    const srcRow = (size - 1 - y) * size
+    for (let x = 0; x < size; x++) {
+      const i = (srcRow + x) * 4
+      lum[y * size + x] = (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255
+    }
+  }
+  const wrap = (v) => (v + size) % size
+  // Separable 3-tap blur twice: removes single-pixel speckle spikes that would
+  // otherwise shimmer as normal-map noise.
+  const tmp = new Float32Array(n)
+  const blur = (from, to, dx, dy) => {
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        to[y * size + x] =
+          0.25 * from[wrap(y - dy) * size + wrap(x - dx)] +
+          0.5 * from[y * size + x] +
+          0.25 * from[wrap(y + dy) * size + wrap(x + dx)]
+      }
+    }
+  }
+  const h = new Float32Array(n)
+  blur(lum, tmp, 1, 0)
+  blur(tmp, h, 0, 1)
+  blur(h, tmp, 1, 0)
+  blur(tmp, h, 0, 1)
+  // High-pass: the albedo also carries PAINTED low-frequency shading (the
+  // wallpaper's top-light/floor-shade gradient, soft stain blots). Read as
+  // height, those become per-tile slopes that tilt whole walls and stripe
+  // the screen-space AO/contact passes with the tile repeat. Subtracting a
+  // wide wrapped box blur keeps only local relief — seams, grout, mortar,
+  // rivets, fibre speckle.
+  const R = 12
+  const wide = new Float32Array(n)
+  // Sliding-window box sum along rows (dx) or columns (dy): O(1) per texel.
+  const boxPass = (from, to, horizontal) => {
+    const at = (line, i) => (horizontal ? line * size + wrap(i) : wrap(i) * size + line)
+    for (let line = 0; line < size; line++) {
+      let acc = 0
+      for (let k = -R; k <= R; k++) acc += from[at(line, k)]
+      for (let i = 0; i < size; i++) {
+        to[at(line, i)] = acc / (2 * R + 1)
+        acc += from[at(line, i + R + 1)] - from[at(line, i - R)]
+      }
+    }
+  }
+  boxPass(h, tmp, true)
+  boxPass(tmp, wide, false)
+  for (let i = 0; i < n; i++) h[i] -= wide[i]
+  let lo = Infinity
+  let hi = -Infinity
+  let mean = 0
+  for (let i = 0; i < n; i++) {
+    lo = Math.min(lo, h[i])
+    hi = Math.max(hi, h[i])
+    mean += h[i]
+  }
+  mean /= n
+  const span = Math.max(hi - lo, 1e-4)
+  const data = new Uint8Array(n * 4)
+  const k = style.normalStrength * 6
+  const r0 = style.roughness
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = y * size + x
+      const dhdu = (h[y * size + wrap(x + 1)] - h[y * size + wrap(x - 1)]) * 0.5
+      const dhdv = (h[wrap(y + 1) * size + x] - h[wrap(y - 1) * size + x]) * 0.5
+      let nx = -dhdu * k
+      let ny = -dhdv * k
+      const inv = 1 / Math.sqrt(nx * nx + ny * ny + 1)
+      nx *= inv
+      ny *= inv
+      // Relative height: 0 in the deepest recess, 1 on the proudest face.
+      const rel = (h[i] - lo) / span
+      const below = Math.max(0, (mean - h[i]) / span) * 2
+      const rough = r0 +
+        style.lowRoughness * Math.min(1, below) +
+        style.roughnessVar * (rel - 0.5) * 2 * -1
+      const cavity = 1 - style.cavity * Math.min(1, below)
+      const o = i * 4
+      data[o] = Math.round((nx * 0.5 + 0.5) * 255)
+      data[o + 1] = Math.round((ny * 0.5 + 0.5) * 255)
+      data[o + 2] = Math.round(Math.min(1, Math.max(0.045, rough)) * 255)
+      data[o + 3] = Math.round(Math.min(1, Math.max(0, cavity)) * 255)
+    }
+  }
+  const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat, THREE.UnsignedByteType)
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+  tex.colorSpace = THREE.NoColorSpace
+  tex.magFilter = THREE.LinearFilter
+  tex.minFilter = THREE.LinearMipmapLinearFilter
+  tex.generateMipmaps = true
+  tex.anisotropy = albedo.anisotropy ?? 1
+  tex.needsUpdate = true
+  return tex
 }

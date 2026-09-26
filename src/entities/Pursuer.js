@@ -22,6 +22,7 @@ import { groundHeightAt } from '../player/ground.js'
 import { sightGate, findHiddenSpot } from './sense.js'
 import { PathFollower } from './follow.js'
 import { pursuerSpeed, shouldRelocate, clampBandDist, chooseFallback } from './pursuerLogic.js'
+import { upgradeEntityModel, upgradeEntityRig } from './body.js'
 
 const DORMANT = { caught: false, tension: 0, seen: false, dist: Infinity, inBeam: false, frozen: false }
 
@@ -46,6 +47,7 @@ export class Pursuer {
     // Capsule geometry is origin-centred; the Blender model upgrade is
     // feet-origin (meshYOffset 0). See upgradeModel.
     this.meshYOffset = this.mesh.scale.y * 0.95
+    this.anim = null // EnemyAnimator once the rigged GLB arrives (upgradeRig)
     this.pos = new THREE.Vector3() // feet position (y = ground height)
     this.cy = 0 // floor index (v8)
     this.active = false
@@ -160,11 +162,17 @@ export class Pursuer {
   // Swap the capsule silhouette for the Blender-built model (enemy GLB
   // pipeline: feet-origin geometry, per-part vertex colors via entityModel).
   upgradeModel(geometry, material) {
-    this.mesh.geometry = geometry
-    this.mesh.material = material
-    this.mesh.scale.set(1, 1, 1)
-    this.meshYOffset = 0
-    this.mesh.position.copy(this.pos)
+    upgradeEntityModel(this, geometry, material)
+  }
+
+  // Rigged GLB: replace the capsule with an animated rig instance (body.js).
+  upgradeRig(object, animator) {
+    upgradeEntityRig(this, object, animator)
+  }
+
+  // Pose the rig from what this frame's update() did (no-op until rigged).
+  animate(dt, player) {
+    this.anim?.drive(dt, this, player)
   }
 
   // Returns { caught, tension, seen, dist, inBeam:false, frozen:false }.

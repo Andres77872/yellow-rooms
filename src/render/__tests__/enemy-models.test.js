@@ -86,8 +86,10 @@ describe('enemy GLB exports (Blender pipeline contract)', () => {
           triangles += json.accessors[primitive.indices].count / 3
         }
       }
-      expect(triangles).toBeLessThanOrEqual(3000)
-      expect(readFileSync(path.join(MODELS_DIR, `${ENEMY_MODEL_FILES[key]}.glb`)).length).toBeLessThan(90_000)
+      // Budgets mirror build_enemies.py: joint rings for the bending knees and
+      // elbows, and the skin + clips roughly double the static bytes.
+      expect(triangles).toBeLessThanOrEqual(3200)
+      expect(readFileSync(path.join(MODELS_DIR, `${ENEMY_MODEL_FILES[key]}.glb`)).length).toBeLessThan(150_000)
     }
   })
 

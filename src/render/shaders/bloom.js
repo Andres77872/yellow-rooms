@@ -9,6 +9,7 @@ export const BLOOM_PREFILTER_FRAG = /* glsl */ `
   uniform float uThreshold;   // HDR level where lit surfaces start to glow
   uniform float uKnee;        // soft-knee width around the threshold
   uniform float uSurface;     // weight of the lit-surface excess vs emissives
+  uniform float uClamp;       // look: emissive input clamp (0 = off) keeps a panel's glare rectangular
   void main(){
     // The G-buffer clears with alpha=1 (matID 1 == emissive), so uncovered void
     // pixels would wrongly bloom the fog color. Gate on depth so only real
@@ -20,7 +21,7 @@ export const BLOOM_PREFILTER_FRAG = /* glsl */ `
     // Emissives (lamps/exit/signs) glow in full; lit surfaces contribute only
     // their soft-kneed excess over the threshold, so a pool centre or a
     // flashlit wall halos faintly and mid-tones never haze the frame.
-    if (matID > 0.5 && matID < 1.5) { outColor = vec4(c, 1.0); return; }
+    if (matID > 0.5 && matID < 1.5) { outColor = vec4(uClamp > 0.0 ? min(c, vec3(uClamp)) : c, 1.0); return; }
     float peak = max(c.r, max(c.g, c.b));
     float soft = clamp(peak - uThreshold + uKnee, 0.0, 2.0 * uKnee);
     soft = soft * soft / (4.0 * uKnee + 1e-4);

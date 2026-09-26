@@ -137,13 +137,17 @@ describe('DeferredRenderer render-target lifecycle', () => {
 
   it('pools disjoint half-resolution intermediates without aliasing final debug channels', () => {
     const deferred = makeDeferred()
+    deferred.setLook('classic') // the legacy SSAO + contact-mask path
     const maskScales = new Set([AO_SCALE, SHADOW_SCALE])
 
     expect(deferred._effectScratchRTs.size).toBe(2)
     expect(deferred._effectScratchRTs.get('mask').size).toBe(maskScales.size)
     // Bloom's tight (half-res) and wide (quarter-res) horizontal intermediates
     // are pooled at their own scales.
-    expect(deferred._effectScratchRTs.get('hdr').size).toBe(2)
+    // (and the eighth-res bloom tail's, chapter 14; the shaft blur shares the
+    // half-res one with bloom's horizontal pass).
+    expect(deferred._effectScratchRTs.get('hdr').size).toBe(3)
+    expect(deferred.volBlurTmpRT).toBe(deferred.bloomTmpRT)
     expect(deferred.bloomWideTmpRT).not.toBe(deferred.bloomTmpRT)
     expect(deferred.bloomWideRT).not.toBe(deferred.bloomWideTmpRT)
     expect(deferred.compositeUniforms.tBloomWide.value).toBe(deferred.bloomWideRT.texture)
@@ -190,6 +194,7 @@ describe('DeferredRenderer render-target lifecycle', () => {
   it('resizes pooled and final targets at their configured scales while preserving bindings', () => {
     const renderer = makeRenderer()
     const deferred = makeDeferred(renderer)
+    deferred.setLook('classic')
     const scratch = deferred.aoRT
 
     renderer.size.width = 101
@@ -235,13 +240,40 @@ describe('DeferredRenderer render-target lifecycle', () => {
     ])
     expect(deferred.debugViewUniforms.tAO.value).toBe(deferred.aoBlurRT.texture)
     expect(deferred.debugViewUniforms.tLit.value).toBe(deferred.litRT.texture)
+    for (const t of [deferred.aoRawRT, deferred.contactRawRT, deferred.occRT]) {
+      expect([t.width, t.height]).toEqual([Math.max(1, Math.floor(dw * AO_SCALE)), Math.max(1, Math.floor(dh * AO_SCALE))])
+    }
 
+    deferred.dispose()
+  })
+
+  it('binds the occlusion v2 outputs (GTAO + residual contact) for the physically based looks', () => {
+    const deferred = makeDeferred()
+    expect(deferred.variant.occV2).toBe(true)
+    expect(deferred.lightQuad.material.fragmentShader).toContain('#define OCC_V2')
+    expect(deferred.lightUniforms.tOcc.value).toBe(deferred.occRT.textures[0])
+    expect(deferred.lightUniforms.tContact.value).toBe(deferred.occRT.textures[1])
+    expect(deferred.debugViewUniforms.tAO.value).toBe(deferred.occRT.textures[0])
+    // RGBA8, nearest: every consumer reads them with texelFetch (HALF_TEXEL).
+    for (const t of [deferred.aoRawRT.texture, deferred.contactRawRT.texture, ...deferred.occRT.textures]) {
+      expect(t.format).toBe(THREE.RGBAFormat)
+      expect(t.type).toBe(THREE.UnsignedByteType)
+      expect(t.magFilter).toBe(THREE.NearestFilter)
+    }
+    // Contact shares the look's length and the lighting pass's capsules.
+    expect(deferred.contactUniforms.uMaxDist).toBe(deferred.shadowUniforms.uMaxDist)
+    expect(deferred.contactUniforms.uCapA).toBe(deferred.lightUniforms.uCapA)
+    deferred.setLook('classic')
+    expect(deferred.variant.occV2).toBe(false)
+    expect(deferred.lightUniforms.tOcc.value).toBe(deferred.aoBlurRT.texture)
+    expect(deferred.lightUniforms.tContact.value).toBe(deferred.shadowBlurRT.texture)
     deferred.dispose()
   })
 
   it('reuses the dead lighting target for outline output after the debug branch', () => {
     const renderer = makeRenderer()
     const deferred = makeDeferred(renderer)
+    deferred.setLook('classic') // the ink outline is a Classic-look lever
 
     const outlined = deferred._renderOutline()
     expect(renderer.setRenderTarget).toHaveBeenLastCalledWith(deferred.litRT)
@@ -258,12 +290,16 @@ describe('DeferredRenderer render-target lifecycle', () => {
 
   it('preserves pass order and never overwrites the lighting debug channel with outline', () => {
     const deferred = makeDeferred()
+    deferred.setLook('classic') // legacy occlusion path; v2 is covered below
     const order = []
     const stages = [
       ['_updateFrame', 'update'],
       ['_renderGBuffer', 'gbuffer'],
       ['_renderSSAO', 'ssao'],
       ['_renderShadow', 'shadow'],
+      ['_renderGTAO', 'gtao'],
+      ['_renderContact', 'contact'],
+      ['_renderOccResolve', 'occResolve'],
       ['_renderLighting', 'lighting'],
       ['_renderVolumetrics', 'volumetric'],
       ['_renderBloom', 'bloom'],
@@ -313,6 +349,14 @@ describe('DeferredRenderer render-target lifecycle', () => {
       'debug',
     ])
 
+    // Occlusion v2 (the physically based looks): GTAO, residual contact and
+    // their shared resolve replace SSAO + the contact mask.
+    order.length = 0
+    deferred.setDebugView(0)
+    deferred.setLook('semiRealistic')
+    deferred.render(3)
+    expect(order.slice(0, 6)).toEqual(['update', 'gbuffer', 'gtao', 'contact', 'occResolve', 'lighting'])
+
     deferred.dispose()
   })
 
@@ -361,7 +405,9 @@ describe('DeferredRenderer render-target lifecycle', () => {
 
     // First frame fills each skipped pass's output with its identity value.
     deferred.render(0)
-    expect(renderer.clear).toHaveBeenCalledTimes(5) // ao, shadow, vol, bloom (tight + wide)
+    // ao, contact (occlusion v2 raw targets), vol, bloom (tight + wide + tail
+    // + the prefilter the CCD smear would otherwise read stale)
+    expect(renderer.clear).toHaveBeenCalledTimes(7)
 
     // The identity never changes, so subsequent frames must not re-clear.
     renderer.clear.mockClear()
@@ -373,7 +419,7 @@ describe('DeferredRenderer render-target lifecycle', () => {
     renderer.size.width = 640
     deferred.setSize()
     deferred.render(3)
-    expect(renderer.clear).toHaveBeenCalledTimes(5)
+    expect(renderer.clear).toHaveBeenCalledTimes(7)
 
     // And a pass that starts rendering again reclaims its target: re-enabling
     // volumetrics then disabling it must clear once more, not read as clean.
@@ -415,7 +461,7 @@ describe('DeferredRenderer render-target lifecycle', () => {
     const disposals = Object.values(deferred)
       .filter((value) => value?.material?.isRawShaderMaterial)
       .map((quad) => vi.spyOn(quad.material, 'dispose'))
-    expect(disposals).toHaveLength(13)
+    expect(disposals).toHaveLength(20)
     deferred.dispose()
     deferred.dispose()
     for (const dispose of disposals) expect(dispose).toHaveBeenCalledOnce()

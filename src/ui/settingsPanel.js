@@ -1,6 +1,7 @@
-import { NOISE_MODES, SENS_DEFAULT, SENS_MAX, SENS_MIN } from '../core/Settings.js'
+import { NOISE_MODES, SENS_DEFAULT, SENS_MAX, SENS_MIN, dynamicResEnabled } from '../core/Settings.js'
+import { LOOK_ORDER, LOOK_PROFILES } from '../render/lookProfile.js'
 import {
-  PRESET_ORDER,
+  PRESET_CHOICES,
   TIER_ORDER,
   WORLD_DETAIL_ORDER,
 } from '../core/graphics.js'
@@ -14,13 +15,24 @@ import {
 const SENS_MULT_MIN = +(SENS_MIN / SENS_DEFAULT).toFixed(2)
 const SENS_MULT_MAX = +(SENS_MAX / SENS_DEFAULT).toFixed(2)
 
-// Graphics preset + per-feature tier pickers (labels shown uppercase).
-const presetOpts = [...PRESET_ORDER, 'custom']
+// Graphics preset + per-feature tier pickers (labels shown uppercase). The
+// 'auto' option's label names the preset the device resolved to (AUTO
+// (MEDIUM)); refresh() rewrites it.
+const presetOpts = PRESET_CHOICES
   .map((p) => `<option value="${p}">${p.toUpperCase()}</option>`)
   .join('')
 const tierOpts = TIER_ORDER.map((t) => `<option value="${t}">${t.toUpperCase()}</option>`).join('')
+// World shadows never switch fully off: 'off' keeps baked wall visibility and
+// one enemy capsule (removing them would leak light through walls), so the
+// menu calls it MINIMAL.
+const shadowTierOpts = TIER_ORDER
+  .map((t) => `<option value="${t}">${t === 'off' ? 'MINIMAL' : t.toUpperCase()}</option>`)
+  .join('')
 const worldDetailOpts = WORLD_DETAIL_ORDER
   .map((t) => `<option value="${t}">${t.toUpperCase()}</option>`)
+  .join('')
+const lookOpts = LOOK_ORDER
+  .map((id) => `<option value="${id}">${LOOK_PROFILES[id].label.toUpperCase()}</option>`)
   .join('')
 const noiseOpts = NOISE_MODES.map((n) => `<option value="${n}">${n.toUpperCase()}</option>`).join('')
 
@@ -39,6 +51,7 @@ export const SETTINGS_HTML = `
     <output class="val" data-k="volVal"></output>
   </span></label>
   <div class="group">GRAPHICS</div>
+  <label>VISUAL STYLE <select data-k="look">${lookOpts}</select></label>
   <label>QUALITY PRESET <select data-k="preset">${presetOpts}</select></label>
   <button type="button" class="adv-toggle" data-k="advToggle" aria-expanded="false">
     ADVANCED SETTINGS <span class="caret" aria-hidden="true">▾</span>
@@ -54,13 +67,16 @@ export const SETTINGS_HTML = `
     </span></label>
     <label>WORLD DETAIL <select data-k="worldDetail">${worldDetailOpts}</select></label>
     <label>AMBIENT OCCLUSION <select data-k="ao">${tierOpts}</select></label>
-    <label>LAMP SHADOWS <select data-k="shadow">${tierOpts}</select></label>
+    <label>LAMP SHADOWS <select data-k="shadow">${shadowTierOpts}</select></label>
+    <label>FLASHLIGHT SHADOWS <select data-k="flashq">${tierOpts}</select></label>
     <label>LIGHT SHAFTS <select data-k="volq">${tierOpts}</select></label>
     <label>BLOOM <input type="checkbox" data-k="bloom"></label>
     <label>ANTI-ALIASING (FXAA) <input type="checkbox" data-k="fxaa"></label>
+    <label>DYNAMIC RESOLUTION <input type="checkbox" data-k="dynres"></label>
     <div class="group">DISPLAY</div>
     <label>HEAD BOB <input type="checkbox" data-k="bob"></label>
     <label>CAMERA FX <input type="checkbox" data-k="camfx"></label>
+    <label>MOTION BLUR <input type="checkbox" data-k="mblur"></label>
     <label>NOISE <select data-k="noise">${noiseOpts}</select></label>
     <label>INK OUTLINE <input type="checkbox" data-k="out"></label>
     <label>MINIMAP <input type="checkbox" data-k="map"></label>
@@ -79,6 +95,7 @@ const WIRE = [
   ['vol', 'input', 'volume', (el) => parseFloat(el.value)],
   ['invY', 'change', 'invertY', (el) => el.checked],
   ['invX', 'change', 'invertX', (el) => el.checked],
+  ['look', 'change', 'look', (el) => el.value],
   ['preset', 'change', 'preset', (el) => el.value],
   // Commit on release: every render-scale step reallocates the complete
   // deferred target set, so dragging only previews the label (see below).
@@ -86,7 +103,10 @@ const WIRE = [
   ['worldDetail', 'change', 'worldDetail', (el) => el.value],
   ['ao', 'change', 'aoQuality', (el) => el.value],
   ['shadow', 'change', 'shadowQuality', (el) => el.value],
+  ['flashq', 'change', 'flashShadowQuality', (el) => el.value],
   ['volq', 'change', 'volQuality', (el) => el.value],
+  ['dynres', 'change', 'dynamicRes', (el) => el.checked],
+  ['mblur', 'change', 'motionBlur', (el) => el.checked],
   ['bloom', 'change', 'bloom', (el) => el.checked],
   ['fxaa', 'change', 'fxaa', (el) => el.checked],
   ['bob', 'change', 'bob', (el) => el.checked],
@@ -120,7 +140,7 @@ export class SettingsBlock {
 
   // Pull every control back from the store. Also the way anything that changes
   // a setting outside this panel (the M key, RESET DEFAULTS) re-syncs widgets.
-  refresh(s) {
+  refresh(s, { autoPreset = null } = {}) {
     const mult = s.get('sensitivity') / SENS_DEFAULT
     this.el.sens.value = mult
     this.el.sensVal.value = `×${mult.toFixed(2)}`
@@ -128,13 +148,26 @@ export class SettingsBlock {
     this.el.volVal.value = `${Math.round(s.get('volume') * 100)}%`
     this.el.invY.checked = s.get('invertY')
     this.el.invX.checked = s.get('invertX')
+    this.el.look.value = s.get('look')
     this.el.preset.value = s.get('preset')
+    const auto = this.el.preset.querySelector?.('option[value="auto"]')
+    if (auto) auto.textContent = autoPreset ? `AUTO (${autoPreset.toUpperCase()})` : 'AUTO'
     this.el.rscale.value = s.get('renderScale')
     this.el.rscaleVal.value = `${Math.round(s.get('renderScale') * 100)}%`
     this.el.worldDetail.value = s.get('worldDetail')
     this.el.ao.value = s.get('aoQuality')
     this.el.shadow.value = s.get('shadowQuality')
+    this.el.flashq.value = s.get('flashShadowQuality')
     this.el.volq.value = s.get('volQuality')
+    // The box shows what runs, not the stored opt-in: 'auto' always runs
+    // dynamic resolution and 'cinematic' never does, so under those two the
+    // toggle would change nothing and is locked.
+    const preset = s.get('preset')
+    const dynresFixed = preset === 'auto' || preset === 'cinematic'
+    this.el.dynres.checked = dynamicResEnabled(s)
+    this.el.dynres.disabled = dynresFixed
+    this.el.dynres.title = preset === 'auto' ? 'Always on with AUTO' : preset === 'cinematic' ? 'Off with CINEMATIC' : ''
+    this.el.mblur.checked = s.get('motionBlur')
     this.el.bloom.checked = s.get('bloom')
     this.el.fxaa.checked = s.get('fxaa')
     this.el.bob.checked = s.get('bob')

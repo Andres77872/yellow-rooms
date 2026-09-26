@@ -45,6 +45,14 @@ import {
 } from './mapTypes.js'
 import { validatedRuntimeStructure } from './structures/contract.js'
 import { resolveStepSurface } from './stepSurface.js'
+import { LightGrid } from './lightGrid/LightGrid.js'
+import { SightCulling } from './lightGrid/SightCulling.js'
+import { furnitureProxyBoxes } from './objects/furniture/proxies.js'
+
+// Wall-aware light-list / GI work per streaming frame (world/lightGrid). A
+// chunk's arrival queues its own cells plus the neighbour strips its fixtures
+// and walls can affect; this slice amortises that bake behind the builds.
+const LIGHT_GRID_BUDGET_MS = 2
 
 const UINT32_MAX = 0xffffffff
 const HARD_VOID_PLANE_KEYS = Object.freeze(['deathYmm', 'family', 'id'])
@@ -203,6 +211,40 @@ export class ChunkManager {
     this._detailPcz = null
     this._detailFamily = null
     this._detailAppliedProfile = null
+    // Headless wall-aware lighting model shared by the renderer (GPU light
+    // lists, cell-graph GI) and gameplay (lightAt). Deterministic per seed.
+    // Bumps whenever the resident mesh set changes (streaming, GLB swaps):
+    // the flashlight shadow map may reuse its last render while it holds.
+    this.meshRevision = 0
+    this.lightGrid = new LightGrid()
+    // Furniture proxy boxes feed the grid's occupancy texture (exact analytic
+    // furniture shadows in the renderer; lightAt ignores them).
+    this.lightGrid.proxyBoxes = furnitureProxyBoxes
+    // Optional same-floor occlusion culling over the grid's wall edges
+    // (enableSightCulling). Off by default so headless consumers keep the
+    // plain floor-gating contract; the game Engine turns it on.
+    this.sightCulling = null
+    this._sightEye = { x: 0, z: 0 }
+  }
+
+  // Cull same-floor chunks no straight sight line from the eye can reach
+  // (world/lightGrid/SightCulling.js). Toggling re-gates every resident.
+  enableSightCulling(on = true) {
+    if (on && !this.sightCulling) this.sightCulling = new SightCulling(this.lightGrid)
+    if (!on) this.sightCulling = null
+    this.sightCulling?.invalidate()
+    if (this.sightCulling && Number.isFinite(this._lastPx)) {
+      this.sightCulling.update(this._lastPx, this._lastPz, this._visCy)
+    }
+    this.updateVisibility(this._visCy, this._visStair)
+  }
+
+  // The eye the sight flood starts from; defaults to the streaming origin
+  // passed to update(). Engine supplies the camera (title backdrop, debug).
+  setSightEye(x, z) {
+    this._sightEye.x = x
+    this._sightEye.z = z
+    this._sightEye.set = true
   }
 
   setSeed(seed) {
@@ -226,6 +268,9 @@ export class ChunkManager {
   // Re-mesh stale furniture batches, nearest chunk first, until the frame's
   // build budget is spent (always at least one, so the upgrade converges even
   // while streaming saturates the budget). Clears the flag once none remain.
+  // Every call that swaps geometry bumps meshRevision: the swap spreads over
+  // several frames, and a still flashlight would otherwise keep casting the
+  // box stand-ins of every chunk swapped after the first frame.
   _refreshStaleFurniture(pcx, pcy, pcz, budgetStart) {
     const want = this.furnitureModels?.geometries?.size ?? 0
     const stale = []
@@ -237,6 +282,7 @@ export class ChunkManager {
     const ring = (c) =>
       Math.max(Math.abs(c.cx - pcx), Math.abs(c.cz - pcz)) + Math.abs(c.cy - pcy)
     stale.sort((a, b) => ring(a) - ring(b))
+    this.meshRevision++ // stale[0] is always refreshed below
     for (let i = 0; i < stale.length; i++) {
       if (i > 0 && performance.now() - budgetStart >= STREAM_BUILD_BUDGET_MS) return
       stale[i].refreshFurniture(this.furnitureModels)
@@ -264,6 +310,8 @@ export class ChunkManager {
   reset() {
     for (const c of this.chunks.values()) c.dispose()
     this.chunks.clear()
+    this.lightGrid.reset()
+    this.sightCulling?.invalidate()
     this.apertures.clear()
     this.queue.length = 0
     this.queued.clear()
@@ -520,6 +568,8 @@ export class ChunkManager {
         }
         c.dispose()
         this.chunks.delete(key)
+        this.meshRevision++
+        this.lightGrid.removeChunk(c.cx, c.cy, c.cz)
       }
     }
     // The aperture registry feeds the cross-floor gating: a stairwell leaving
@@ -545,6 +595,7 @@ export class ChunkManager {
     this._streamPcy = pcy
     this._streamPcz = pcz
     this._syncRenderDetail(pcx, pcz)
+    this.lightGrid.setPlayerFloor(pcy)
 
     if (planDirty) {
       this._planStreamingRequests(pcx, pcy, pcz)
@@ -566,6 +617,25 @@ export class ChunkManager {
     if (planDirty) this._unloadOutsideStreamingBounds(pcx, pcy, pcz)
     if (this._furnitureStale) this._refreshStaleFurniture(pcx, pcy, pcz, buildStart)
     this._streamPlanChunkCount = this.chunks.size
+    this.lightGrid.update(LIGHT_GRID_BUDGET_MS)
+    this._updateSight(px, pz, pcy)
+  }
+
+  // Re-flood when the eye moved or residency changed, and re-gate the
+  // residents only when the visible set actually changed.
+  _updateSight(px, pz, pcy) {
+    this._lastPx = px
+    this._lastPz = pz
+    const sc = this.sightCulling
+    if (!sc) return
+    if (this._sightChunkCount !== this.chunks.size) {
+      this._sightChunkCount = this.chunks.size
+      sc.invalidate()
+    }
+    const eye = this._sightEye
+    const ex = Number.isFinite(eye.x) && eye.set ? eye.x : px
+    const ez = Number.isFinite(eye.z) && eye.set ? eye.z : pz
+    if (sc.update(ex, ez, this._visCy ?? pcy)) this.updateVisibility(this._visCy, this._visStair)
   }
 
   _buildNext() {
@@ -593,6 +663,8 @@ export class ChunkManager {
     )
     chunk.mount(this.root)
     this.chunks.set(key, chunk)
+    this.meshRevision++
+    this.lightGrid.addChunk(chunk.data)
     this._applyRenderDetail(chunk)
     // Discovery is intentionally build-driven: ordinary streaming stays at
     // LOAD_RADIUS_Y, but encountering a structure that contains the current
@@ -637,6 +709,8 @@ export class ChunkManager {
     )
     this.queue.sort(compareRequests)
     while (this.queue.length) this._buildNext()
+    this.lightGrid.setPlayerFloor(pcy)
+    this.lightGrid.flush()
 
     this._streamPlanSeed = null
     this._streamPlanConfig = null
@@ -650,6 +724,9 @@ export class ChunkManager {
   prewarm(px, pz, pcy = 0) {
     this.update(px, pz, pcy)
     while (this.queue.length) this._buildNext()
+    // Light lists and bounce are part of the level: bake them behind the
+    // same overlay instead of letting pools resolve during the first steps.
+    this.lightGrid.flush()
     // prewarm drains outside update()'s per-frame budget; seal the resulting
     // resident set so the first gameplay frame remains a steady-state update.
     this._streamPlanChunkCount = this.chunks.size
@@ -674,17 +751,23 @@ export class ChunkManager {
 
   _chunkVisible(c) {
     const pcy = this._visCy
-    if (c.cy === pcy) return true
+    // The sight flood only speaks for the floor it was computed on; a stale
+    // set (floor handoff, prewarm) keeps everything visible until re-flood.
+    const sc = this.sightCulling?.floor === pcy ? this.sightCulling : null
+    if (c.cy === pcy) return !sc || sc.chunkVisible(c.cx, c.cz)
     const st = this._visStair
     if (st && (c.cy === st.baseCy || c.cy === st.baseCy + 1)) return true
     // Every streamed slice of the same continuous atrium/shaft must render:
     // looking up or down the void can expose walls and bridges many storeys
-    // away. Descriptor validation keeps unrelated far floors gated.
-    if (this._chunkSharesStructure(c, pcy)) return true
+    // away. Descriptor validation keeps unrelated far floors gated. With sight
+    // culling the void itself must be visible from the eye first.
+    if (this._chunkSharesStructure(c, pcy)) return !sc || this._structureSeen(c, sc)
     if (Math.abs(c.cy - pcy) !== 1) return false
     const lowerCy = Math.min(c.cy, pcy)
     for (const a of this.apertures.values()) {
       if (a.lowerCy !== lowerCy) continue
+      // An opening hidden behind walls on this floor exposes nothing.
+      if (sc && !sc.chunkVisible(a.cx, a.cz)) continue
       if (
         Math.abs(a.cx - c.cx) <= APERTURE_VIS_CHUNKS &&
         Math.abs(a.cz - c.cz) <= APERTURE_VIS_CHUNKS
@@ -693,6 +776,14 @@ export class ChunkManager {
       }
     }
     return false
+  }
+
+  // Is any column of this chunk's tall structure visible on the eye's floor?
+  _structureSeen(c, sc) {
+    const structure = chunkStructure(c)
+    const participants = structure?.participants ?? structure?.participantChunks
+    if (!Array.isArray(participants) || !participants.length) return true
+    return participants.some((p) => sc.chunkVisible(p.cx, p.cz))
   }
 
   // --- Queries (thin-wall model) ---
@@ -1047,6 +1138,13 @@ export class ChunkManager {
   // sense), where the wide query was sweeping ~175 chunk keys and ~90 lamps to
   // find the handful within reach.
   lightAt(wx, wz, cy = null) {
+    // Wall-aware path: the same per-cell light lists the renderer shades
+    // with, so a dark room behind a wall reads dark to the AI too. Falls back
+    // to the radius sum while a cell's list is still queued.
+    if (Number.isInteger(cy)) {
+      const grid = this.lightGrid.lightAt(wx, wz, cy)
+      if (grid !== null) return grid
+    }
     const lamps = this.collectLampsNear(wx, wz, (this._litScratch ||= []), cy, LIGHT_RANGE)
     let acc = STALKER_AMBIENT
     const wy = cy === null ? null : layerY(cy)

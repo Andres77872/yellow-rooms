@@ -84,6 +84,8 @@ vi.mock('../../world/ChunkManager.js', () => ({
   ChunkManager: class {
     constructor(_scene, seed) {
       this.seed = seed
+      this.lightGrid = {}
+      this.enableSightCulling = vi.fn()
       this.config = {
         version: WORLD_GEN_VERSION,
         mapFamily: { selected: 'office' },
@@ -209,6 +211,13 @@ vi.mock('../../render/DeferredRenderer.js', () => ({
       this.applyPalette = vi.fn()
       this.applyQuality = vi.fn()
       this.setTiming = vi.fn()
+      this.setLook = vi.fn()
+      this.bindLightGrid = vi.fn()
+      this.setOccluders = vi.fn()
+      this.setVpl = vi.fn()
+      this.familyAlbedo = () => ({ floor: [0.4, 0.4, 0.4], wall: [0.5, 0.5, 0.5], ceiling: [0.5, 0.5, 0.5] })
+      this.panelGlow = 1
+      this.resetAdaptation = vi.fn()
     }
   },
 }))

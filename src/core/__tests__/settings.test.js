@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { Settings, DEFAULTS, SENS_DEFAULT, SENS_MIN, SENS_MAX } from '../Settings.js'
+import { Settings, DEFAULTS, SENS_DEFAULT, SENS_MIN, SENS_MAX, dynamicResEnabled } from '../Settings.js'
+import { AUTO_FALLBACK_PRESET } from '../graphics.js'
 
 const KEY = 'yellowrooms.settings'
 
@@ -111,5 +112,57 @@ describe('Settings', () => {
     expect(s.get('invertY')).toBe(false)
     expect(s.get('volume')).toBe(DEFAULTS.volume)
     expect(saved(store)).toEqual(DEFAULTS)
+  })
+})
+
+// The v1 boot saved its device default preset on every start (it ran the
+// preset setting, which persists the whole store), so a stored v1 preset says
+// nothing about what the player chose unless it differs from that default.
+describe('v1 settings migration', () => {
+  beforeEach(() => vi.unstubAllGlobals())
+
+  it('moves the boot-stamped v1 default preset to auto', () => {
+    expect(AUTO_FALLBACK_PRESET).toBe('high') // node runs as desktop
+    stubStorage({ preset: 'high', shadowQuality: 'high', invertY: true })
+    const s = new Settings()
+    expect(s.get('preset')).toBe('auto')
+    expect(s.get('flashShadowQuality')).toBe('high')
+    expect(s.get('invertY')).toBe(true)
+  })
+
+  it('keeps every v1 preset that was a real choice', () => {
+    for (const preset of ['low', 'medium', 'ultra', 'custom']) {
+      stubStorage({ preset, shadowQuality: 'medium' })
+      expect(new Settings().get('preset'), preset).toBe(preset)
+    }
+  })
+
+  it('never touches a v2 blob, whatever preset it holds', () => {
+    // Every v2 save writes the whole store, flashShadowQuality included.
+    stubStorage({ preset: 'high', flashShadowQuality: 'high' })
+    expect(new Settings().get('preset')).toBe('high')
+  })
+
+  it('runs once: the migrated store saves as v2', () => {
+    const store = stubStorage({ preset: 'high', shadowQuality: 'low' })
+    const s = new Settings()
+    s.set('volume', 0.5)
+    expect(saved(store).preset).toBe('auto')
+    expect('flashShadowQuality' in saved(store)).toBe(true)
+    // The player picks HIGH explicitly afterwards: that choice now sticks.
+    s.set('preset', 'high')
+    expect(new Settings().get('preset')).toBe('high')
+  })
+})
+
+describe('dynamicResEnabled', () => {
+  const store = (preset, dynamicRes) => ({ get: (k) => (k === 'preset' ? preset : dynamicRes) })
+
+  it('is always on for auto, never for cinematic, the toggle otherwise', () => {
+    expect(dynamicResEnabled(store('auto', false))).toBe(true)
+    expect(dynamicResEnabled(store('cinematic', true))).toBe(false)
+    expect(dynamicResEnabled(store('high', false))).toBe(false)
+    expect(dynamicResEnabled(store('high', true))).toBe(true)
+    expect(dynamicResEnabled(store('custom', true))).toBe(true)
   })
 })

@@ -1,10 +1,12 @@
 import {
+  AUTO_FALLBACK_PRESET,
   DEFAULT_PRESET,
   GRAPHICS_PRESETS,
-  PRESET_ORDER,
+  PRESET_CHOICES,
   TIER_ORDER,
   WORLD_DETAIL_ORDER,
 } from './graphics.js'
+import { DEFAULT_LOOK, LOOK_ORDER } from '../render/lookProfile.js'
 
 const KEY = 'yellowrooms.settings'
 
@@ -26,14 +28,25 @@ export const DEFAULTS = {
   bob: true,
   cameraFx: true,
   noise: 'danger',
+  // Visual style (render/lookProfile.js): the semi-realistic physical look,
+  // the liminal-photo and camcorder looks, the classic stylised anime look,
+  // or the neutral reference.
+  look: DEFAULT_LOOK,
+  // Camera motion blur is opt-in (motion sickness); only looks that ask for
+  // it (camcorder) blur even when on.
+  motionBlur: false,
+  // Dynamic resolution: always on for the 'auto' preset, opt-in otherwise
+  // (see dynamicResEnabled).
+  dynamicRes: false,
   outline: true,
   volume: 0.9,
   minimap: true,
   // Graphics: the preset plus the advanced keys it pins (core/graphics.js).
-  // Defaults are the device-tier preset EXPANDED, so a fresh install's
-  // advanced controls show the preset's real values, not blanks.
+  // Fresh installs are 'auto' (classified per device at boot); the advanced
+  // defaults are the pre-classification fallback EXPANDED, so the advanced
+  // controls show real values, not blanks.
   preset: DEFAULT_PRESET,
-  ...GRAPHICS_PRESETS[DEFAULT_PRESET],
+  ...GRAPHICS_PRESETS[AUTO_FALLBACK_PRESET],
 }
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v))
@@ -53,16 +66,29 @@ const COERCE = {
   bob: bool,
   cameraFx: bool,
   noise: oneOf(NOISE_MODES),
+  look: oneOf(LOOK_ORDER),
+  motionBlur: bool,
+  dynamicRes: bool,
   outline: bool,
   minimap: bool,
-  preset: oneOf([...PRESET_ORDER, 'custom']),
+  preset: oneOf(PRESET_CHOICES),
   renderScale: num(0.5, 1),
   worldDetail: oneOf(WORLD_DETAIL_ORDER),
   aoQuality: oneOf(TIER_ORDER),
   shadowQuality: oneOf(TIER_ORDER),
+  flashShadowQuality: oneOf(TIER_ORDER),
   volQuality: oneOf(TIER_ORDER),
   bloom: bool,
   fxaa: bool,
+}
+
+// Whether dynamic resolution runs: always under 'auto' (the auto path relies
+// on it), never under 'cinematic', the DYNAMIC RESOLUTION toggle otherwise.
+// The engine and the settings panel share this one rule, so the checkbox
+// shows what actually runs.
+export function dynamicResEnabled(settings) {
+  const preset = settings.get('preset')
+  return preset !== 'cinematic' && (preset === 'auto' || !!settings.get('dynamicRes'))
 }
 
 // localStorage-backed settings (best-effort; tolerates private mode).
@@ -79,7 +105,28 @@ export class Settings {
       for (const k of Object.keys(DEFAULTS)) {
         if (k in stored) this.data[k] = COERCE[k](stored[k], DEFAULTS[k])
       }
+      // v1 blobs are the ones without flashShadowQuality: every v2 save
+      // writes the whole store, that key included.
+      if (!('flashShadowQuality' in stored)) {
+        // v1 had one shadow tier for both the world and the torch: the
+        // flashlight setting starts where the player's shadow tier was.
+        if ('shadowQuality' in stored) {
+          this.data.flashShadowQuality = COERCE.flashShadowQuality(stored.shadowQuality, DEFAULTS.flashShadowQuality)
+        }
+        // The v1 boot applied, and so saved, its device default preset
+        // ('high' on desktop, 'medium' on touch: AUTO_FALLBACK_PRESET) on
+        // every start, so a stored v1 preset equal to it was stamped, not
+        // chosen. It becomes 'auto' (GPU class, benchmark, dynamic
+        // resolution). 'custom' and every other preset were real choices and
+        // stay. A player who really picked the default cannot be told apart;
+        // on a GPU that runs it, 'auto' resolves to that same preset, and
+        // picking it again saves a v2 blob that is never migrated again.
+        if (this.data.preset === AUTO_FALLBACK_PRESET) this.data.preset = 'auto'
+      }
     }
+    // Fresh = nothing stored yet: the engine may classify the device and
+    // choose the 'auto' preset's concrete tiers.
+    this.fresh = !stored || typeof stored !== 'object'
   }
 
   get(k) {

@@ -55,10 +55,21 @@ if (!hasWebGL2()) {
     window.__game = engine
   } catch (err) {
     console.error('[yellow-rooms] engine failed to boot:', err)
-    showFatal(
-      '「描画不能」',
-      'RENDER FAILURE',
-      'The renderer failed to start on this GPU.<br/>Update your graphics drivers or try another browser.'
-    )
+    if (err?.name === 'DeferredUnsupportedError') {
+      // capabilities.js: the GPU cannot allocate the deferred G-buffer
+      // (float colour attachments / multiple render targets).
+      showFatal(
+        '「描画不能」',
+        'RENDER FAILURE',
+        'This GPU cannot allocate the renderer\'s floating-point render targets.<br/>' +
+          'Update your graphics drivers, enable hardware acceleration, or try another browser.'
+      )
+    } else {
+      showFatal(
+        '「描画不能」',
+        'RENDER FAILURE',
+        'The renderer failed to start on this GPU.<br/>Update your graphics drivers or try another browser.'
+      )
+    }
   }
 }
