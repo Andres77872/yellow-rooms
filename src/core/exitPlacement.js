@@ -1,9 +1,7 @@
 import { CELL, CHUNK, CHUNK_WORLD, layerY } from '../world/constants.js'
 import { RNG } from '../world/core/rng.js'
 import { generateChunk } from '../world/generate.js'
-import { MAP_FAMILY_SEWER } from '../world/mapTypes.js'
-import { chunkMultilevelRooms } from '../world/structures/multilevel.js'
-import { chunkStairs, stairStrip } from '../world/structures/slab.js'
+import { stairStrip } from '../world/structures/slab.js'
 
 export const EXIT_FLOORS = Object.freeze([-5, -4, -3, -2, -1, 1, 2, 3, 4, 5])
 export const EXIT_REACH = 1.8
@@ -21,68 +19,59 @@ export function createExitPlacement(seedText, level, worldSeed, config) {
   const dist = r.int(6, 11)
   const ang = r.next() * Math.PI * 2
   let cx = Math.round(Math.cos(ang) * dist)
-  const cz = Math.round(Math.sin(ang) * dist)
+  let cz = Math.round(Math.sin(ang) * dist)
   if (Math.abs(cx) < 2 && Math.abs(cz) < 2) cx += 5
   let lx = r.int(3, CHUNK - 4)
   let lz = r.int(3, CHUNK - 4)
   const cy = r.pick(EXIT_FLOORS)
 
-  // Keep the clearing away from both stair strips touching the objective floor.
-  // A multilevel room can also remove the upper floor beneath a candidate, so
-  // reject its canonical void cells before stamping the anomaly.
-  const { up, down } = chunkStairs(worldSeed, cx, cz, cy, config)
-  const strips = []
-  if (up.hasStair) strips.push(...stairStrip(up))
-  if (down.hasStair) strips.push(...stairStrip(down))
-  const room = chunkMultilevelRooms(worldSeed, cx, cz, cy, config).down
-  const voids = new Set(
-    room.hasRoom ? room.voidCells.map((cell) => `${cell.lx},${cell.lz}`) : []
-  )
-  // Sewer chunks are mostly solid ground: the exit clearing must open into the
-  // gallery network, not punch an isolated pocket into sealed mass. Generating
-  // the host chunk once here is pure and deterministic, so the raster check
-  // cannot drift from what the streamed chunk will contain.
-  const sewerHost = config.mapFamily?.selected === MAP_FAMILY_SEWER
-    ? generateChunk(worldSeed, cx, cy, cz, config)
-    : null
-  const clearOf = (x, z, margin) =>
-    !voids.has(`${x},${z}`) &&
-    (!sewerHost || sewerHost.colAt(x, z) === 0) &&
-    strips.every((cell) => Math.max(Math.abs(cell.lx - x), Math.abs(cell.lz - z)) > margin)
+  // Query the actual family raster once per candidate host. Generic office
+  // slab contracts omit forced sewer risers and family-owned tower/lattice
+  // stairs; generic multilevel rooms likewise cannot describe their voids.
+  const host = generateChunk(worldSeed, cx, cy, cz, config)
+  const findCell = (data) => {
+    const strips = [data.stairUp, data.stairDown].filter(Boolean).flatMap(stairStrip)
+    const clearOf = (x, z, margin) =>
+      !data.hasFloorHole(x, z) && data.colAt(x, z) === 0 &&
+      strips.every((cell) => Math.max(Math.abs(cell.lx - x), Math.abs(cell.lz - z)) > margin)
+    // Retain the seeded interior search first. Sparse catwalks may only offer
+    // a narrow platform near a chunk edge, so relax the window and guard
+    // clearance in a fixed order while always staying off the stair itself.
+    for (const [inset, margin] of [[3, 2], [3, 1], [1, 1], [1, 0], [0, 0]]) {
+      const span = CHUNK - inset * 2
+      const start = (lz - inset) * span + lx - inset
+      for (let i = 0; i < span * span; i++) {
+        const j = (start + i) % (span * span)
+        const x = inset + (j % span)
+        const z = inset + ((j / span) | 0)
+        if (clearOf(x, z, margin)) return { lx: x, lz: z }
+      }
+    }
+    return null
+  }
 
-  // Margin 2 is preferred; margin 1 is guaranteed to leave a legal interior
-  // cell even when this layer owns both an up- and a down-stair.
-  const span = CHUNK - 6
-  let placed = false
-  search: for (const margin of [2, 1]) {
-    const start = (lz - 3) * span + (lx - 3)
-    for (let i = 0; i < span * span; i++) {
-      const j = (start + i) % (span * span)
-      const x = 3 + (j % span)
-      const z = 3 + ((j / span) | 0)
-      if (clearOf(x, z, margin)) {
-        lx = x
-        lz = z
-        placed = true
-        break search
+  let cell = findCell(host)
+  if (!cell) {
+    // Some elevated lattice slices are entirely void. Their immutable
+    // structure already identifies a finite connected platform network;
+    // choose its nearest viable participant on the SAME objective floor.
+    const participants = (host.structure?.participants ?? [])
+      .filter((p) => p.cx !== cx || p.cz !== cz)
+      .sort((a, b) =>
+        Math.abs(a.cx - cx) + Math.abs(a.cz - cz) -
+        Math.abs(b.cx - cx) - Math.abs(b.cz - cz) || a.cz - b.cz || a.cx - b.cx)
+    for (const participant of participants) {
+      cell = findCell(generateChunk(worldSeed, participant.cx, cy, participant.cz, config))
+      if (cell) {
+        cx = participant.cx
+        cz = participant.cz
+        break
       }
     }
   }
-  // Sewer last resort: a rare seed can keep the whole gallery network out of
-  // the preferred window. Any network cell off the strips still beats an exit
-  // sealed inside solid mass, and the trunk always crosses this range.
-  if (!placed && sewerHost) {
-    const wide = CHUNK - 2
-    relaxed: for (let i = 0; i < wide * wide; i++) {
-      const x = 1 + (i % wide)
-      const z = 1 + ((i / wide) | 0)
-      if (clearOf(x, z, 0)) {
-        lx = x
-        lz = z
-        break relaxed
-      }
-    }
-  }
+  if (!cell) throw new Error('Unable to place exit on a safe family floor')
+  lx = cell.lx
+  lz = cell.lz
 
   return {
     cx,

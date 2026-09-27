@@ -125,8 +125,13 @@ describe('multi-chunk office district plan', () => {
       }
       expect(plan.metrics.corridorCoverage).toBeGreaterThanOrEqual(0.1)
       // A reserved tall structure may contribute its wide lower hall or
-      // gallery ring to circulation before room allocation.
-      expect(plan.metrics.corridorCoverage).toBeLessThanOrEqual(0.38)
+      // gallery ring to circulation before room allocation; v26 catalog
+      // volumes reserve their whole footprint + ring on top of that bound.
+      const catalogCells = new Set(plan.multilevelLobbies
+        .filter((lobby) => lobby.kind === 'catalog')
+        .flatMap((lobby) => lobby.cells)).size
+      const active = plan.active.reduce((sum, v) => sum + v, 0)
+      expect(plan.metrics.corridorCoverage - catalogCells / active).toBeLessThanOrEqual(0.38)
       expect(plan.metrics.wallFraction).toBeGreaterThanOrEqual(0.15)
       expect(plan.metrics.wallFraction).toBeLessThanOrEqual(0.27)
       expect(plan.metrics.rooms).toBeGreaterThan(30)

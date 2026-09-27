@@ -5,6 +5,10 @@ import {
   LAMP_BAD_CHANCE,
   LAMP_BAD_LO,
   LAMP_BAD_RATE,
+  LAMP_SAFE_BAD_LO,
+  LAMP_SAFE_BAD_RATE,
+  LAMP_SAFE_DIP,
+  LAMP_SAFE_HUM_SCALE,
   LAMP_TINT_VAR,
 } from './constants.js'
 import {
@@ -53,21 +57,53 @@ export function isBadTube(wx, wz, cy) {
   return hash3f(SALT_BAD, kx(wx), kz(wz), cy | 0) < LAMP_BAD_CHANCE
 }
 
+// How hard the lights may flicker. FULL is the authored look: bad tubes buzz
+// at ~9 Hz between 20% and 100%, and the whole ceiling dips to 40% on a
+// dead-tube event. SAFE (Settings 'reduceFlicker', the default) keeps every
+// source under the WCAG 2.3.1 flash limits — see LAMP_SAFE_* in constants.js.
+// badRate/badLo drive lampFlicker and the GPU twin (grid.js gFlicker, via the
+// uBadStrobe uniform); humScale/dip drive tubeHum.
+export const FLICKER_FULL = Object.freeze({
+  badRate: LAMP_BAD_RATE,
+  badLo: LAMP_BAD_LO,
+  humScale: 1,
+  dip: 0.4,
+})
+export const FLICKER_SAFE = Object.freeze({
+  badRate: LAMP_SAFE_BAD_RATE,
+  badLo: LAMP_SAFE_BAD_LO,
+  humScale: LAMP_SAFE_HUM_SCALE,
+  dip: LAMP_SAFE_DIP,
+})
+export const flickerProfile = (reduce) => (reduce ? FLICKER_SAFE : FLICKER_FULL)
+
 // Cast-light brightness multiplier for this fixture at time t (seconds).
 // Healthy tubes: a slow individual breathing ripple that only ever DIPS from
-// full. Bad tubes: a stepped erratic buzz, biased toward the dim floor.
-export function lampFlicker(wx, wz, cy, t) {
+// full. Bad tubes: a stepped erratic buzz, biased toward the dim floor. The
+// profile defaults to SAFE so a caller that forgets it cannot strobe.
+export function lampFlicker(wx, wz, cy, t, profile = FLICKER_SAFE) {
   const x = kx(wx)
   const z = kz(wz)
   const layer = cy | 0
   if (isBadTube(wx, wz, cy)) {
-    const step = Math.floor(t * LAMP_BAD_RATE)
+    const lo = profile.badLo
+    const step = Math.floor(t * profile.badRate)
     const n = hash3f(SALT_BUZZ ^ (step | 0), x, z, layer)
-    return LAMP_BAD_LO + (1 - LAMP_BAD_LO) * n * n
+    return lo + (1 - lo) * n * n
   }
   const phase = hash3f(SALT_PHASE, x, z, layer) * Math.PI * 2
   const speed = 13 + hash3f(SALT_SPEED, x, z, layer) * 11 // 13..24 rad/s, per tube
   return 1 - LAMP_FLICKER_AMP * (0.5 + 0.5 * Math.sin(t * speed + phase))
+}
+
+// The hum every lit panel shares (Engine._updateFlicker): a gentle ~2.9 Hz
+// ripple plus a faint ~6.8 Hz buzz around 0.92, times the dead-tube dip while
+// one runs. It is the tubes' emissive level and, as 0.6 + 0.4 * hum, the cast
+// light's. FULL swings 0.85..0.99 and dips to 40%; SAFE halves the ripple
+// (under a 10% swing) and turns the dip into an 8% sag.
+export function tubeHum(t, dipping, profile = FLICKER_SAFE) {
+  const f = 0.92 + (Math.sin(t * 18) * 0.05 + Math.sin(t * 43) * 0.02) * profile.humScale
+  return dipping ? f * profile.dip : f
 }
 
 // Semantic room roles finally reach the lighting rhythm (the "natural next

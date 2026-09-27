@@ -38,6 +38,7 @@ import { mergeEnemy } from './enemyMerge.js'
 import { DeferredRenderer } from '../render/DeferredRenderer.js'
 import { DeferredUnsupportedError, probeDeferredSupport } from '../render/capabilities.js'
 import { LightField } from '../render/LightField.js'
+import { FLICKER_SAFE, flickerProfile, tubeHum } from '../world/lampCharacter.js'
 import { TorchBounce } from '../render/torchBounce.js'
 import { DynamicResolution, drsCeiling } from '../render/DynamicResolution.js'
 import { PLAYER_CAPSULE, capsuleBound, capsuleSet, transformCapsules } from '../render/enemyOccluders.js'
@@ -223,6 +224,9 @@ export class Engine {
     // cell-graph bounce become the renderer's GPU light source.
     this.deferred.bindLightGrid(this.cm.lightGrid)
     this.lightField = new LightField(this.deferred.lamps)
+    // Tube-flicker profile (reduceFlicker setting): safe until
+    // _applyAllSettings pushes the stored choice (_setFlickerProfile).
+    this._flicker = FLICKER_SAFE
     // Enemy capsules for the analytic soft shadows and capsule AO (packed
     // for DeferredRenderer.setOccluders; reused every tick).
     this._caps = new Float32Array(CAPSULE_MAX * 8)
@@ -542,6 +546,9 @@ export class Engine {
 
   resumeFromCapture() {
     this.captureFrozen = false
+    // A replay may have pinned the capture's flicker profile (runtime only);
+    // live play goes back to the player's setting.
+    this._setFlickerProfile(this.settings.get('reduceFlicker'))
   }
 
   _listen(target, type, listener) {
@@ -640,6 +647,7 @@ export class Engine {
       }
     }
     else if (k === 'minimap') this.minimap.setVisible(v)
+    else if (k === 'reduceFlicker') this._setFlickerProfile(v)
     else if (k === 'preset') {
       // A named preset pins every advanced graphics key; 'custom' pins nothing
       // (the stored advanced values already ARE the truth); 'auto' pins the
@@ -648,6 +656,18 @@ export class Engine {
       if (name) this.settings.setMany(GRAPHICS_PRESETS[name])
       this._applyGraphics()
     } else if (GRAPHICS_KEYS.includes(k)) this._applyGraphics()
+  }
+
+  // Photosensitivity: one profile drives every tube-flicker source — the
+  // global hum and dead-tube dip (_updateFlicker), the per-fixture cast light
+  // on the CPU (LightField -> lampFlicker) and on the GPU (grid gFlicker via
+  // the renderer's uBadStrobe). Not persisted here: capture replay pins a
+  // capture's profile through this without touching the player's setting.
+  _setFlickerProfile(reduce) {
+    const profile = flickerProfile(reduce !== false)
+    this._flicker = profile
+    this.lightField.flicker = profile
+    this.deferred.setFlickerProfile?.(profile)
   }
 
   // Re-resolve the stored graphics settings and push them into the renderer:
@@ -1126,19 +1146,19 @@ export class Engine {
   }
 
   _updateFlicker(dt) {
-    // Fluorescent hum: a gentle slow ripple + a faint faster buzz; `f` is the tube's
-    // own emissive brightness (feeds the panel albedo + selective bloom).
-    let f = 0.92 + Math.sin(this._time * 18) * 0.05 + Math.sin(this._time * 43) * 0.02
+    // Fluorescent hum (lampCharacter.tubeHum): a gentle slow ripple + a faint
+    // faster buzz; `f` is the tube's own emissive brightness (feeds the panel
+    // albedo + selective bloom). The flicker profile (reduceFlicker setting)
+    // scales the ripple and the dead-tube dip depth.
     this._dipT -= dt
     if (this._dipT <= 0) {
       this._dipActive = 0.12
       this._dipT = 4 + Math.random() * 9
       this.audio.flickerDrop()
     }
-    if (this._dipActive > 0) {
-      this._dipActive -= dt
-      f *= 0.4
-    }
+    const dipping = this._dipActive > 0
+    if (dipping) this._dipActive -= dt
+    const f = tubeHum(this._time, dipping, this._flicker)
     // PANEL_GLOW pushes the tube emissive into HDR (>1) so the tone map rolls
     // the core toward white and the selective bloom halos it — the fixture
     // reads as a light SOURCE instead of blending into the lit ceiling.

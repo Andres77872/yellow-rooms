@@ -5,8 +5,6 @@ import {
   COL_HALF,
   DOOR_H,
   FRAME_W,
-  LAMP_BAD_LO,
-  LAMP_BAD_RATE,
   LAMP_FLICKER_AMP,
   LAYER_H,
   MONUMENTAL_COL_HALF,
@@ -80,6 +78,7 @@ export const GRID_UNIFORMS_GLSL = /* glsl */ `
   uniform sampler2D tGridGI;
   uniform highp usampler2D tGridOcc;
   uniform float uTime;
+  uniform vec2 uBadStrobe;       // bad-tube strobe: x = steps per second, y = brightness floor
   uniform float uSourceY;        // fixture light/shadow height above the storey floor
   uniform float uPenumbraScale;  // look: x panel size for every soft shadow
 `
@@ -386,14 +385,16 @@ export const GRID_GLSL = /* glsl */ `
   }
 
   // GPU twin of lampCharacter.lampFlicker: the identity byte carries the
-  // bad-tube bit and a phase id; speed and phase derive from it.
+  // bad-tube bit and a phase id; speed and phase derive from it. The bad-tube
+  // rate and floor are a uniform, not baked constants, so the reduceFlicker
+  // setting (photosensitivity) retunes them without a shader rebuild.
   float gFlicker(int fb, ivec3 cell){
     float pid = float(fb & 127);
     if (fb >= 128){
-      uint stepT = uint(floor(uTime * ${glslFloat(LAMP_BAD_RATE)}));
+      uint stepT = uint(floor(uTime * uBadStrobe.x));
       uint h = gPcg(uint(cell.x) * 73856093u ^ uint(cell.y) * 19349663u ^ uint(cell.z) * 83492791u ^ stepT * 2654435761u);
       float n = float(h & 65535u) / 65535.0;
-      return ${glslFloat(LAMP_BAD_LO)} + ${glslFloat(1 - LAMP_BAD_LO)} * n * n;
+      return uBadStrobe.y + (1.0 - uBadStrobe.y) * n * n;
     }
     float phase = pid / 127.0 * 6.2831853;
     float speed = 13.0 + fract(pid * 0.61803398875) * 11.0;

@@ -27,6 +27,7 @@ function fakeEngine() {
     startRun: vi.fn(),
     _setupLevel: vi.fn(),
     _applySetting: vi.fn((k, v) => settings.set(k, v)),
+    _setFlickerProfile: vi.fn(),
     _updateCameraMatrices: vi.fn(),
     _refreshLamps: vi.fn(),
   }
@@ -62,6 +63,25 @@ describe('deterministic capture descriptor', () => {
     expect(e.deferred.lightUniforms.uFlashOn.value).toBe(1)
     expect(e._time).toBe(12.5)
     expect(e.captureFrozen).toBe(true)
+  })
+
+  // The flicker profile decides a bad tube's brightness at the pinned time,
+  // so it travels with the capture — but replay applies it at runtime only,
+  // never through _applySetting (which would persist over the player's
+  // photosensitivity choice).
+  it('records the flicker profile and replays it without persisting it', () => {
+    const e = fakeEngine()
+    const desc = captureState(e)
+    expect(desc.reduceFlicker).toBe(true) // unset store: the safe default
+    desc.reduceFlicker = false
+    applyCapture(e, desc)
+    expect(e._setFlickerProfile).toHaveBeenCalledWith(false)
+    expect(e._applySetting).not.toHaveBeenCalledWith('reduceFlicker', expect.anything())
+    const old = captureState(fakeEngine())
+    delete old.reduceFlicker // predates the field: keep the current profile
+    const e2 = fakeEngine()
+    applyCapture(e2, old)
+    expect(e2._setFlickerProfile).not.toHaveBeenCalled()
   })
 
   it('rebuilds the world when seed, family or level differ', () => {

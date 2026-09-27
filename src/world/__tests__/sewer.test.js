@@ -1,3 +1,4 @@
+import { isCatalogStructure } from '../structures/catalog/engine.js'
 import { describe, expect, it } from 'vitest'
 import { CHUNK } from '../constants.js'
 import * as sewer from '../zones/sewer.js'
@@ -7,6 +8,7 @@ import { worldConfigForFamily } from '../mapFamily.js'
 import { PASSAGE_OPEN, PASSAGE_WALL } from '../mapTypes.js'
 import { placeLights } from '../lamps.js'
 import { countChunkComponents } from '../topology.js'
+import { buildChunk } from '../pipeline.js'
 
 const ALLOWED_MODULE_KINDS = Object.freeze([
   't',
@@ -454,5 +456,155 @@ describe('deterministic sewer content, lighting, and turn policy', () => {
     expect(baseline).toEqual([])
     expect(descriptorContractReasons(descriptor, profile, { observedRightTurnRate: 0 })).toEqual(baseline)
     expect(descriptorContractReasons(descriptor, profile, { observedRightTurnRate: 1 })).toEqual(baseline)
+  })
+})
+
+function expectOpenStep(data, a, b) {
+  expect(Math.abs(a.lx - b.lx) + Math.abs(a.lz - b.lz)).toBe(1)
+  expect(a.lx === b.lx
+    ? data.hAt(a.lx, Math.max(a.lz, b.lz))
+    : data.vAt(Math.max(a.lx, b.lx), a.lz)).toBe(0)
+}
+
+function expectBuiltArchitecture(data) {
+  const descriptor = data.sewerDescriptor
+  const gallery = descriptor.structures.find(({ kind }) => kind === 'interceptorGallery')
+  const collector = descriptor.structures.find(({ kind }) => kind === 'collector')
+  const bypass = descriptor.structures.find(({ kind }) => kind === 'bulkheadBypass')
+
+  if (descriptor.layout === 'interceptor') {
+    expect(gallery).toBeDefined()
+    const { bounds } = gallery
+    const width = bounds.x1 - bounds.x0 + 1
+    const depth = bounds.z1 - bounds.z0 + 1
+    expect(Math.min(width, depth)).toBe(2)
+    expect(Math.max(width, depth)).toBeGreaterThanOrEqual(4)
+    // A gallery is one open volume; its wall grid cannot remain a row of
+    // little rooms while the descriptor merely announces a larger chamber.
+    for (let z = bounds.z0; z <= bounds.z1; z++) {
+      for (let x = bounds.x0; x <= bounds.x1; x++) {
+        expect(data.hasFloorHole(x, z)).toBe(false)
+        if (x < bounds.x1) expect(data.vAt(x + 1, z)).toBe(0)
+        if (z < bounds.z1) expect(data.hAt(x, z + 1)).toBe(0)
+      }
+    }
+  } else if (descriptor.layout === 'confluence') {
+    expect(collector).toBeDefined()
+    expect(collector.cells).toHaveLength(CHUNK)
+    const horizontal = collector.cells[0].lz === collector.cells.at(-1).lz
+    expect(horizontal
+      ? [collector.cells[0].lx, collector.cells.at(-1).lx]
+      : [collector.cells[0].lz, collector.cells.at(-1).lz]).toEqual([0, CHUNK - 1])
+    expect(descriptor.modules.slice(0, descriptor.trunkCount))
+      .toContainEqual(expect.objectContaining(collector.junction))
+    for (const cell of collector.cells) {
+      expect(data.colAt(cell.lx, cell.lz)).toBe(0)
+      expect(data.hasFloorHole(cell.lx, cell.lz)).toBe(false)
+    }
+    for (let i = 1; i < collector.cells.length; i++) {
+      expectOpenStep(data, collector.cells[i - 1], collector.cells[i])
+    }
+  } else {
+    expect(descriptor.layout).toBe('bypass')
+    expect(bypass).toBeDefined()
+    expect(bypass.cells.length).toBeGreaterThanOrEqual(8)
+    expect(descriptor.loopEdges).toContainEqual(bypass.loopEdge)
+    for (let z = bypass.core.z0; z <= bypass.core.z1; z++) {
+      for (let x = bypass.core.x0; x <= bypass.core.x1; x++) {
+        expect(data.colAt(x, z), 'the bypass surrounds solid mass').not.toBe(0)
+      }
+    }
+    for (let i = 0; i < bypass.cells.length; i++) {
+      const cell = bypass.cells[i]
+      expect(data.colAt(cell.lx, cell.lz)).toBe(0)
+      expect(data.hasFloorHole(cell.lx, cell.lz)).toBe(false)
+      expectOpenStep(data, cell, bypass.cells[(i + 1) % bypass.cells.length])
+    }
+  }
+}
+
+describe('sewer architectural grammars', () => {
+  it('builds different gallery, confluence, and bulkhead-bypass geometry across seeds', async () => {
+    const layouts = new Set()
+    for (const { data, descriptor } of await fixedCorpus()) {
+      layouts.add(descriptor.layout)
+      expectBuiltArchitecture(data)
+    }
+    expect([...layouts].sort()).toEqual([...sewer.SEWER_LAYOUTS].sort())
+  })
+
+  it('keeps structural routes and every usable floor connected after stairs, furnishing, and spawn carving', () => {
+    const { config } = sewerConfig()
+    const layouts = new Set()
+    for (let seed = 0; seed < 96; seed++) {
+      const origin = seed % 4 === 0
+      const coords = origin ? [0, 0, 0] : [seed % 9 - 4, seed % 5 - 2, seed % 11 - 5]
+      const clearings = origin ? [{ lx: CHUNK / 2, lz: CHUNK / 2, r: 1 }] : null
+      const data = buildChunk(seed, ...coords, config, null, clearings)
+      layouts.add(data.sewerDescriptor.layout)
+      // v26: a catalog volume (drop shaft, cistern, stepwell…) may overlay the
+      // module plan; its own contract keeps the chunk one component.
+      if (isCatalogStructure(data.structure)) {
+        expect(countChunkComponents(data, true), `seed ${seed} catalog chunk`).toBe(1)
+        expect(data.repairs).toEqual({ connectivity: 0, navigation: 0, columns: 0 })
+        continue
+      }
+      expectBuiltArchitecture(data)
+      for (const edge of data.sewerDescriptor.loopEdges) {
+        expectOpenStep(data, data.sewerDescriptor.modules[edge.a], data.sewerDescriptor.modules[edge.b])
+      }
+      const reachable = reachableCells(data, data.sewerDescriptor.trunkRoot)
+      for (let z = 0; z < CHUNK; z++) {
+        for (let x = 0; x < CHUNK; x++) {
+          if (data.colAt(x, z) || data.hasFloorHole(x, z)) continue
+          expect(reachable.has(`${x},${z}`), `seed ${seed}, usable floor ${x},${z}`).toBe(true)
+        }
+      }
+      expect(data.repairs).toEqual({ connectivity: 0, navigation: 0, columns: 0 })
+    }
+    expect([...layouts].sort()).toEqual([...sewer.SEWER_LAYOUTS].sort())
+  })
+
+  it('respects a zero loop budget without emitting a false bypass', () => {
+    const { config } = sewerConfig()
+    config.mapFamily.profiles.sewer.maxLoops = 0
+    for (let seed = 0; seed < 36; seed++) {
+      const data = buildChunk(seed, 2, 0, -3, config)
+      expect(data.sewerDescriptor.loopEdges).toEqual([])
+      expect(data.sewerDescriptor.layout).not.toBe('bypass')
+      if (!isCatalogStructure(data.structure)) expectBuiltArchitecture(data)
+      expect(countChunkComponents(data, true)).toBe(1)
+    }
+  })
+
+  it('preserves open seam mouths and reciprocal risers between different neighboring grammars', () => {
+    const { config } = sewerConfig()
+    const neighbors = new Set()
+    for (let seed = 0; seed < 24; seed++) {
+      const cx = seed % 5 - 2
+      const cy = seed % 3 - 1
+      const cz = seed % 7 - 3
+      const center = buildChunk(seed, cx, cy, cz, config)
+      const east = buildChunk(seed, cx + 1, cy, cz, config)
+      const south = buildChunk(seed, cx, cy, cz + 1, config)
+      const above = buildChunk(seed, cx, cy + 1, cz, config)
+      expect(center.stairUp).toEqual(above.stairDown)
+      for (const neighbor of [east, south]) {
+        neighbors.add([center.sewerDescriptor.layout, neighbor.sewerDescriptor.layout].sort().join('/'))
+      }
+      for (let cell = 0; cell < CHUNK; cell++) {
+        if (!east.vAt(0, cell)) {
+          expect(center.colAt(CHUNK - 1, cell)).toBe(0)
+          expect(east.colAt(0, cell)).toBe(0)
+        }
+        if (!south.hAt(cell, 0)) {
+          expect(center.colAt(cell, CHUNK - 1)).toBe(0)
+          expect(south.colAt(cell, 0)).toBe(0)
+        }
+      }
+    }
+    expect(neighbors.has('bypass/confluence')).toBe(true)
+    expect(neighbors.has('bypass/interceptor')).toBe(true)
+    expect(neighbors.has('confluence/interceptor')).toBe(true)
   })
 })

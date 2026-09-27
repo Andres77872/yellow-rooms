@@ -1,4 +1,4 @@
-import { section, readout } from './widgets.js'
+import { applyTip, section, readout } from './widgets.js'
 
 const SAMPLES = 120 // ~2s of frame times at 60fps
 const PW = 300
@@ -37,6 +37,11 @@ export class PerfTool {
     const cv = document.createElement('canvas')
     cv.className = 'dbg-canvas'
     cv.style.cursor = 'default'
+    cv.setAttribute('aria-label', 'frame time graph')
+    applyTip(cv, {
+      title: 'Frame time',
+      text: 'Last 120 frames (~2 s), oldest on the left, 0-50 ms tall; the guide lines mark 60 fps (16.7 ms) and 30 fps (33.3 ms). Spikes are hitches.',
+    })
     const dpr = Math.min(window.devicePixelRatio || 1, 2)
     cv.width = PW * dpr
     cv.height = PH * dpr

@@ -428,11 +428,10 @@ export const FAMILY_ROOM_CATALOGS = Object.freeze({
   // Sewer has no office-fabric rooms at all (its chambers are landmarks of
   // the module grammar, furnished from SEWER_CHAMBER_CATALOG below — never
   // through district election), so its election catalog stays explicitly
-  // empty. Lattice decks are bare by design, but the office shell AROUND the
-  // structure (every floor outside the structure's vertical band) is real
-  // fabric: it elects a sparse maintenance mix — stores, a control room, an
-  // archive — so off-band floors read as the building the lattice was cut
-  // from, not as sterile leftovers.
+  // empty. Lattice decks are bare by design, but the utility blocks around
+  // and outside the structure's vertical band elect a sparse maintenance
+  // mix — stores, a control room, an archive — within their own service-alley
+  // grammar.
   [MAP_FAMILY_SEWER]: deepFreeze({ quotas: {}, election: { large: [], mid: [], small: [] } }),
   // The hotel floor: a residence, not an institution. Bedrooms are the
   // dominant named room — most mid rooms behind most doors ARE guest rooms —
@@ -469,6 +468,10 @@ export const FAMILY_ROOM_CATALOGS = Object.freeze({
         { role: SPACE_ROLE_LAUNDRY, window: 0.58, wallFree: 1 },
         { role: SPACE_ROLE_STORAGE, window: 0.64, wallFree: 1 },
         { role: SPACE_ROLE_DINING, window: 0.7, wallFree: 0 },
+        // v26 guest wings are tight (2–3-cell bays): the lobby lounge may be
+        // a mid-size room when a district has no suite-scale room left.
+        { role: SPACE_ROLE_LOUNGE, window: 0.76, wallFree: 1 },
+        { role: SPACE_ROLE_LIVING, window: 0.8, wallFree: 2 },
       ],
       small: [
         { role: SPACE_ROLE_BATHROOM, window: 0.18, wallFree: 2 },

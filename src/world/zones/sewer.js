@@ -32,10 +32,12 @@ export const id = ZONE_SEWER
 export const SEWER_DESCRIPTOR_KIND = MAP_FAMILY_SEWER
 export const SEWER_RIGHT_TURN_CHANCE = 0.65
 
-// Sewer v2 — a gallery network carved out of solid ground instead of the old
-// cell-filling comb. Real drainage is trunk-and-branch with landmark chambers
-// at junctions (docs/.dev dossier: Yang 2017, Haghighi 2013, ASCE MOP 60), so
-// the chunk is built the same way:
+// Sewer infrastructure is carved out of solid ground. Interceptors, connection
+// tunnels, and chambers form different spatial scales in the Tideway network;
+// the preserved Crossness complex adds long engine/valve halls. Those building
+// types inform three dry, traversable grammars here: a narrow interceptor with
+// an elongated gallery, intersecting collectors, and a maintenance bypass
+// around a solid bulkhead. The details are architecture, not placed props.
 //
 //   trunk    — one full-span straight gallery (the engineered spine; it keeps
 //              the chunk crossable and orients the player),
@@ -43,8 +45,10 @@ export const SEWER_RIGHT_TURN_CHANCE = 0.65
 //              strip + 1-cell halo carved as a lobby, connected to the trunk,
 //              with the manholeUp/Down module labels ON the actual riser cells
 //              (the labels used to be decoupled from the geometry),
-//   chambers — one 3×3 and one 2×2 prescribed room (Pittman's seeded-rooms
-//              rule): the landmarks the wayfinding research asks for,
+//   chambers — a long interceptor gallery or a 3×3 junction chamber plus a
+//              2×2 service chamber, giving different scales and landmarks,
+//   routes   — selected chunks add an orthogonal collector or a closed
+//              maintenance bypass around a reserved solid bulkhead,
 //   branches — a few short dead-end service tunnels with a per-branch
 //              right-turn bias (profile.rightTurnChance),
 //   mouths   — every open border-seam cell is routed into the network, so
@@ -65,6 +69,9 @@ const SEWER_SALTS = Object.freeze({
   chamberSmall: 0x5e21,
   chamberLarge: 0x5e22,
   chamberSpace: 0x5e24,
+  layout: 0x5e25,
+  collectorLine: 0x5e26,
+  bypass: 0x5e27,
   branchSlot: 0x5e30,
   branchLen: 0x5e40,
   branchElbow: 0x5e50,
@@ -80,6 +87,10 @@ export const SEWER_REGION_CHAMBER = 'chamber'
 export const SEWER_REGION_POCKET = 'pocket'
 export const SEWER_REGION_BRANCH = 'branch'
 export const SEWER_REGION_LINK = 'link'
+export const SEWER_REGION_COLLECTOR = 'collector'
+export const SEWER_REGION_BYPASS = 'bypass'
+
+export const SEWER_LAYOUTS = Object.freeze(['interceptor', 'confluence', 'bypass'])
 
 // Descriptor graph identity is shared by planning, pipeline validation, and
 // family auditing. Edges always address zero-based module indexes.
@@ -187,11 +198,13 @@ class SewerNetwork {
   }
 
   has(lx, lz) {
-    return this.indexByPos.has(posKey(lx, lz))
+    return inChunk(lx, lz) && this.indexByPos.has(posKey(lx, lz))
   }
 
   indexAt(lx, lz) {
-    return this.indexByPos.get(posKey(lx, lz))
+    // Border adjacency queries must not wrap x=CHUNK onto x=0 of the next
+    // row and manufacture a non-local loop through the row-major index.
+    return inChunk(lx, lz) ? this.indexByPos.get(posKey(lx, lz)) : undefined
   }
 
   add(lx, lz, dir, parentIndex, region) {
@@ -363,39 +376,167 @@ function carveTrunk(net, seed, ctx, heading, blockedLines) {
   return trunkLine
 }
 
-// Prescribed landmark chambers (Pittman's seeded-rooms rule): pick a clear
-// rect, corridor it to the network, then open it as a room.
-function carveChamber(net, seed, ctx, size, salt, region) {
+// Prefer the grammar's long gallery or chamber proportions, falling back only
+// when the two canonical manhole pockets leave no clear footprint. Every
+// candidate is checked before any carving so a rejected shape consumes no RNG
+// or topology and cannot strand part of a chamber.
+function carveChamber(net, seed, ctx, shapes, salt, region) {
   const { cx, cy, cz } = ctx
-  const candidates = []
-  for (let z0 = 1; z0 + size - 1 <= CHUNK - 2; z0++) {
-    for (let x0 = 1; x0 + size - 1 <= CHUNK - 2; x0++) {
-      let free = true
-      for (let z = z0; free && z < z0 + size; z++) {
-        for (let x = x0; free && x < x0 + size; x++) {
-          if (!net.isFree(x, z)) free = false
+  for (const { width, depth } of shapes) {
+    const candidates = []
+    for (let z0 = 1; z0 + depth - 1 <= CHUNK - 2; z0++) {
+      for (let x0 = 1; x0 + width - 1 <= CHUNK - 2; x0++) {
+        let free = true
+        for (let z = z0; free && z < z0 + depth; z++) {
+          for (let x = x0; free && x < x0 + width; x++) {
+            if (!net.isFree(x, z)) free = false
+          }
         }
+        if (free) candidates.push({ x0, z0 })
       }
-      if (free) candidates.push({ x0, z0 })
     }
+    if (candidates.length === 0) continue
+    const pick = candidates[saltedHash(seed, cx, cy, cz, salt) % candidates.length]
+    const rect = { x0: pick.x0, z0: pick.z0, x1: pick.x0 + width - 1, z1: pick.z0 + depth - 1 }
+    const anchor = {
+      lx: pick.x0 + ((width / 2) | 0),
+      lz: pick.z0 + ((depth / 2) | 0),
+    }
+    carveConnector(net, anchor)
+    carveRoomRegion(net, rect, region, net.cells[net.indexAt(anchor.lx, anchor.lz)].dir)
+    return { rect, anchor }
   }
-  if (candidates.length === 0) {
-    throw new TypeError('No bounded sewer chamber slot')
-  }
-  const pick = candidates[saltedHash(seed, cx, cy, cz, salt) % candidates.length]
-  const rect = { x0: pick.x0, z0: pick.z0, x1: pick.x0 + size - 1, z1: pick.z0 + size - 1 }
-  const anchor = {
-    lx: pick.x0 + ((size / 2) | 0),
-    lz: pick.z0 + ((size / 2) | 0),
-  }
-  carveConnector(net, anchor)
-  carveRoomRegion(net, rect, region, net.cells[net.indexAt(anchor.lx, anchor.lz)].dir)
-  return { rect, anchor }
+  throw new TypeError('No bounded sewer chamber slot')
 }
 
-// Short dead-end service branches off the trunk. The per-branch side coin is
-// where profile.rightTurnChance is consumed: real drainage branches favour one
-// turning hand, and the player learns the bias.
+// A second engineered collector creates a true crossing with the first. Its
+// line must clear both stair strips; opening each consecutive edge makes the
+// gallery continuous even where it passes a chamber or an existing connector.
+function carveCollector(net, seed, ctx, heading, trunkLine) {
+  const horizontal = DIRECTION_VECTOR[heading].dx !== 0
+  const candidates = []
+  for (let line = 1; line < CHUNK - 1; line++) {
+    let clear = true
+    for (let step = 0; step < CHUNK; step++) {
+      const lx = horizontal ? line : step
+      const lz = horizontal ? step : line
+      if (net.noAttach.has(posKey(lx, lz)) || net.blocked.has(posKey(lx, lz))) {
+        clear = false
+        break
+      }
+    }
+    if (clear) candidates.push(line)
+  }
+  if (candidates.length === 0) return null
+  const line = candidates[
+    saltedHash(seed, ctx.cx, ctx.cy, ctx.cz, SEWER_SALTS.collectorLine) % candidates.length
+  ]
+  const at = (step) => ({ lx: horizontal ? line : step, lz: horizontal ? step : line })
+  const junction = at(trunkLine)
+  for (const sign of [-1, 1]) {
+    let previous = junction
+    for (let step = trunkLine + sign; step >= 0 && step < CHUNK; step += sign) {
+      const cell = at(step)
+      if (!net.has(cell.lx, cell.lz)) {
+        net.add(cell.lx, cell.lz,
+          directionOfStep(cell.lx - previous.lx, cell.lz - previous.lz),
+          net.indexAt(previous.lx, previous.lz), SEWER_REGION_COLLECTOR)
+      }
+      const module = net.cells[net.indexAt(cell.lx, cell.lz)]
+      if (module.region !== SEWER_REGION_TRUNK) module.region = SEWER_REGION_COLLECTOR
+      net.openEdges.add(edgeKeyBetween(previous.lx, previous.lz, cell.lx, cell.lz))
+      previous = cell
+    }
+  }
+  return { kind: 'collector', junction, cells: Array.from({ length: CHUNK }, (_, step) => at(step)) }
+}
+
+function rectPerimeter({ x0, z0, x1, z1 }) {
+  const cells = []
+  for (let lx = x0; lx < x1; lx++) cells.push({ lx, lz: z0 })
+  for (let lz = z0; lz < z1; lz++) cells.push({ lx: x1, lz })
+  for (let lx = x1; lx > x0; lx--) cells.push({ lx, lz: z1 })
+  for (let lz = z1; lz > z0; lz--) cells.push({ lx: x0, lz })
+  return cells
+}
+
+// Pick the first perimeter cell reached by the same multi-source search as
+// carveConnector. The entrance path therefore cannot cut across the ring and
+// create unbudgeted extra loops. Existing stair guards remain attachment bans.
+function nearestRingEntrance(net, perimeter) {
+  const targets = new Set(perimeter.map(({ lx, lz }) => posKey(lx, lz)))
+  const seen = new Set(net.cells.map(({ lx, lz }) => posKey(lx, lz)))
+  const queue = net.cells.filter(({ lx, lz }) => !net.noAttach.has(posKey(lx, lz)))
+  for (let cursor = 0; cursor < queue.length; cursor++) {
+    const { lx, lz } = queue[cursor]
+    for (const { dx, dz } of BFS_STEPS) {
+      const next = { lx: lx + dx, lz: lz + dz }
+      const key = posKey(next.lx, next.lz)
+      if (!inChunk(next.lx, next.lz) || seen.has(key) || net.blocked.has(key) ||
+        net.holeSet.has(key) || net.noAttach.has(key)) continue
+      if (targets.has(key)) return next
+      seen.add(key)
+      queue.push(next)
+    }
+  }
+  return null
+}
+
+// The bypass is a real one-cell-wide circuit around unexcavated ground. Its
+// last edge is explicitly returned to the loop budget rather than hidden in
+// room-internal openings. The core stays reserved from branches and seam
+// routing, preserving a recognizable architectural island.
+function carveBypass(net, seed, ctx) {
+  const shapes = [[6, 3], [3, 6], [5, 4], [4, 5], [5, 3], [3, 5], [4, 4], [4, 3], [3, 4], [3, 3]]
+  for (const [width, depth] of shapes) {
+    const candidates = []
+    for (let z0 = 1; z0 + depth < CHUNK; z0++) {
+      for (let x0 = 1; x0 + width < CHUNK; x0++) {
+        const center = (CHUNK / 2) | 0
+        // ChunkManager's fixed 3×3 spawn clearing must never erase the core.
+        // Reserve it for footprint selection without excavating a third room
+        // before the two prescribed chambers have found their own slots.
+        if (ctx.cx === 0 && ctx.cy === 0 && ctx.cz === 0 &&
+          x0 + 1 <= center + 1 && x0 + width - 2 >= center - 1 &&
+          z0 + 1 <= center + 1 && z0 + depth - 2 >= center - 1) continue
+        let clear = true
+        for (let z = z0; clear && z < z0 + depth; z++) {
+          for (let x = x0; clear && x < x0 + width; x++) {
+            if (!net.isFree(x, z)) clear = false
+          }
+        }
+        if (clear) candidates.push({ x0, z0, x1: x0 + width - 1, z1: z0 + depth - 1 })
+      }
+    }
+    if (candidates.length === 0) continue
+    const bounds = candidates[
+      saltedHash(seed, ctx.cx, ctx.cy, ctx.cz, SEWER_SALTS.bypass) % candidates.length
+    ]
+    const core = { x0: bounds.x0 + 1, z0: bounds.z0 + 1, x1: bounds.x1 - 1, z1: bounds.z1 - 1 }
+    const perimeter = rectPerimeter(bounds)
+    const entrance = nearestRingEntrance(net, perimeter)
+    if (!entrance) continue
+    for (let z = core.z0; z <= core.z1; z++) {
+      for (let x = core.x0; x <= core.x1; x++) net.blocked.add(posKey(x, z))
+    }
+    const offset = perimeter.findIndex(({ lx, lz }) => lx === entrance.lx && lz === entrance.lz)
+    const cells = [...perimeter.slice(offset), ...perimeter.slice(0, offset)]
+    const first = carveConnector(net, entrance, SEWER_REGION_BYPASS)
+    let previous = entrance
+    let parent = first
+    for (const cell of cells.slice(1)) {
+      parent = net.add(cell.lx, cell.lz,
+        directionOfStep(cell.lx - previous.lx, cell.lz - previous.lz), parent, SEWER_REGION_BYPASS)
+      previous = cell
+    }
+    return { kind: 'bulkheadBypass', bounds, core, cells, loopEdge: canonicalSewerEdge(first, parent) }
+  }
+  return null
+}
+
+// Short dead-end service branches off the trunk. The per-branch side coin
+// consumes the authored right-turn bias: a learnable game wayfinding rule,
+// rather than a claim that physical sewer networks favour one turning hand.
 function carveBranches(net, seed, ctx, profile, heading, trunkCount) {
   const { cx, cy, cz } = ctx
   const count = 3 + (saltedHash(seed, cx, cy, cz, SEWER_SALTS.branchCount) % 3)
@@ -469,6 +610,9 @@ function buildPlan(ctx) {
   const heading = SEWER_DIRECTIONS[
     saltedHash(seed, cx, cy, cz, SEWER_SALTS.trunkHeading) % SEWER_DIRECTIONS.length
   ]
+  const layoutChoice = saltedHash(seed, cx, cy, cz, SEWER_SALTS.layout) % SEWER_LAYOUTS.length
+  let layout = SEWER_LAYOUTS[layoutChoice]
+  if (layout === 'bypass' && profile.maxLoops === 0) layout = 'interceptor'
   const horizontal = DIRECTION_VECTOR[heading].dx !== 0
   const blockedLines = new Set()
 
@@ -518,18 +662,49 @@ function buildPlan(ctx) {
     landmarkCells.push({ kind, index: net.indexAt(labelCell.lx, labelCell.lz) })
   }
 
-  const chamberLarge = carveChamber(
-    net, seed, ctx, 3, SEWER_SALTS.chamberLarge, SEWER_REGION_CHAMBER
-  )
+  const longGalleryShapes = [6, 5, 4].flatMap((length) => horizontal
+    ? [{ width: length, depth: 2 }, { width: 2, depth: length }]
+    : [{ width: 2, depth: length }, { width: length, depth: 2 }])
+  const chamberLarge = carveChamber(net, seed, ctx,
+    layout === 'interceptor'
+      ? [...longGalleryShapes, { width: 3, depth: 3 }]
+      : [{ width: 3, depth: 3 }],
+    SEWER_SALTS.chamberLarge, SEWER_REGION_CHAMBER)
   const chamberSmall = carveChamber(
-    net, seed, ctx, 2, SEWER_SALTS.chamberSmall, SEWER_REGION_CHAMBER
+    net, seed, ctx, [{ width: 2, depth: 2 }], SEWER_SALTS.chamberSmall, SEWER_REGION_CHAMBER
   )
+
+  if (layout === 'interceptor' &&
+    Math.max(chamberLarge.rect.x1 - chamberLarge.rect.x0, chamberLarge.rect.z1 - chamberLarge.rect.z0) < 3) {
+    layout = 'confluence'
+  }
+
+  const structures = [{
+    kind: layout === 'interceptor' ? 'interceptorGallery' : 'junctionChamber',
+    bounds: chamberLarge.rect,
+    anchor: chamberLarge.anchor,
+  }]
+  const requiredLoopEdges = []
+  if (layout === 'bypass') {
+    const bypass = carveBypass(net, seed, ctx)
+    if (bypass) {
+      structures.push(bypass)
+      requiredLoopEdges.push(bypass.loopEdge)
+    } else {
+      // Dense riser footprints occasionally leave no ring-sized mass. Use a
+      // complete confluence instead of emitting an architecture-only label.
+      layout = 'confluence'
+    }
+  }
+  if (layout === 'confluence') {
+    const collector = carveCollector(net, seed, ctx, heading, trunkLine)
+    if (!collector) throw new TypeError('No sewer collector line clear of both stair strips')
+    structures.push(collector)
+  }
 
   carveBranches(net, seed, ctx, profile, heading, trunkCount)
   carveMouths(net, ctx.borders)
 
-  // Spawn guarantee: the fixed hub clearing at (0,0,0) must open into the
-  // network, not into sealed mass.
   if (cx === 0 && cz === 0 && cy === 0) {
     carveConnector(net, { lx: (CHUNK / 2) | 0, lz: (CHUNK / 2) | 0 })
   }
@@ -576,11 +751,15 @@ function buildPlan(ctx) {
     : 1 + (
         saltedHash(seed, cx, cy, cz, SEWER_SALTS.loopCount) % profile.maxLoops
       )
-  const loopEdges = []
-  const usedLoopEndpoints = new Set()
-  for (let loopIndex = 0; loopIndex < loopTarget; loopIndex++) {
+  const loopEdges = [...requiredLoopEdges]
+  const usedLoopEndpoints = new Set(requiredLoopEdges.flatMap(({ a, b }) => [a, b]))
+  for (let loopIndex = loopEdges.length; loopIndex < loopTarget; loopIndex++) {
     const disjoint = eligibleNonTreeLinks.filter(({ a, b }) =>
-      !usedLoopEndpoints.has(a) && !usedLoopEndpoints.has(b)
+      !usedLoopEndpoints.has(a) && !usedLoopEndpoints.has(b) &&
+      // Stair-side adjacencies are not legal shortcuts: their guarded edges
+      // are deliberately closed by the later canonical stair stamp.
+      !net.noAttach.has(posKey(net.cells[a].lx, net.cells[a].lz)) &&
+      !net.noAttach.has(posKey(net.cells[b].lx, net.cells[b].lz))
     )
     const available = disjoint.some(walledLink) ? disjoint.filter(walledLink) : disjoint
     if (available.length === 0) break
@@ -652,6 +831,8 @@ function buildPlan(ctx) {
   return {
     seed,
     heading,
+    layout,
+    structures,
     trunkLine,
     trunkCount,
     modules,
@@ -757,6 +938,19 @@ function stampPlan(data, plan) {
       }
     }
   }
+
+  // The through-collector stays a circulation lane while crossing chamber
+  // footprints. Its uninterrupted run is structural and cannot be filled by
+  // the chamber's utility furnishing pass.
+  for (const structure of plan.structures) {
+    if (structure.kind !== 'collector') continue
+    for (const { lx, lz } of structure.cells) {
+      const index = posKey(lx, lz)
+      data.cellKind[index] = CELL_CORRIDOR
+      data.spaceId[index] = 0
+      data.spaceRole[index] = SPACE_ROLE_NONE
+    }
+  }
 }
 
 // Compile one bounded dry sewer chunk. The canonical descriptor lives only on
@@ -775,6 +969,8 @@ export function generate(data, ctx) {
       lz: plan.modules[0].lz,
     },
     heading: plan.heading,
+    layout: plan.layout,
+    structures: plan.structures,
     trunkLine: plan.trunkLine,
     trunkCount: plan.trunkCount,
     chambers: plan.chambers,

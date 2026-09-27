@@ -267,3 +267,41 @@ describe('collectInteriorDressing', () => {
     expect(data).not.toHaveProperty('towerLandmarks')
   })
 })
+
+// v26: catalog volumes (and atria) open slab holes inside dressed fabric.
+// Nothing floor- or wall-mounted may hang over a floor opening.
+describe('dressing over slab openings', () => {
+  it('never places floor-level props over a floor hole in any family', async () => {
+    const { generateChunk } = await import('../generate.js')
+    const { worldConfigForFamily } = await import('../mapFamily.js')
+    const { structureAt } = await import('../structures/contract.js')
+    const { isCatalogStructure } = await import('../structures/catalog/engine.js')
+    const { collectInteriorDressing } = await import('../objects/dressing/index.js')
+    const { CELL: C, CHUNK: N } = await import('../constants.js')
+    for (const family of ['office', 'hotel', 'sewer', 'tower', 'lattice']) {
+      const config = worldConfigForFamily(family)
+      const seed = 4242
+      let checked = 0
+      for (let cy = 0; cy <= 3 && checked < 24; cy++) {
+        for (let cz = -3; cz <= 3 && checked < 24; cz++) {
+          for (let cx = -3; cx <= 3 && checked < 24; cx++) {
+            if (!isCatalogStructure(structureAt(seed, cx, cz, cy, config))) continue
+            const d = generateChunk(seed, cx, cy, cz, config)
+            if (!d.structureDown) continue
+            checked++
+            for (const p of collectInteriorDressing(d).props) {
+              if (p.py - p.sy / 2 > 0.3) continue // only floor-level pieces
+              const lx = Math.floor(p.px / C)
+              const lz = Math.floor(p.pz / C)
+              if (lx < 0 || lz < 0 || lx >= N || lz >= N) continue
+              // A piece centred over a hole (not merely touching its edge).
+              const inset = Math.abs(p.px - (lx + 0.5) * C) < C * 0.4 && Math.abs(p.pz - (lz + 0.5) * C) < C * 0.4
+              if (inset) expect(d.hasFloorHole(lx, lz), `${family} ${cx},${cy},${cz} cell ${lx},${lz}`).toBe(false)
+            }
+          }
+        }
+      }
+      expect(checked, family).toBeGreaterThan(0)
+    }
+  })
+})

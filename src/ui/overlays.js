@@ -1,13 +1,14 @@
 import { Phase } from '../core/GameState.js'
 import { IS_TOUCH } from '../core/device.js'
-import { MAP_FAMILY_ORDER } from '../world/mapFamily.js'
 import { UI_CSS } from './theme.js'
 import { SETTINGS_HTML, SettingsBlock } from './settingsPanel.js'
 import { CONTROL_CHIPS, HUD_HTML } from './hud.js'
+import { TITLE_HTML, familyNote, stepMenuIndex } from './titleMenu.js'
 
-// Menu + HUD shell. Presentation lives in three sibling modules — theme.js
+// Menu + HUD shell. Presentation lives in four sibling modules — theme.js
 // (design tokens + all CSS), hud.js (HUD markup + the control legend),
-// settingsPanel.js (the simple + advanced settings block) — while this class
+// settingsPanel.js (the simple + advanced settings block), titleMenu.js (the
+// main-menu title screen markup + its pure helpers) — while this class
 // owns the panel lifecycle: title / pause / death / transition / rotate, plus
 // per-frame HUD updates. Public API (el shape, show*, updateHud,
 // refreshSettings) is pinned by src/ui/__tests__ and the engine tests.
@@ -35,26 +36,7 @@ export class UI {
     root.innerHTML = `
       ${HUD_HTML}
 
-      <div class="panel" id="p-title">
-        <div class="card">
-          <div class="kicker">A LIMINAL DESCENT</div>
-          <div class="jp-accent" aria-hidden="true">「黄色の部屋」</div>
-          <h1>THE&nbsp;YELLOW&nbsp;ROOMS</h1>
-          <div class="keys">you have no-clipped out of reality.<br/>find the exit. don't let it reach you.</div>
-          <input type="text" id="seed-input" placeholder="world seed (optional)" aria-label="world seed" />
-          <select id="family-select" aria-label="map family">${MAP_FAMILY_ORDER.map(
-            (f) => `<option value="${f}">MAP · ${f.toUpperCase()}</option>`
-          ).join('')}</select>
-          <div class="row">
-            <button id="btn-start" class="primary">ENTER ▸</button>
-            <button id="btn-settings" class="ghost" aria-expanded="false">SETTINGS</button>
-            <button id="btn-editor" class="ghost">EDITOR</button>
-          </div>
-          <div class="settings hidden" id="title-settings">${SETTINGS_HTML}</div>
-          <div class="chips">${CONTROL_CHIPS}</div>
-        </div>
-        ${IS_TOUCH ? '<div class="touchnote">best with headphones · landscape only</div>' : ''}
-      </div>
+      ${TITLE_HTML}
 
       <div class="panel hidden" id="p-pause">
         <div class="card">
@@ -140,6 +122,9 @@ export class UI {
       familySelect: $('#family-select'),
       pauseRun: $('#pause-run'),
       titleSettings: $('#title-settings'),
+      titleMenu: $('#title-menu'),
+      familyNote: $('#family-note'),
+      btnSettingsClose: $('#btn-settings-close'),
       relock: $('#hud-relock'),
       btnStart: $('#btn-start'),
       btnSettings: $('#btn-settings'),
@@ -171,9 +156,29 @@ export class UI {
       if (e.key === 'Enter') start()
     })
     this.el.btnSettings.addEventListener('click', () => {
-      const open = !this.el.titleSettings.classList.toggle('hidden')
-      this.el.btnSettings.setAttribute('aria-expanded', String(open))
+      this._setTitleSettingsOpen(this.el.titleSettings.classList.contains('hidden'))
     })
+    this.el.btnSettingsClose.addEventListener('click', () =>
+      this._setTitleSettingsOpen(false, { restoreFocus: true })
+    )
+    // Esc closes the settings sheet. The engine's Esc handler only acts while
+    // PAUSED, so the title is free to claim it.
+    this.el.title.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || this.el.titleSettings.classList.contains('hidden')) return
+      e.preventDefault()
+      this._setTitleSettingsOpen(false, { restoreFocus: true })
+    })
+    // Arrow keys walk the menu buttons like a console menu. Text/select fields
+    // keep their native arrow behaviour (caret / option cycling) — Tab reaches them.
+    this.el.titleMenu.addEventListener('keydown', (e) => {
+      const items = [...this.el.titleMenu.querySelectorAll('[data-nav]')]
+      const i = items.indexOf(e.target)
+      const next = stepMenuIndex(i, items.length, e.key)
+      if (i < 0 || next === i) return
+      e.preventDefault()
+      items[next].focus()
+    })
+    this.el.familySelect.addEventListener('change', () => this._syncFamilyNote())
     this.el.btnResume.addEventListener('click', () => this.onResume?.())
     this.el.btnRetry.addEventListener('click', () => this.onRestart?.())
     this.root.querySelector('#btn-restart-p').addEventListener('click', () => this.onRestart?.())
@@ -188,6 +193,9 @@ export class UI {
   // setting outside the panels (the M key, RESET DEFAULTS) re-syncs the widgets.
   refreshSettings() {
     for (const b of this.settingsBlocks) b.refresh(this.settings, { autoPreset: this.autoPreset })
+    // Photosensitivity: the title wordmark's failing-tube flicker (theme.js)
+    // stops with the in-world strobe.
+    this.root.classList.toggle('reduce-flicker', this.settings.get('reduceFlicker') !== false)
   }
 
   // The concrete preset 'auto' resolved to on this device (shown as AUTO (X)).
@@ -204,6 +212,22 @@ export class UI {
     this.el.familySelect.value = v
     // Unknown value: a <select> silently blanks — land on the office default.
     if (this.el.familySelect.value !== v) this.el.familySelect.value = 'office'
+    this._syncFamilyNote()
+  }
+
+  _syncFamilyNote() {
+    if (this.el.familyNote) this.el.familyNote.textContent = familyNote(this.el.familySelect.value)
+  }
+
+  // Title settings side sheet. Opening moves focus into the sheet; closing
+  // from inside it hands focus back to SETTINGS so keyboard users don't land
+  // on <body>. The `sheet-open` class dims the menu column behind it.
+  _setTitleSettingsOpen(open, { restoreFocus = false } = {}) {
+    this.el.titleSettings.classList.toggle('hidden', !open)
+    this.el.title.classList.toggle('sheet-open', open)
+    this.el.btnSettings.setAttribute('aria-expanded', String(open))
+    if (open) this.el.btnSettingsClose.focus({ preventScroll: true })
+    else if (restoreFocus) this.el.btnSettings.focus({ preventScroll: true })
   }
 
   // Pointer-lock recovery hint (desktop only): shown when the browser refused
@@ -256,7 +280,11 @@ export class UI {
     this.el.rotate.classList.toggle('hidden', !v)
   }
 
+  // Every arrival (boot or QUIT TO TITLE) lands on the bare menu with the
+  // settings sheet closed and ENTER focused.
   showTitle() {
+    this._setTitleSettingsOpen(false)
+    this._syncFamilyNote()
     this._showOnly(Phase.TITLE)
   }
   showHud() {

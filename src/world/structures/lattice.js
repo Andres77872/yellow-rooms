@@ -73,20 +73,21 @@ export const LATTICE_DESCRIPTOR_REASONS = Object.freeze({
   crossDistrictNetwork: 'cross-district-network',
 })
 
-// The multilayer lattice district (v24): a 4x4-chunk city block of narrow
-// catwalks. 8x8 anchors at a uniform 7-cell pitch terrace across 5 floors, so
-// every chunk hosts a 2x2 anchor quad at locals {3,10} — the whole strip of a
-// stair (landing + 2 runs + exit) always fits inside its anchor's chunk in
-// every axis direction.
+// A 4x4-chunk city block of terraced catwalks. Each chunk hosts four anchors,
+// but structural bays vary along each axis, making spans alternate between
+// compression and exposure. Locals stay within [3,10] so a four-cell stair
+// always fits inside its anchor's chunk in every axis direction.
 const DISTRICT_CHUNKS = 4
 const LEVELS = 5
 const VERTICAL_PERIOD = STRUCTURE_VERTICAL_PERIOD
 const ANCHORS_PER_AXIS = 8
-const ANCHOR_LOCAL_COORDINATES = Object.freeze(
-  Array.from({ length: ANCHORS_PER_AXIS }, (_, index) =>
-    Math.floor(index / 2) * CHUNK + (index % 2 === 0 ? 3 : 10)
-  )
-)
+const ANCHOR_BAYS = Object.freeze([[3, 9], [4, 10], [3, 10]])
+export const LATTICE_PLATFORM_FORMS = Object.freeze({
+  landing: Object.freeze({ radiusX: 1, radiusZ: 1 }),
+  pierX: Object.freeze({ radiusX: 2, radiusZ: 1 }),
+  pierZ: Object.freeze({ radiusX: 1, radiusZ: 2 }),
+  crossing: Object.freeze({ radiusX: 2, radiusZ: 2 }),
+})
 const ANCHOR_COUNT = ANCHORS_PER_AXIS * ANCHORS_PER_AXIS
 const CANDIDATE_COUNT = 2 * ANCHORS_PER_AXIS * (ANCHORS_PER_AXIS - 1)
 // Bounded retry budget for the deterministic stair-conflict resolution loop.
@@ -114,6 +115,9 @@ const SALTS = Object.freeze({
   maximumExposure: 0x1a7706,
   edgeWeight: 0x1a7707,
   cycleSelection: 0x1a7708,
+  anchorBaysX: 0x1a7709,
+  anchorBaysZ: 0x1a770a,
+  platform: 0x1a770b,
 })
 
 // Terracing modes: the floor field can climb along either axis or either
@@ -327,6 +331,14 @@ function floorOffsetAtPosition(position, cuts) {
   return offset
 }
 
+function anchorAxisCoordinates(seed, salt, districtX, districtZ, bandIndex) {
+  const stream = plannerHash(seed, salt, districtX, bandIndex, districtZ)
+  return Array.from({ length: DISTRICT_CHUNKS }, (_, index) =>
+    ANCHOR_BAYS[hash2i(salt, stream | 0, index) % ANCHOR_BAYS.length]
+      .map((local) => index * CHUNK + local)
+  ).flat()
+}
+
 function latticeAnchors(seed, districtX, districtZ, bandIndex, baseCy, profile) {
   const originGx = districtX * DISTRICT_CHUNKS * CHUNK
   const originGz = districtZ * DISTRICT_CHUNKS * CHUNK
@@ -364,6 +376,8 @@ function latticeAnchors(seed, districtX, districtZ, bandIndex, baseCy, profile) 
   ) % ANCHOR_COUNT
   const defaultExposureIndex = (maximumExposureIndex + 1) % ANCHOR_COUNT
   const anchors = []
+  const xs = anchorAxisCoordinates(seed, SALTS.anchorBaysX, districtX, districtZ, bandIndex)
+  const zs = anchorAxisCoordinates(seed, SALTS.anchorBaysZ, districtX, districtZ, bandIndex)
 
   for (let row = 0; row < ANCHORS_PER_AXIS; row++) {
     for (let column = 0; column < ANCHORS_PER_AXIS; column++) {
@@ -377,8 +391,8 @@ function latticeAnchors(seed, districtX, districtZ, bandIndex, baseCy, profile) 
         : rawFloorOffset
       const anchor = {
         id: (idBase + positionIndex) >>> 0,
-        gx: originGx + ANCHOR_LOCAL_COORDINATES[column],
-        gz: originGz + ANCHOR_LOCAL_COORDINATES[row],
+        gx: originGx + xs[column],
+        gz: originGz + zs[row],
         levelCy: baseCy + floorOffset,
       }
       if (positionIndex !== defaultExposureIndex) {
@@ -391,6 +405,20 @@ function latticeAnchors(seed, districtX, districtZ, bandIndex, baseCy, profile) 
   }
 
   return anchors.sort(compareLatticeAnchors)
+}
+
+function assignPlatformForms(anchors, edges) {
+  const degree = new Map(anchors.map(({ id }) => [id, 0]))
+  for (const edge of edges) {
+    degree.set(edge.a, degree.get(edge.a) + 1)
+    degree.set(edge.b, degree.get(edge.b) + 1)
+  }
+  for (const anchor of anchors) {
+    const choice = hash2i(SALTS.platform, anchor.id | 0, anchor.levelCy) % 4
+    anchor.platform = degree.get(anchor.id) >= 3
+      ? 'crossing'
+      : ['landing', 'landing', 'pierX', 'pierZ'][choice]
+  }
 }
 
 function validCandidateAnchors(anchors) {
@@ -926,6 +954,8 @@ function computeLatticeAnalysis(structure, profile) {
       anchor.gx > structure.globalBounds.x1 ||
       anchor.gz < structure.globalBounds.z0 ||
       anchor.gz > structure.globalBounds.z1 ||
+      (anchor.platform !== undefined &&
+        !Object.hasOwn(LATTICE_PLATFORM_FORMS, anchor.platform)) ||
       positions.has(positionKey) ||
       (index > 0 && compareLatticeAnchors(anchors[index - 1], anchor) >= 0)
     ) {
@@ -1241,6 +1271,7 @@ function structureForDistrict(seed, districtX, districtZ, baseCy, profile) {
   if (!evidence) return null
   const graph = latticeEdges(anchors, evidence, profile, baseCy)
   if (!graph) return null
+  assignPlatformForms(anchors, graph.edges)
   const verticalLinks = latticeVerticalLinks(evidence)
   const coveredBoundaries = new Set(verticalLinks.map(({ lowerCy }) => lowerCy))
   for (let lowerCy = baseCy; lowerCy < topCy; lowerCy++) {

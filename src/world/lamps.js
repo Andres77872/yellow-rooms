@@ -43,7 +43,7 @@ function placeSewerLights(data, ctx) {
     if (anchor || isChamber(m.kind)) {
       // Chambers: the anchor tube always exists; other chamber cells rarely.
       wants = anchor || hash2i((seed ^ salt) | 0, gx, gz) / 4294967296 < 0.15
-    } else if (index < descriptor.trunkCount) {
+    } else if (index < descriptor.trunkCount || m.region === 'collector') {
       wants = fmod(gx + gz - phase, SEWER_TRUNK_STEP) === 0
     } else {
       wants = fmod(gx + gz - phase, SEWER_BRANCH_STEP) === 0 &&

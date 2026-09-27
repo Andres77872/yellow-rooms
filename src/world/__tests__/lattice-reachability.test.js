@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_WORLD_CONFIG } from '../config.js'
 import { CHUNK, cIdx } from '../constants.js'
+import { hashStr } from '../core/hash.js'
+import { auditChunkFamilyRegistrations } from '../familyAudit.js'
 import { worldConfigForFamily } from '../mapFamily.js'
 import { CELL_VOID, MAP_FAMILY_LATTICE } from '../mapTypes.js'
 import { buildChunk } from '../pipeline.js'
 import { structureAt } from '../structures/contract.js'
+import { latticeChamberApproaches, latticeChamberBounds } from '../structures/latticeStamp.js'
 
 // Physical accessibility contract for the multilayer lattice district: every
 // rasterized district must be ONE walkable component. The planner's spanning
@@ -13,7 +16,10 @@ import { structureAt } from '../structures/contract.js'
 // regression that strands a chamber, catwalk, stair pocket, or whole floor
 // fails here even if every descriptor-level invariant still holds.
 
-const FIXED_SEEDS = Object.freeze([0x1a771ce, 0x5a17, 0xc0ffee])
+const FIXED_SEEDS = Object.freeze([
+  0x1a771ce, 0x5a17, 0xc0ffee, 1, 2, 3, 11,
+  ...Array.from({ length: 3 }, (_, index) => hashStr(`audit-lattice-${index}#1`)),
+])
 
 function forcedLatticeConfig() {
   const base = structuredClone(DEFAULT_WORLD_CONFIG)
@@ -26,7 +32,7 @@ function findLatticeStructure(seed, config) {
     for (let cz = -4; cz <= 4; cz++) {
       for (let cx = -4; cx <= 4; cx++) {
         const candidate = structureAt(seed, cx, cz, cy, config)
-        if (candidate?.hasRoom === true) return candidate
+        if (candidate?.hasRoom === true && candidate.kind === 'latticeDistrict') return candidate
       }
     }
   }
@@ -130,10 +136,63 @@ function districtWalkAudit(seed, structure, config) {
     const cy = Number(node.slice(node.lastIndexOf(',') + 1))
     floorTotals.set(cy, (floorTotals.get(cy) ?? 0) + 1)
   }
-  return { nodes, componentSizes, floorTotals, stairEdges }
+  return {
+    nodes, componentSizes, floorTotals, stairEdges,
+    familyFailures: auditChunkFamilyRegistrations(chunks).failures,
+    partialFailures: [...chunks.values()].flatMap((data) =>
+      auditChunkFamilyRegistrations([data]).failures
+    ),
+  }
 }
 
 describe('lattice district physical reachability', () => {
+  it('keeps the lower stair terminal guard closed where an expanded platform crosses it', () => {
+    const config = forcedLatticeConfig()
+    const structure = findLatticeStructure(11, config)
+    const anchor = structure.anchors.find((candidate) =>
+      candidate.gx === -11 && candidate.gz === -4 && candidate.levelCy === -24
+    )
+    expect(anchor?.platform).toBe('crossing')
+    expect(latticeChamberApproaches(structure, anchor).has('v:-13,-4')).toBe(false)
+    const data = buildChunk(11, -1, -24, -1, config)
+    expect(data.stairUp.run.at(-1)).toEqual({ lx: 1, lz: 10 })
+    expect(data.vAt(1, 10)).toBe(1)
+  })
+
+  it('varies exposed span lengths and expands junctions into open transfer landings', () => {
+    const config = forcedLatticeConfig()
+    const spans = new Set()
+    const platformForms = new Set()
+    for (const seed of FIXED_SEEDS) {
+      const structure = findLatticeStructure(seed, config)
+      expect(structure).not.toBeNull()
+      const anchorById = new Map(structure.anchors.map((anchor) => [anchor.id, anchor]))
+      for (const edge of structure.edges) {
+        const a = anchorById.get(edge.a)
+        const b = anchorById.get(edge.b)
+        spans.add(Math.abs(a.gx - b.gx) + Math.abs(a.gz - b.gz))
+      }
+      for (const anchor of structure.anchors) {
+        platformForms.add(anchor.platform)
+        const bounds = latticeChamberBounds(anchor)
+        expect(bounds.x0).toBeGreaterThanOrEqual(structure.globalBounds.x0)
+        expect(bounds.x1).toBeLessThanOrEqual(structure.globalBounds.x1)
+        expect(bounds.z0).toBeGreaterThanOrEqual(structure.globalBounds.z0)
+        expect(bounds.z1).toBeLessThanOrEqual(structure.globalBounds.z1)
+        const degree = structure.edges.filter((edge) => edge.a === anchor.id || edge.b === anchor.id).length
+        if (degree >= 3) {
+          expect(anchor.platform).toBe('crossing')
+          expect(bounds.x1 - bounds.x0 + 1).toBe(5)
+          expect(bounds.z1 - bounds.z0 + 1).toBe(5)
+        }
+      }
+    }
+    expect(platformForms).toEqual(new Set(['landing', 'pierX', 'pierZ', 'crossing']))
+    expect(spans.size).toBeGreaterThanOrEqual(3)
+    expect(Math.min(...spans)).toBeGreaterThanOrEqual(6)
+    expect(Math.max(...spans)).toBeLessThanOrEqual(9)
+  })
+
   it.each(FIXED_SEEDS.map((seed) => ({ seed })))(
     'walks every floor, chamber, and stair of seed $seed as one component',
     ({ seed }) => {
@@ -142,6 +201,8 @@ describe('lattice district physical reachability', () => {
       expect(structure).not.toBeNull()
 
       const audit = districtWalkAudit(seed, structure, config)
+      expect(audit.familyFailures).toEqual([])
+      expect(audit.partialFailures).toEqual([])
 
       // One component: no stranded island anywhere in the five-floor volume.
       expect(audit.componentSizes).toHaveLength(1)

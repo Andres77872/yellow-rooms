@@ -1,6 +1,21 @@
 import * as THREE from 'three'
 import { section, slider, toggle, button, readout, buttonRow } from './widgets.js'
 
+// Tooltips for the stalker's live parameter scrubs, keyed by Stalker field.
+// Values write straight onto the live entity; "apply level (reset)" and a
+// reload restore the level-scaled defaults.
+export const AI_PARAM_TIPS = {
+  chaseSpeed: 'Base chase/pursuit speed in world units per second; the light multiplier (dark speed×) scales it at runtime.',
+  interval: 'Seconds between hunt teleports while it cannot see you. Lower = relocates more often.',
+  sightDist: 'Maximum distance in metres at which the sight gate can spot you (also gated by frustum and walls).',
+  minRange: 'Nearest distance in metres a hunt teleport may land from you. Raising it past max range drags max range along.',
+  maxRange: 'Farthest distance in metres a hunt teleport may land from you. Lowering it below min range drags min range along.',
+  catchDist: 'Distance in metres at which it catches you (kills unless invincible is on).',
+  despawnDelay: 'Seconds of lost sight before it gives up and vanishes.',
+  respawnCooldown: 'Seconds it stays dormant after vanishing before it spawns again.',
+  darkSpeedMul: 'Chase-speed multiplier in full darkness; lit cells blend toward the slower lit multiplier.',
+}
+
 // Stalker AI inspector: live state readout, active controls, and optional 3D
 // gizmos (line-of-sight ray, teleport range rings, last target) drawn into the
 // game scene. The 2D map (World tab) carries the richer overlay; this adds
@@ -41,28 +56,51 @@ export class AiTool {
       buttonRow('', [
         button({
           label: 'force teleport',
+          tip: 'Activate the stalker and teleport it now to a hidden cell between min and max range of you (fails silently if no spot is found).',
           onClick: () => s.forceTeleport(this.engine.camera, this.engine.controller.pos, this.engine.controller.floor),
         }),
       ]).el
     )
-    cs.body.appendChild(toggle({ label: 'freeze AI', value: false, onChange: (v) => (s.frozen = v) }).el)
+    cs.body.appendChild(toggle({
+        label: 'freeze AI',
+        value: false,
+        tip: 'Stop the stalker thinking and moving where it stands. Cleared when debug mode closes.',
+        onChange: (v) => (s.frozen = v),
+      }).el)
     this._invinc = toggle({
       label: 'invincible',
       value: this.dbg.invincible,
+      tip: 'Nothing kills you (entity catches or sanity running out) while the debug panel is open. On by default each time debug mode opens.',
       onChange: (v) => (this.dbg.invincible = v),
     })
     cs.body.appendChild(this._invinc.el)
     cs.body.appendChild(
-      toggle({ label: 'always visible', value: false, onChange: (v) => ((s.alwaysVisible = v), (s.mesh.visible = v || s.active)) }).el
+      toggle({
+        label: 'always visible',
+        value: false,
+        tip: 'Keep the stalker model drawn even while dormant or despawned (debug only; reset when debug mode closes).',
+        onChange: (v) => ((s.alwaysVisible = v), (s.mesh.visible = v || s.active)),
+      }).el
     )
     this._observe = toggle({
       label: 'live observe (unfreeze)',
       value: !this.dbg.freeze,
+      tip: { text: 'Let the simulation run so AI reacts live; off freezes the whole sim (same flag as F3 and the light tab freeze).', keys: 'F3' },
       onChange: (v) => this.dbg.setFreeze(!v),
     })
     cs.body.appendChild(this._observe.el)
-    cs.body.appendChild(toggle({ label: 'show map overlay', value: true, onChange: (v) => (this.dbg.aiOverlay = v) }).el)
-    cs.body.appendChild(toggle({ label: '3D gizmos', value: false, onChange: (v) => (this.gizmos.visible = v) }).el)
+    cs.body.appendChild(toggle({
+        label: 'show map overlay',
+        value: true,
+        tip: 'Draw AI state (entities, sight, candidates, ranges) on the World tab map.',
+        onChange: (v) => (this.dbg.aiOverlay = v),
+      }).el)
+    cs.body.appendChild(toggle({
+        label: '3D gizmos',
+        value: false,
+        tip: 'In-world overlays: line-of-sight ray (green = seen), min/max teleport range rings around you, last teleport target box.',
+        onChange: (v) => (this.gizmos.visible = v),
+      }).el)
     // (Entity placement moved to the world map's click-mode control.)
 
     // Level stepper.
@@ -73,13 +111,18 @@ export class AiTool {
       step: 1,
       value: this.engine.state.level,
       fmt: 0,
+      tip: 'Level (1-20) used by "apply level (reset)". Nothing changes until you press it.',
       onInput: (v) => (this._level = v),
     })
     this._level = this.engine.state.level
     cs.body.appendChild(lvl.el)
     cs.body.appendChild(
       buttonRow('', [
-        button({ label: 'apply level (reset)', onClick: () => s.reset(this._level, this.engine.controller.pos) }),
+        button({
+          label: 'apply level (reset)',
+          tip: 'Reset the stalker with the chosen level’s scaled ranges, speeds and timers, discarding param-scrub edits (the scrub sliders keep their old positions; the state readout shows the new values).',
+          onClick: () => s.reset(this._level, this.engine.controller.pos),
+        }),
       ]).el
     )
 
@@ -88,7 +131,16 @@ export class AiTool {
     root.appendChild(ps.el)
     this._p = {}
     const add = (key, label, min, max, step, fmt = 1) => {
-      const w = slider({ label, min, max, step, value: s[key] ?? 0, fmt, onInput: (v) => this._setParam(key, v) })
+      const w = slider({
+        label,
+        min,
+        max,
+        step,
+        value: s[key] ?? 0,
+        fmt,
+        tip: AI_PARAM_TIPS[key],
+        onInput: (v) => this._setParam(key, v),
+      })
       ps.body.appendChild(w.el)
       this._p[key] = w
     }
@@ -112,11 +164,17 @@ export class AiTool {
       floor: readout('floor'),
     }
     for (const k of Object.keys(this._pr)) pu.body.appendChild(this._pr[k].el)
-    pu.body.appendChild(toggle({ label: 'freeze pursuer', value: false, onChange: (v) => (p.frozen = v) }).el)
+    pu.body.appendChild(toggle({
+        label: 'freeze pursuer',
+        value: false,
+        tip: 'Stop the Crawler (pursuer) moving and thinking. Cleared when debug mode closes.',
+        onChange: (v) => (p.frozen = v),
+      }).el)
     pu.body.appendChild(
       toggle({
         label: 'always visible',
         value: false,
+        tip: 'Keep the Crawler model drawn even while inactive (debug only; reset when debug mode closes).',
         onChange: (v) => ((p.alwaysVisible = v), (p.mesh.visible = v || p.active)),
       }).el
     )
@@ -128,6 +186,7 @@ export class AiTool {
         step: 0.1,
         value: p.chaseSpeed,
         fmt: 1,
+        tip: 'Crawler chase speed in m/s (0-12). Live; its level reset restores the scaled default.',
         onInput: (v) => (p.chaseSpeed = v),
       }).el
     )
@@ -143,11 +202,17 @@ export class AiTool {
       kills: readout('kills'),
     }
     for (const k of Object.keys(this._hr)) hu.body.appendChild(this._hr[k].el)
-    hu.body.appendChild(toggle({ label: 'freeze husk', value: false, onChange: (v) => (h.frozen = v) }).el)
+    hu.body.appendChild(toggle({
+        label: 'freeze husk',
+        value: false,
+        tip: 'Stop the husk’s close/away timers and behaviour. Cleared when debug mode closes.',
+        onChange: (v) => (h.frozen = v),
+      }).el)
     hu.body.appendChild(
       toggle({
         label: 'always visible',
         value: false,
+        tip: 'Keep the husk model drawn even while inactive (debug only; reset when debug mode closes).',
         onChange: (v) => ((h.alwaysVisible = v), (h.mesh.visible = v || h.active)),
       }).el
     )

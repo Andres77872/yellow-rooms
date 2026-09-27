@@ -7,6 +7,12 @@ annotations distinguish shipped follow-ups from work that is still open. See
 [World Generation Architecture](worldgen-architecture.md) for the current
 module and runtime contracts.
 
+**2026-09-26 update:** [Research update: liminality, horror layout and new
+map kinds](#research-update-2026-09-26-liminality-horror-layout-and-new-map-kinds)
+adds sources this review had not used, turns them into generator rules and
+metrics, measures every family with those metrics, and records the map-editor
+prototypes (structure templates, kind lab, lighting lab) built to test them.
+
 This review separates published evidence and developer postmortems from project
 design inference. Research does not prescribe a single frightening floor plan;
 it gives constraints that make the procedural choices more legible, navigable,
@@ -317,3 +323,294 @@ retain median, 95th percentile, maximum, and worst seed IDs for:
 Use hard caps for catastrophic cases and inspect the worst one percent visually.
 A blended quality score is useful for tuning but must not allow excellent seam
 continuity to compensate for an unbounded empty field.
+
+
+## Research update (2026-09-26): liminality, horror layout and new map kinds
+
+This update uses sources the sections above had not cited. Claims from sources
+carry their link; **inference** marks project translation. The measurements
+come from the map editor's simulation layer (`src/editor/simulate.js`) and are
+reproducible with `npm run report:liminal`; see
+[Map Editor](map-editor.md#simulations-and-the-liminal-report).
+
+### What makes a space read as liminal
+
+- **An uncanny valley of places.** Diel & Lewis found an N-shaped relation
+  between realism and uncanniness for built environments; uncanniness tracked
+  deviations from expected configurations (displaced or missing features,
+  repeated furniture, unusual sizes), and of the reasons participants gave,
+  only **lighting** significantly predicted it
+  ([Cardiff ORCA](https://orca.cardiff.ac.uk/id/eprint/151790/),
+  [J. Env. Psych. 82](https://www.sciencedirect.com/science/article/pii/S0272494422000895)).
+  The study used still images.
+- **Out of context, without people.** The liminal-space aesthetic shows
+  transitional places empty and outside their designed use
+  ([overview](https://en.wikipedia.org/wiki/Liminal_space_(aesthetic))); Augé's
+  non-places are anonymous transit spaces — motorways, airports, hotel rooms,
+  malls ([overview](https://en.wikipedia.org/wiki/Non-place)); liminality is a
+  threshold phase that must eventually dissolve back into structure
+  ([overview](https://en.wikipedia.org/wiki/Liminality)).
+- **Mystery drives danger.** Herzog & Miller: mystery predicted both danger
+  and preference; it rose with path curvature and fell with openness
+  ([Environment and Behavior 1998](https://journals.sagepub.com/doi/10.1177/001391659803000401)).
+- **Perfect regularity is as unintelligible as chaos**; a few differentiators
+  restore intelligibility ([Space Syntax symposium](http://sss8.cl/8242.pdf)).
+  People expect floors to share layouts; misaligned floors get people lost
+  ([Carlson et al.](https://journals.sagepub.com/doi/abs/10.1177/0963721410383243)).
+- **Canon.** The Backrooms' mono-yellow walls, fluorescent hum and "randomly
+  segmented empty rooms" ([overview](https://en.wikipedia.org/wiki/The_Backrooms));
+  the Poolrooms' too-uniform tiles, oversized proportions and dark corners
+  ([overview](https://en.wikipedia.org/wiki/The_Poolrooms)); Anemoiapolis's
+  empty recession-era malls and gyms
+  ([artist page](https://andrewq.artstation.com/projects/Vydxg8)).
+
+**Inference — generatable properties:** program without occupants; one
+deviation on a realistic baseline (1.5–3× a parameter, not an unrealistic
+space); lighting as the first deviation channel; circulation outnumbering
+rooms with a function; rare absence/presence sockets; mystery through bends
+rather than raw occlusion; deterministic local impossibility; a near-uniform
+grid with sparse differentiators.
+
+### Horror layout rules
+
+Sources: The Exit 8's looping passage with anomalies weighted toward ceiling,
+lights and doors ([overview](https://en.wikipedia.org/wiki/The_Exit_8),
+[anomaly list](https://www.gamespew.com/2025/08/the-exit-8-walkthrough/));
+P.T.'s L-shaped loop with fewer doors than the corridor implies and a
+lighting escalation ([analysis](https://www.gamedeveloper.com/design/p-t-silent-hills-teaser-game-analysis));
+reconverging chase branches and safe previews before a space is tested
+([Game Developer](https://www.gamedeveloper.com/design/creating-horror-through-level-design-tension-jump-scares-and-chase-sequences));
+people follow light around a barrier (Taylor & Socov via
+[a lighting review](https://www.usailighting.com/stuff/contentmgr/files/1/1bee6e6ac47c458de76aec60debc69ac/misc/wayfinding_blake.pdf),
+secondary source); higher inter-connection density means more wrong turns and
+worse cognitive maps ([O'Neill 1991](https://journals.sagepub.com/doi/10.1177/0013916591235002));
+stairways are the main wayfinding obstacle and the "floor strategy" works best
+([Hölscher & Meilinger](https://www.sciencedirect.com/science/article/abs/pii/S0272494406000582));
+cycles as the unit of level design
+([Unexplored](https://www.boristhebrave.com/2021/04/10/dungeon-generation-in-unexplored/)).
+
+**Inference — rules:** loops carry the threat and dead ends carry the dread
+(main routes on rings, dead ends short, optional and dark); choices
+reconverge; sightlines alternate reveals (8–12+ cells) with doglegs (≤3);
+the through branch is brighter; show two or three identical units before a
+mutation and weight mutations toward light, ceiling and doors; progress never
+depends on noticing one; preview a space calmly before pressure; keep the
+inter-connection density modest on the main spine; align stair cores
+vertically where a family should stay legible.
+
+### Metrics (implemented)
+
+`liminalReport` computes, per floor, on the space graph (named rooms plus
+circulation decomposed into maximal convex rectangles, so a corridor ring
+reads as a ring):
+
+| Metric | Definition |
+| --- | --- |
+| loops | cyclomatic number E − V + C of the space graph |
+| dead-end share | spaces with one link ÷ spaces |
+| Hillier a/b/c/d | a = one link; b = on no ring; c = on one simple ring; d = on several rings ([space syntax terms](https://www.spacesyntax.online/term/c-space-or-c-type-space/)) |
+| ICD | mean choices at decision spaces (degree ≥ 3) |
+| integration / intelligibility | 1/RRA from mean depth with the diamond normalisation; intelligibility = R² between connectivity and integration ([formulae](https://arxiv.org/pdf/physics/0612011)) |
+| darkness | walkable cells below the light threshold (lamp reach with the game's sight rule) |
+| darkness clustering | Moran's I of dark/lit over walkable adjacency ([definition](https://en.wikipedia.org/wiki/Moran%27s_I)) |
+| sightline / isovist | isovist max depth and area from sampled cells; compactness 4πA/P² ([isovist metrics](https://discovery.ucl.ac.uk/id/eprint/10073528/7/Sailer_Dissecting%20Visibility%20Graph%20Analysis.%20The%20metrics%20and%20their%20role%20in%20understanding%20workplace%20human%20behaviour_VoR.pdf)) |
+| room repetition | rooms whose layout (size, furniture at the same offsets, lamp state) repeats another's |
+
+### Measured: families and prototype kinds
+
+`npm run report:liminal -- --seeds 12` (12 seeds per kind; families sampled
+as 5×5-chunk patches on floor 0 away from spawn; `*` rows are the kind-lab
+prototypes described below). Medians; sightlines in cells (3 m), capped at 48.
+
+| kind | loops/100 spaces | dead-end share | ring share (c+d) | ICD | intelligibility | darkness | dark Moran's I | sightline median | sightline p90 | isovist median | room repetition |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| office | 59.9 | 0.17 | 0.80 | 4.54 | 0.13 | 0.21 | 0.68 | 27.5 | 48.0 | 87 | 0.15 |
+| hotel | 52.8 | 0.25 | 0.74 | 4.74 | 0.10 | 0.22 | 0.71 | 16.6 | 48.0 | 52 | 0.22 |
+| sewer | 30.4 | 0.17 | 0.80 | 3.78 | 0.07 | 0.32 | 0.66 | 10.5 | 48.0 | 32 | 0.25 |
+| tower | 44.9 | 0.27 | 0.73 | 5.21 | 0.15 | 0.13 | 0.68 | 48.0 | 48.0 | 245 | 0.31 |
+| lattice | 35.3 | 0.27 | 0.68 | 4.91 | 0.09 | 0.22 | 0.78 | 40.5 | 48.0 | 92 | 0.04 |
+| *underpass | 2.1 | 0.61 | 0.06 | 4.78 | 0.13 | 0.15 | 0.53 | 8.6 | 10.6 | 26 | 1.00 |
+| *parking | 46.4 | 0.00 | 1.00 | 4.55 | 0.15 | 0.47 | 0.86 | 24.7 | 29.4 | 423 | 0.00 |
+| *mall | 41.8 | 0.28 | 0.70 | 6.92 | 0.25 | 0.75 | 0.89 | 25.4 | 33.1 | 288 | 1.00 |
+| *hospital | 5.4 | 0.76 | 0.22 | 9.50 | 0.47 | 0.49 | 0.81 | 5.7 | 22.5 | 15 | 0.96 |
+| *school | 6.9 | 0.28 | 0.28 | 3.67 | 0.05 | 0.63 | 0.81 | 9.5 | 20.5 | 22 | 0.88 |
+
+What it shows about the families:
+
+- **Sightlines are long everywhere.** Office's median isovist depth is 27.5
+  cells (~80 m) and every family's p90 reaches the 48-cell (144 m) cap. By
+  the mystery findings above, long clear views lower mystery; the H3 rhythm
+  (reveals separated by doglegs) is largely absent.
+- **Families are loop-rich but unintelligible.** 68–80% of spaces sit on
+  rings and dead ends are 17–27% of spaces, yet intelligibility R² is
+  0.07–0.15, far below the 0.5 the space-syntax literature calls intelligible.
+  That is a plausible disorientation register for the Backrooms; it also
+  means there are few legible anchors (inference).
+- **Darkness is moderately clustered.** Families darken 13–32% of walkable
+  cells with Moran's I 0.66–0.78: failed fixtures are scattered per lamp.
+  Kinds whose lamps fail by bay or room (parking, mall, hospital, school)
+  reach 0.81–0.89.
+- **Repetition is incidental.** 4–31% of family rooms repeat another's
+  layout; no family repeats a unit deliberately and then mutates it.
+
+### Lighting lab (measured)
+
+The editor's lighting lab (`src/editor/lighting.js`) re-assigns a floor's lamp
+failures by circuit or by 7×7-cell breaker zone while keeping exactly the same
+number of dead fixtures. Mean of 8 seeds per family, 5×5-chunk floor:
+
+| family | darkness (per fixture → zone) | Moran's I (per fixture → zone) |
+| --- | --- | --- |
+| office | 0.189 → 0.216 | 0.682 → 0.732 |
+| hotel | 0.216 → 0.252 | 0.710 → 0.753 |
+| tower | 0.119 → 0.143 | 0.674 → 0.724 |
+| sewer | 0.299 → 0.346 | 0.624 → 0.706 |
+| lattice | 0.175 → 0.209 | 0.737 → 0.785 |
+
+Room/row circuits alone move Moran's I only by +0.01–0.05 (most rooms have a
+single lamp); breaker zones move it by +0.04–0.08. Clustered failures also
+raise darkness by 0.02–0.05 at the same dead count because overlapping
+coverage is lost; holding darkness constant needs a smaller zone budget.
+
+### New map kinds (prototyped in the editor's kind lab)
+
+Each is a deterministic, audit-clean map built from the existing primitives
+(`src/editor/prototypes.js`, tested in `prototypes.test.js`):
+
+| Kind | Grammar | Liminal/horror function |
+| --- | --- | --- |
+| Transit underpass | 2-wide serpentine segments of 12 cells joined by U-turns; three doors into one-cell closets per segment, a lamp every 2 cells; 1–2 later segments mutate (dark, lights ahead out, extra/missing door, column) | Exit 8: learned baseline, then doubt; bends hide the next copy |
+| Parking deck | 3 identical levels; posts every 3 cells on the stall-module line; a void slot through all levels; two enclosed stair cores; whole bays fail | Huge isovists broken by columns; identical levels |
+| Dead mall | bridged galleria through 3 storeys; storefront rows (mostly dark, open fronts); dark anchor hall; food court | Occluded depth behind glass, repeated storefronts, scale |
+| Hospital ward | racetrack corridor round a support core; 2×2 patient rooms outside it; a Nightingale ward as a long dead end; a lit nurse station | Rows of empty beds; one refuge landmark |
+| School at night | double-loaded corridor; 16 classrooms with desks; lockers; stair cores at both ends; sparse light | A familiar place outside its time |
+
+The structure roadmap's concepts are also authorable as templates
+(split-level overlook, twin-void atrium, repetition-anomaly wing,
+compression-release suite, switchback stairwell, light wells and bridged
+atria).
+
+### Recommendations for the generator
+
+Ranked by impact × feasibility. None of these is implemented in the
+generator by this update: each changes pinned world bytes and needs a
+versioned release-evidence refresh. Every one has a measurable acceptance
+test from the metrics above.
+
+1. **Lamp failures by breaker zone** (`lamps.js`), keeping a small
+   independent residue. Accept when Moran's I rises by ≥ 0.04 per family (lab
+   result above) and darkness stays within the chosen band (reduce the dead
+   budget to hold it). Pair with brighter through-branches at junctions.
+2. **Sightline rhythm.** Offset thresholds and dogleg corridor joints in
+   Office/Hotel so the isovist-depth median falls toward 10–15 cells while
+   p90 keeps occasional reveals. Accept on the sightline median/p90 per family.
+3. **Repetition with one mutation** as a district motif (the anomaly-wing
+   template is the reference): 3–6 identical rooms, exactly one mutated in
+   light, ceiling or doors, never on the critical path. Accept on room
+   repetition ≥ 0.5 inside the motif and exactly one outlier.
+4. **Legible stair cores.** An aligned switchback core at the same position
+   on every floor as the family's legible spine (the stairwell template),
+   with deliberately offset atria elsewhere. Accept on core alignment across
+   floors and stair visibility from each band entrance.
+5. **Promote a new family** from the kind lab — the transit underpass first
+   (corridor/door/lamp primitives only), then the parking deck.
+6. **Flicker safety.** Bad tubes strobe at ~9 Hz between 20% and 100%
+   (`LAMP_BAD_RATE`, `lampCharacter.js`, `gFlicker`), above the WCAG
+   three-flashes guidance ([WCAG 2.3.1](https://w3c.github.io/wcag21/understanding/three-flashes-or-below-threshold.html)).
+   **Done:** the REDUCE FLICKER setting, on by default, caps them at 2 steps/s
+   within 92–100% and softens the global hum and dip; see
+   [lighting-pipeline.md](lighting-pipeline.md#flicker-and-photosensitivity-reduceflicker).
+
+## Structure catalog (v26)
+
+*Research update, 2026-09-26.* The per-family catalog of procedural
+structures is implemented in `src/world/structures/catalog/` and
+documented in [World Generation Architecture — v26](worldgen-architecture.md#v26--family-skeletons-and-the-structure-catalog).
+It had two goals: make the five families different places (not one plan in
+five palettes) and give each one a vertical vocabulary of its own.
+
+### Types per family
+
+| family | small (1 chunk) | medium (2 chunks) | large (2×2 chunks) |
+|---|---|---|---|
+| office | compression stair hall (Wright's compression and release) · glazed light well · sunken bullpen (prospect–refuge) | galleried light court (Larkin, Bradbury) · twin-void atrium with aligned core · plant-room mezzanine | bureau great hall (Control's Oldest House, 33 Thomas St) · carceri atrium (Piranesi) |
+| hotel | open-well grand stair (Hotel Chelsea) · service stair and linen chute · mezzanine ballroom | Portman atrium (Hyatt Regency Atlanta) · motel court (Augé's non-places) | grand atrium · ribcage double atrium (Atlanta Marriott Marquis) |
+| sewer | vortex drop shaft (Thames Tideway) · overflow weir chamber · maintenance stair | cistern hypostyle (Yerebatan) · surge chamber | pump-hall octagon (Crossness) · pressure-control tank (G-Cans) · stepwell cistern (Chand Baori) |
+| tower | service shaft · concrete stair core (Trellick Tower) · drop gallery | carceri nave · split-level car park (d'Humy) | highwalk podium (Barbican, Chongqing) · panoptic well (Presidio Modelo) · megastructure well (Blame!) |
+| lattice | stair pylon (Kowloon, Habitat 67) · gantry crossing (Silent Hill) · terrace step-down | escalator spine (Central–Mid-Levels) · hanging decks | rooftop network (Kowloon Walled City) · stacked-module hill (Habitat 67) · megastructure abyss |
+
+The landmark planners are unchanged: office and hotel atria, the tower nave
+and courts, and the lattice district. Hotel's atria now come from its own
+grammar (wider, 5–13 storeys).
+
+### Verticality rules the catalog enforces
+
+These are drawn from the wayfinding and height-exposure literature collected
+in this research pass. The analyzer and the tests check every one of them.
+
+1. **One aligned core, deviation elsewhere.** Medium and large volumes carry
+   a switchback core on the same cells every storey. Disorientation comes only
+   from the voids (Hölscher & Meilinger's floor strategy; Carlson 2010; Kuliga
+   2019 on Seattle Central Library).
+2. **Visible stairs.** Cores stand open to the void. Glazed or railed stair
+   cores measurably shorten vertical wayfinding, while an atrium alone does
+   not (Sci Rep 2024; Gath-Morad 2021).
+3. **Planes in three-storey modules.** Bridges cross voids every third
+   storey on the grand halls (Level Design Book; the Unité and Trellick
+   rhythm).
+4. **Exposure often, failure never.** Every void edge is guarded (rails, or
+   glazing on the office light wells). Catalog voids are never lethal, so
+   height is felt without ending the run (Gromer 2018; the Virtual Pole
+   study).
+5. **Loops, not traps.** Every storey reaches the ring on its own, every
+   slab has at least one flight, and large volumes add redundant flights in
+   other chunks.
+6. **Exactly one deviation.** Each type can carry one designed mutation: a
+   missing bridge, a pier out of line, an offset well, a narrower gallery, a
+   lone bridge, a shifted radial bridge. It is recorded on the descriptor
+   (Exit 8's single change; Diel & Lewis on the uncanny).
+7. **Compress before release.** Stair halls, ballrooms and courts open from
+   the ordinary fabric through a one-cell ring into a tall void (Wright;
+   Herzog & Miller on mystery).
+
+### Measured result
+
+Layout alone now tells the families apart. Nearest-centroid accuracy is 95%
+across 17 layout features, and no pair shares its chunk-seam skeleton (κ ≤
+0.10, down from 0.69–0.79). Office and Hotel went from indistinguishable
+(effect 0.34) to clearly different (1.38): Hotel has 17.6 rooms per chunk
+against Office's 10.3, rooms of 8.2 cells against 13.2, and 1.6× the door
+density. Lattice's hole share rose to 0.25, against 0.04–0.06 for the room
+families. Run `npm run report:families` to reproduce.
+
+The liminal metrics now separate the families the way each is meant to feel.
+Medians over 6 seeds, 5×5 chunks on floor 0, from `npm run report:liminal`:
+
+| metric | office | hotel | sewer | tower | lattice |
+|---|---|---|---|---|---|
+| room repetition (identical layouts) | 0.14 | **0.46** | 0.26 | 0.14 | 0.15 |
+| dead-end share | 0.17 | **0.32** | 0.17 | 0.21 | 0.14 |
+| sightline median (cells) | 48 | 21 | **12** | 48 | 48 |
+| isovist median (cells) | 246 | 49 | **30** | 1013 | **1822** |
+| darkness | 0.15 | 0.11 | **0.31** | 0.22 | 0.17 |
+| dark clustering (Moran's I) | 0.66 | 0.56 | 0.66 | **0.75** | 0.74 |
+
+In words:
+- **Hotel** is the repetition-and-dead-end family (Exit 8's endless
+  corridor): one wing of identical rooms after another.
+- **Sewer** is the compressed dark (short sightlines, a third of the floor
+  unlit).
+- **Tower and Lattice** are the exposure families: isovists four to seven
+  times larger than Office's, with darkness pooling in zones.
+- **Office** stays the baseline maze.
+
+**Sources** (in addition to those cited earlier in this document):
+- Hölscher & Meilinger, wayfinding strategies (J. Env. Psych. 2006)
+- Kuliga et al. 2019, Seattle Central Library
+- Strategic visibility in multilevel buildings (Sci Rep 2024, PMC10866884)
+- Gath-Morad et al. 2021, visibility during vertical wayfinding (Sci Rep)
+- Gromer et al. 2018, height simulation in VR
+- The Virtual Pole (JVRB 2017)
+- Herzog & Miller 1998, mystery and danger
+- Level Design Book (verticality; prospect–refuge)
+- Building references: Wikipedia entries for Chand Baori, G-Cans, the Basilica Cistern, Crossness, Presidio Modelo, Habitat 67, Kowloon Walled City, Trellick Tower, the Central–Mid-Levels escalator, the Hyatt Regency Atlanta and the Atlanta Marriott Marquis

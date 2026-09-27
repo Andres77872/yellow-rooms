@@ -61,13 +61,6 @@ export const UI_CSS = `
 #ui .jp-accent { font-size:14px; letter-spacing:.5em; color:var(--gold-dim);
   text-shadow:0 0 10px var(--amber-glow); user-select:none; }
 #ui .keys { color:var(--paper-dim); font-size:13px; line-height:2; letter-spacing:.1em; }
-#p-title h1 { animation:h1-breathe 4s ease-in-out infinite; }
-@keyframes h1-breathe {
-  0%,100% { text-shadow:0 0 2px rgba(244,233,200,.7), 0 0 16px var(--amber-glow),
-                        0 0 36px rgba(232,207,122,.14); }
-  50%     { text-shadow:0 0 3px rgba(244,233,200,.85), 0 0 26px var(--amber-glow),
-                        0 0 64px rgba(232,207,122,.28); }
-}
 
 /* ── seed input: centered underline-only field ─────────────────── */
 #ui input[type=text] { background:transparent; border:none;
@@ -168,6 +161,7 @@ export const UI_CSS = `
 
 /* ── transition panel: no-clip glitch ──────────────────────────── */
 #p-trans .glitch { animation:glitch-jitter 2.8s steps(1,end) infinite; }
+#ui.reduce-flicker #p-trans .glitch { animation:none; }
 @keyframes glitch-jitter {
   0%,86%,100% { transform:none; opacity:1; clip-path:none; }
   87% { transform:translateX(-2px) skewX(-10deg); }
@@ -177,6 +171,196 @@ export const UI_CSS = `
   90% { transform:none; clip-path:none; }
   94% { transform:translateX(1px) skewX(-4deg); opacity:.85; }
   95% { transform:none; opacity:1; }
+}
+
+/* ── title: full-bleed main menu over the live world backdrop ─────
+   Left column = wordmark + menu; the right side keeps the world visible
+   (lighter scrim there). No backdrop-filter on the full panel — the world
+   behind it is a live deferred frame, and blurring it every frame is waste. */
+#ui #p-title { display:block; padding:0; text-align:left;
+  background:
+    repeating-linear-gradient(0deg, rgba(0,0,0,.07) 0 1px, transparent 1px 3px),
+    linear-gradient(90deg, rgba(10,9,5,.93) 0%, rgba(10,9,5,.8) 30%,
+                    rgba(10,9,5,.28) 64%, rgba(10,9,5,.46) 100%),
+    radial-gradient(ellipse 80% 75% at 70% 46%, transparent 35%, rgba(10,9,5,.6) 100%); }
+#p-title .title-main { position:absolute; inset:0; display:flex; flex-direction:column;
+  gap:clamp(18px,4.2vh,44px); width:min(780px,100%); overflow-y:auto; overflow-x:clip;
+  padding:clamp(20px,6vh,72px) clamp(20px,7vw,120px) calc(clamp(20px,6vh,72px) + 44px);
+  transition:opacity .25s; }
+/* auto margins = "safe" centering: overflowing content scrolls from the top
+   instead of being clipped above it the way justify-content:center would. */
+#p-title .brand { display:flex; flex-direction:column; align-items:flex-start;
+  gap:clamp(10px,1.8vh,16px); margin-top:auto; }
+#p-title .kicker { justify-content:flex-start; }
+#p-title .kicker::before { display:none; }
+
+/* wordmark: THE / YELLOW (lit tubes) / ROOMS (hollow neon outline) */
+#p-title .logo { display:flex; flex-direction:column; align-items:flex-start;
+  font-size:clamp(40px, min(12vh, 10.5vw), 132px); line-height:.94;
+  letter-spacing:.05em; white-space:nowrap; font-weight:800; text-shadow:none; }
+#p-title .logo-the { display:flex; align-items:center; gap:.8em; margin:0 0 .45em .1em;
+  font-size:.19em; font-weight:700; letter-spacing:.9em; color:var(--gold);
+  text-shadow:0 0 12px var(--amber-glow); }
+#p-title .logo-the::after { content:''; width:4.5em; height:1px; background:var(--line); }
+#p-title .logo-word { display:block; }
+#p-title .lit .lt { color:#fbefc4;
+  text-shadow:0 0 2px rgba(255,248,220,.9), 0 0 .12em rgba(232,207,122,.7),
+              0 0 .42em rgba(232,207,122,.32); }
+#p-title .hollow .lt { color:rgba(23,18,10,.4); -webkit-text-stroke:max(1px,.02em) var(--gold);
+  text-shadow:0 0 .16em rgba(232,207,122,.4); }
+/* every tube flickers on once per arrival; one keeps failing afterwards */
+#p-title:not(.hidden) .lt { animation:tube-on .8s steps(1,end) calc(120ms + var(--i) * 55ms) both; }
+#p-title:not(.hidden) .lt.fail {
+  animation:tube-on .8s steps(1,end) calc(120ms + var(--i) * 55ms) both,
+            tube-fail 9s steps(1,end) 3s infinite; }
+@keyframes tube-on { 0% { opacity:0; } 10% { opacity:.85; } 16% { opacity:.08; }
+  28% { opacity:1; } 34% { opacity:.3; } 44%,100% { opacity:1; } }
+@keyframes tube-fail { 0%,88%,100% { opacity:1; } 89% { opacity:.15; } 90% { opacity:.9; }
+  91.5% { opacity:.2; } 93% { opacity:1; } 96% { opacity:.55; } 97% { opacity:1; } }
+/* REDUCE FLICKER (photosensitivity, Settings 'reduceFlicker'): the power-on
+   and failing-tube flicker swing opacity by up to 90% several times a second,
+   so they are dropped. The tubes simply glow; the failing one keeps a slow
+   ~0.2 Hz sag (one soft change, well under the 3 Hz flash limit). */
+#ui.reduce-flicker #p-title:not(.hidden) .lt { animation:none; }
+#ui.reduce-flicker #p-title:not(.hidden) .lt.fail { animation:tube-sag 5s ease-in-out 3s infinite; }
+@keyframes tube-sag { 0%,100% { opacity:1; } 50% { opacity:.7; } }
+
+/* fluorescent hum: a hairline with a slow travelling highlight */
+#p-title .hum { position:relative; width:min(440px,72%); height:1px;
+  background:var(--line); overflow:hidden; }
+#p-title .hum::after { content:''; position:absolute; top:0; bottom:0; left:0; width:30%;
+  background:linear-gradient(90deg, transparent, var(--gold), transparent);
+  animation:hum-sweep 5.5s cubic-bezier(.4,0,.2,1) infinite; }
+@keyframes hum-sweep { from { transform:translateX(-100%); } to { transform:translateX(340%); } }
+#p-title .tagline { margin:0; color:var(--paper-dim); font-size:13px; line-height:1.9;
+  letter-spacing:.12em; }
+
+/* menu: left-aligned console-style items; hover and keyboard focus share
+   one look (gold rail + caret + nudge) */
+#p-title .menu { display:flex; flex-direction:column; align-items:stretch; gap:4px;
+  width:min(400px,100%); margin-bottom:auto; }
+#p-title .mi { position:relative; display:flex; align-items:center;
+  justify-content:space-between; gap:12px; width:100%; padding:13px 18px;
+  background:transparent; border:none; color:var(--paper-dim); text-align:left;
+  font-size:14px; letter-spacing:.3em;
+  transition:color .18s, padding-left .18s, background-color .18s; }
+#p-title .mi::before { content:''; position:absolute; left:0; top:22%; bottom:22%; width:2px;
+  background:var(--gold); box-shadow:0 0 8px var(--amber-glow);
+  transform:scaleY(0); transition:transform .18s; }
+#p-title .mi-caret { color:var(--gold); opacity:0; transform:translateX(-6px);
+  transition:opacity .18s, transform .18s; }
+#p-title .mi:hover, #p-title .mi:focus-visible, #p-title .mi[aria-expanded="true"] {
+  color:var(--paper); padding-left:26px; outline:none;
+  background-color:rgba(232,207,122,.08); }
+#p-title .mi:hover::before, #p-title .mi:focus-visible::before,
+#p-title .mi[aria-expanded="true"]::before { transform:scaleY(1); }
+#p-title .mi:hover .mi-caret, #p-title .mi:focus-visible .mi-caret,
+#p-title .mi[aria-expanded="true"] .mi-caret { opacity:1; transform:none; }
+/* ENTER: the gold primary bar (inherits .primary's clip + shine) */
+#p-title .mi.primary { min-width:0; padding:16px 20px; margin-bottom:4px;
+  color:var(--ink); font-size:15px; background:var(--gold); }
+#p-title .mi.primary::before { display:none; }
+#p-title .mi.primary .mi-caret { color:var(--ink); opacity:1; transform:none; }
+#p-title .mi.primary:hover, #p-title .mi.primary:focus-visible {
+  color:var(--ink); background:#f4e08e; padding-left:26px; }
+#p-title .mi.primary:focus-visible { outline:2px solid var(--ink); outline-offset:-5px; }
+
+/* run parameters: seed + map family under ENTER */
+#p-title .world { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);
+  gap:2px 18px; margin:2px 0 8px; padding:8px 18px 6px;
+  border-left:1px solid var(--line-weak); }
+#p-title .field { display:flex; flex-direction:column; gap:1px; min-width:0; }
+#p-title .field-lab { font-size:10px; letter-spacing:.32em; color:var(--gold-dim); }
+#p-title .field input[type=text], #p-title .field select { width:100%; padding:7px 2px;
+  text-align:left; font-size:13px; letter-spacing:.12em; }
+#p-title .world-note { grid-column:1 / -1; min-height:1.7em; padding-top:6px;
+  font-size:11px; letter-spacing:.02em; color:var(--paper-dim); opacity:.85; }
+
+/* vertical kanji running down the right edge, anime title-card style */
+#p-title .jp-vert { position:absolute; top:50%; right:clamp(16px,4.5vw,72px);
+  transform:translateY(-50%); writing-mode:vertical-rl; pointer-events:none;
+  font-size:clamp(22px,5.4vh,58px); letter-spacing:.42em; color:rgba(232,207,122,.34);
+  text-shadow:0 0 18px rgba(232,207,122,.2); user-select:none; transition:opacity .25s; }
+#p-title .jp-vert::before { content:''; position:absolute; top:-2.2em; left:50%;
+  width:1px; height:1.6em; background:var(--line); }
+
+/* footer: control legend + build tag */
+#p-title .title-foot { position:absolute; left:0; right:0; bottom:0; display:flex;
+  justify-content:space-between; align-items:flex-end; gap:16px; pointer-events:none;
+  padding:0 max(clamp(20px,7vw,120px), env(safe-area-inset-right))
+          max(18px, env(safe-area-inset-bottom)) max(clamp(20px,7vw,120px), env(safe-area-inset-left)); }
+#p-title .title-foot .chips { justify-content:flex-start; max-width:min(560px,62vw); }
+#p-title .title-foot .chip { padding:3px 8px; font-size:10px; background:rgba(23,18,10,.5); }
+#p-title .build { font-size:10px; letter-spacing:.22em; color:var(--paper-dim);
+  opacity:.7; text-align:right; text-transform:uppercase; }
+
+/* settings side sheet */
+#p-title .sheet { position:absolute; top:0; right:0; bottom:0; z-index:2;
+  display:flex; flex-direction:column; gap:18px; width:min(460px,100%); overflow-y:auto;
+  padding:max(28px, env(safe-area-inset-top)) max(28px, env(safe-area-inset-right))
+          max(28px, env(safe-area-inset-bottom)) 28px;
+  background:var(--ink-90); border-left:1px solid var(--line);
+  box-shadow:-24px 0 48px rgba(0,0,0,.45);
+  animation:sheet-in .32s cubic-bezier(.16,1,.3,1) both; }
+@supports ((backdrop-filter:blur(10px)) or (-webkit-backdrop-filter:blur(10px))) {
+  #p-title .sheet { background:rgba(23,18,10,.8);
+    -webkit-backdrop-filter:blur(12px) saturate(1.15);
+    backdrop-filter:blur(12px) saturate(1.15); }
+}
+@keyframes sheet-in { from { opacity:0; transform:translateX(24px); } }
+#p-title .sheet-head { display:flex; justify-content:space-between; align-items:flex-start; }
+#p-title .sheet-head h2 { margin:6px 0 0; font-size:20px; letter-spacing:.3em; }
+#p-title .sheet-close { padding:8px 13px; font-size:14px; letter-spacing:0; }
+#p-title .sheet .settings { width:100%; }
+#p-title.sheet-open .title-main { opacity:.3; }
+#p-title.sheet-open .jp-vert { opacity:0; }
+
+/* staggered arrival: brand details, then the menu items */
+#p-title:not(.hidden) .kicker,
+#p-title:not(.hidden) .hum,
+#p-title:not(.hidden) .tagline,
+#p-title:not(.hidden) .menu > *,
+#p-title:not(.hidden) .jp-vert,
+#p-title:not(.hidden) .title-foot { animation:title-rise .6s cubic-bezier(.16,1,.3,1) both; }
+#p-title:not(.hidden) .kicker { animation-delay:.05s; }
+#p-title:not(.hidden) .hum { animation-delay:.6s; }
+#p-title:not(.hidden) .hum::after { animation-delay:1.2s; }
+#p-title:not(.hidden) .tagline { animation-delay:.7s; }
+#p-title:not(.hidden) .menu > :nth-child(1) { animation-delay:.8s; }
+#p-title:not(.hidden) .menu > :nth-child(2) { animation-delay:.87s; }
+#p-title:not(.hidden) .menu > :nth-child(3) { animation-delay:.94s; }
+#p-title:not(.hidden) .menu > :nth-child(4) { animation-delay:1.01s; }
+#p-title:not(.hidden) .jp-vert { animation-name:title-fade; animation-duration:1.4s;
+  animation-delay:.4s; }
+#p-title:not(.hidden) .title-foot { animation-name:title-fade; animation-delay:1.1s; }
+@keyframes title-rise { from { opacity:0; transform:translateY(8px); } }
+@keyframes title-fade { from { opacity:0; } }
+
+/* narrow windows: the kanji would collide with the wordmark, and the legend
+   wraps to several rows — stack it in flow under the (scrollable) menu column
+   so the two can never overlap. */
+@media (max-width:760px) {
+  #ui #p-title { display:flex; flex-direction:column; align-items:stretch; }
+  #p-title .title-main { position:relative; inset:auto; flex:1 1 auto; min-height:0;
+    padding-bottom:clamp(16px,3vh,32px); }
+  #p-title .title-foot { position:relative; flex:none; }
+  #p-title .jp-vert { display:none; }
+  #p-title .title-foot .build { display:none; }
+}
+/* short landscape (phones): wordmark left, menu right, no legend */
+@media (max-height:520px) and (min-width:560px) {
+  #ui #p-title { background:
+    repeating-linear-gradient(0deg, rgba(0,0,0,.07) 0 1px, transparent 1px 3px),
+    linear-gradient(90deg, rgba(10,9,5,.9), rgba(10,9,5,.72)); }
+  #p-title .title-main { flex-direction:row; align-items:center; justify-content:center;
+    gap:clamp(20px,5vw,64px); width:100%;
+    padding:14px max(24px, env(safe-area-inset-right)) 14px max(24px, env(safe-area-inset-left)); }
+  #p-title .brand, #p-title .menu { margin:auto 0; }
+  #p-title .logo { font-size:clamp(32px, 13vh, 76px); }
+  #p-title .tagline, #p-title .jp-vert, #p-title .title-foot { display:none; }
+  #p-title .menu { width:min(380px,48vw); }
+  #p-title .mi { padding:10px 14px; }
+  #p-title .mi.primary { padding:12px 16px; }
 }
 
 /* ── HUD ───────────────────────────────────────────────────────── */
@@ -239,8 +423,6 @@ export const UI_CSS = `
   background:radial-gradient(circle at 50% 42%, rgba(40,36,12,.3), rgba(10,9,5,.85));
   box-shadow:inset 0 0 22px rgba(0,0,0,.55); }
 #hud #minimap { display:block; width:${MINIMAP_SIZE}px; height:${MINIMAP_SIZE}px; }
-#ui .touchnote { position:absolute; bottom:18px; font-size:11px;
-  color:var(--paper-dim); letter-spacing:.16em; }
 .hidden { display:none !important; }
 
 /* Safe-area (notch) offsets — separate override rules so browsers without

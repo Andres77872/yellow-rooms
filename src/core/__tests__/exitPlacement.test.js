@@ -10,6 +10,7 @@ import { DEFAULT_WORLD_CONFIG } from '../../world/config.js'
 import { hashStr } from '../../world/core/hash.js'
 import { generateChunk } from '../../world/generate.js'
 import { chunkStairs, stairStrip } from '../../world/structures/slab.js'
+import { MAP_FAMILY_ORDER, worldConfigForFamily } from '../../world/mapFamily.js'
 
 const placement = (seedText, level) => {
   const worldSeed = hashStr(`${seedText}#${level}`)
@@ -81,6 +82,41 @@ describe('cross-floor exit placement', () => {
       expect(data.exit).toEqual({ lx: exit.lx, lz: exit.lz })
       expect(data.hasFloorHole(exit.lx, exit.lz)).toBe(false)
     }
+  })
+
+  it.each(MAP_FAMILY_ORDER)('places %s objectives on actual floor outside its generated stair strips', (family) => {
+    const config = worldConfigForFamily(family)
+    const seeds = [...Array.from({ length: 60 }, (_, index) => index), 67, 102]
+    for (const index of seeds) {
+      const text = `exit-audit-${index}`
+      const seed = hashStr(`${text}#1`)
+      const exit = createExitPlacement(text, 1, seed, config)
+      const data = generateChunk(seed, exit.cx, exit.cy, exit.cz, config, exit)
+      expect(EXIT_FLOORS).toContain(exit.cy)
+      expect(data.colAt(exit.lx, exit.lz), `${family}, ${text}: occupied objective`).toBe(0)
+      expect(data.hasFloorHole(exit.lx, exit.lz), `${family}, ${text}: objective over void`).toBe(false)
+      const strips = [data.stairUp, data.stairDown].filter(Boolean).flatMap(stairStrip)
+      expect(strips.some((cell) => cell.lx === exit.lx && cell.lz === exit.lz),
+        `${family}, ${text}: objective on stair`).toBe(false)
+    }
+  })
+
+  it('relocates an entirely void lattice host to retained floor in the same structure and level', () => {
+    const config = worldConfigForFamily('lattice')
+    const text = 'exit-audit-12'
+    const seed = hashStr(`${text}#1`)
+    const original = generateChunk(seed, 6, 4, -1, config)
+    for (let z = 0; z < CHUNK; z++) {
+      for (let x = 0; x < CHUNK; x++) expect(original.hasFloorHole(x, z)).toBe(true)
+    }
+    const exit = createExitPlacement(text, 1, seed, config)
+    expect(exit.cy).toBe(4)
+    expect([exit.cx, exit.cz]).not.toEqual([6, -1])
+    expect(original.structure.participants).toContainEqual({ cx: exit.cx, cz: exit.cz })
+    const relocated = generateChunk(seed, exit.cx, exit.cy, exit.cz, config, exit)
+    expect(relocated.structure.id).toBe(original.structure.id)
+    expect(relocated.hasFloorHole(exit.lx, exit.lz)).toBe(false)
+    expect(createExitPlacement(text, 1, seed, config)).toEqual(exit)
   })
 })
 

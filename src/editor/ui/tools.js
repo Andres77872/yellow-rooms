@@ -46,6 +46,11 @@ export class SelectTool {
   onDown(p) {
     const { app } = this
     const cy = app.floor
+    // Exploring the generated world is read-only: selection inspects.
+    if (app.readOnly) {
+      app.inspectAt(p)
+      return
+    }
     if (app.map.furnitureAt(p.gx, cy, p.gz)) {
       app.select({ type: 'furniture', gx: p.gx, gz: p.gz, cy })
       this._drag = { from: { gx: p.gx, gz: p.gz }, moved: false }
@@ -69,12 +74,14 @@ export class SelectTool {
     app.map.mutate(() => {
       if (this._drag.lamp) {
         const lamp = app.map.lampAt(from.gx, cy, from.gz)
-        if (lamp && !app.map.lampAt(p.gx, cy, p.gz)) {
+        if (lamp && !app.map.lampAt(p.gx, cy, p.gz) && !app.guardCeiling(p.gx, cy, p.gz)) {
           app.map.setLamp(from.gx, cy, from.gz, null)
           app.map.setLamp(p.gx, cy, p.gz, lamp.rec.lit)
           from.gx = p.gx; from.gz = p.gz
           this._drag.moved = true
         }
+      } else if (app.guardCell(p.gx, cy, p.gz, 'move furniture')) {
+        // Refused (reason already shown in the status line).
       } else if (app.map.moveFurniture(from.gx, cy, from.gz, p.gx, p.gz)) {
         from.gx = p.gx; from.gz = p.gz
         this._drag.moved = true
@@ -111,6 +118,7 @@ export class WallTool {
   constructor(app) {
     this.app = app
     this.id = 'wall'
+    this.edits = true
     this.mode = 0
     this.status = 'click an edge · or drag along grid lines to draw a run'
     this._down = false
@@ -119,6 +127,7 @@ export class WallTool {
   _applyEdge(axis, gx, gz) {
     const [wall, passage, feature] = WALL_MODES[this.mode].apply
     const { app } = this
+    if (app.guardEdge(axis, gx, gz, app.floor)) return
     if (axis === 'v') app.map.setWallV(gx, app.floor, gz, wall, passage, feature)
     else app.map.setWallH(gx, app.floor, gz, wall, passage, feature)
     this._placed = true
@@ -206,6 +215,7 @@ export class RoomTool {
   constructor(app) {
     this.app = app
     this.id = 'room'
+    this.edits = true
     this.role = SPACE_ROLE_NONE
     this.withLamp = true
     this.status = 'drag an area, release to generate the room'
@@ -222,10 +232,14 @@ export class RoomTool {
     const a = this._start
     const b = { gx: p.gx, gz: p.gz }
     this._start = this._end = null
-    const room = createRoom(this.app.map, {
-      cy: this.app.floor,
+    const rect = {
       x0: Math.min(a.gx, b.gx), z0: Math.min(a.gz, b.gz),
       x1: Math.max(a.gx, b.gx), z1: Math.max(a.gz, b.gz),
+    }
+    if (this.app.guardRect(rect, this.app.floor)) return
+    const room = createRoom(this.app.map, {
+      cy: this.app.floor,
+      ...rect,
       role: this.role,
       lamp: this.withLamp,
     })
@@ -260,6 +274,7 @@ export class CellTool {
   constructor(app) {
     this.app = app
     this.id = 'cell'
+    this.edits = true
     this.mode = 1
     this.status = 'paint cell kinds (rooms come from the room tool)'
     this._down = false
@@ -267,6 +282,7 @@ export class CellTool {
 
   _apply(p) {
     const kind = CELL_MODES[this.mode].kind
+    if (this.app.guardCell(p.gx, this.app.floor, p.gz, 'paint')) return
     this.app.map.setCell(p.gx, this.app.floor, p.gz, {
       kind, ...(kind === CELL_OPEN ? { spaceId: 0, role: SPACE_ROLE_NONE } : {}),
     })
@@ -298,9 +314,10 @@ export class ObjectTool {
   constructor(app) {
     this.app = app
     this.id = 'object'
+    this.edits = true
     this.kind = 1 // FURN_DESK
     this.facing = 0
-    this.status = 'click a free cell to place · R pre-rotates'
+    this.status = 'click a free cell to place · R turns the piece first'
     this.statusExtra = ''
   }
 
@@ -308,6 +325,7 @@ export class ObjectTool {
     const { app } = this
     const cy = app.floor
     if (app.map.cellAt(p.gx, cy, p.gz).col) return
+    if (app.guardCell(p.gx, cy, p.gz, 'place furniture')) return
     const [w0, d0] = PIECE_DIMS[this.kind] ?? [1, 1]
     const alongX = this.facing === 2 || this.facing === 3
     app.map.mutate(() => {
@@ -324,12 +342,10 @@ export class ObjectTool {
     app.onDocumentChanged()
   }
 
-  onKey(e) {
-    if (e.key === 'r' || e.key === 'R') {
-      this.facing = (this.facing + 1) % 4
-      return true
-    }
-    return false
+  // R (keymap `object.turn`): 90° steps through the DIR set.
+  turn() {
+    const CYCLE = { 0: 3, 3: 1, 1: 2, 2: 0 }
+    this.facing = CYCLE[this.facing] ?? 0
   }
 }
 
@@ -339,6 +355,7 @@ export class LampTool {
   constructor(app) {
     this.app = app
     this.id = 'lamp'
+    this.edits = true
     this.status = 'click cycles: none → lit → dead → none'
   }
 
@@ -346,6 +363,7 @@ export class LampTool {
     const { app } = this
     const cy = app.floor
     const lamp = app.map.lampAt(p.gx, cy, p.gz)
+    if (!lamp && app.guardCeiling(p.gx, cy, p.gz)) return
     app.map.mutate(() => {
       if (!lamp) app.map.setLamp(p.gx, cy, p.gz, true)
       else if (lamp.rec.lit) app.map.setLamp(p.gx, cy, p.gz, false)
@@ -361,6 +379,7 @@ export class EraseTool {
   constructor(app) {
     this.app = app
     this.id = 'erase'
+    this.edits = true
     this.status = 'drag: clears objects, labels and the cell’s edges'
     this._down = false
   }
@@ -370,11 +389,17 @@ export class EraseTool {
     const cy = app.floor
     app.map.removeFurniture(p.gx, cy, p.gz)
     if (app.map.lampAt(p.gx, cy, p.gz)) app.map.setLamp(p.gx, cy, p.gz, null)
-    app.map.setCell(p.gx, cy, p.gz, { kind: CELL_OPEN, spaceId: 0, role: SPACE_ROLE_NONE, col: 0 })
-    app.map.setWallV(p.gx, cy, p.gz, 0, PASSAGE_OPEN)
-    app.map.setWallV(p.gx + 1, cy, p.gz, 0, PASSAGE_OPEN)
-    app.map.setWallH(p.gx, cy, p.gz, 0, PASSAGE_OPEN)
-    app.map.setWallH(p.gx, cy, p.gz + 1, 0, PASSAGE_OPEN)
+    // Structure-owned cells and their guard edges survive the eraser while
+    // protection is on; ordinary edges around them still clear.
+    if (!app.guardCell(p.gx, cy, p.gz, 'erase')) {
+      app.map.setCell(p.gx, cy, p.gz, { kind: CELL_OPEN, spaceId: 0, role: SPACE_ROLE_NONE, col: 0 })
+    }
+    const edges = [['v', p.gx, p.gz], ['v', p.gx + 1, p.gz], ['h', p.gx, p.gz], ['h', p.gx, p.gz + 1]]
+    for (const [axis, gx, gz] of edges) {
+      if (app.guardEdge(axis, gx, gz, cy)) continue
+      if (axis === 'v') app.map.setWallV(gx, cy, gz, 0, PASSAGE_OPEN)
+      else app.map.setWallH(gx, cy, gz, 0, PASSAGE_OPEN)
+    }
     app.invalidate()
   }
 
@@ -397,6 +422,184 @@ export class EraseTool {
   }
 }
 
+// --- section cut --------------------------------------------------------------
+
+// Click sets the vertical cross-section through the clicked row (cut along x)
+// or column (cut along z). X swaps the axis through the hovered cell; F lets
+// the cut follow the cursor while hovering.
+export class SectionTool {
+  constructor(app) {
+    this.app = app
+    this.id = 'section'
+    this.status = 'click: cut here · X: swap axis · F: follow cursor'
+  }
+
+  onDown(p) {
+    this.app.setSectionLine(p)
+  }
+
+  // X / F are keymap commands scoped to this tool (section.swap /
+  // section.follow in ui/keymap.js).
+
+  drawOverlay(g, view) {
+    const p = view.hover
+    if (!p) return
+    const s = view.view.scale
+    g.fillStyle = 'rgba(120,200,255,0.10)'
+    if (this.app.section.axis === 'x') {
+      g.fillRect(0, view.sy(p.gz * CELL), view._w, CELL * s)
+    } else {
+      g.fillRect(view.sx(p.gx * CELL), 0, CELL * s, view._h)
+    }
+  }
+}
+
+// --- probe (debugger) ---------------------------------------------------------
+
+// Click a cell to run the simulation chosen in the panel: inspect (pin the
+// cell in the inspector), walk-distance field, A→B path (two clicks, any
+// floors) or isovist. Works on the document and on the live world.
+export class ProbeTool {
+  constructor(app) {
+    this.app = app
+    this.id = 'probe'
+  }
+
+  get status() {
+    const mode = this.app.sim.probe
+    if (mode === 'path') return this.app.sim.a && !this.app.sim.b ? 'path: click B (change floor first for a vertical route)' : 'path: click A'
+    if (mode === 'distance') return 'click: walk-distance field from this cell'
+    if (mode === 'isovist') return 'click: isovist (what is visible from this cell)'
+    return 'click: pin this cell in the inspector'
+  }
+
+  onDown(p) {
+    this.app.onProbe(p)
+  }
+}
+
+// --- author (new structures) ----------------------------------------------------
+
+// Place a structure template (see editor/templates.js). Rectangle templates
+// are dragged; the stairwell is clicked at its first landing. The preview is
+// the real plan: green with the structure's label when it would apply, red
+// with the refusing contract otherwise.
+export class AuthorTool {
+  constructor(app) {
+    this.app = app
+    this.id = 'author'
+    this.edits = true
+    this._start = null
+    this._end = null
+    this._plan = null
+    this._planKey = ''
+  }
+
+  get status() {
+    const def = this.app.authorDef()
+    return def.input === 'point'
+      ? `click: place ${def.label} (first landing)`
+      : `drag: footprint of ${def.label}`
+  }
+
+  _input(p) {
+    const def = this.app.authorDef()
+    if (def.input === 'point') return { gx: p.gx, gz: p.gz }
+    const a = this._start ?? p
+    const b = this._end ?? p
+    return { x0: Math.min(a.gx, b.gx), z0: Math.min(a.gz, b.gz), x1: Math.max(a.gx, b.gx), z1: Math.max(a.gz, b.gz) }
+  }
+
+  _replan(p) {
+    const input = this._input(p)
+    const key = `${this.app.author.template}:${JSON.stringify(input)}:${this.app.floor}:${JSON.stringify(this.app.author.params)}:${this.app.revision}`
+    if (key === this._planKey) return
+    this._planKey = key
+    this._plan = this.app.planAuthor(input)
+  }
+
+  onDown(p) {
+    if (this.app.authorDef().input === 'point') {
+      this._replan(p)
+      this.app.applyAuthor(this._plan)
+      this._planKey = ''
+      return
+    }
+    this._start = { gx: p.gx, gz: p.gz }
+    this._end = this._start
+    this._replan(p)
+  }
+
+  onMove(p, e) {
+    if (this._start && (e.buttons & 1)) {
+      this._end = { gx: p.gx, gz: p.gz }
+      this._replan(p)
+    } else if (!this._start && this.app.authorDef().input === 'point') {
+      this._replan(p)
+    }
+  }
+
+  onUp(p) {
+    if (!this._start) return
+    this._end = { gx: p.gx, gz: p.gz }
+    this._replan(p)
+    const plan = this._plan
+    this._start = this._end = null
+    this._planKey = ''
+    this._plan = null
+    this.app.applyAuthor(plan)
+  }
+
+  onCancel() {
+    this._start = this._end = null
+    this._plan = null
+    this._planKey = ''
+  }
+
+  drawOverlay(g, view) {
+    const plan = this._plan
+    if (!plan) return
+    const s = view.view.scale
+    const def = this.app.authorDef()
+    const rect = plan.ok ? plan.bounds : def.input === 'point' ? null : this._input(view.hover ?? {})
+    const ok = plan.ok
+    g.lineWidth = 2
+    g.strokeStyle = ok ? 'rgba(120,255,160,0.95)' : 'rgba(255,90,80,0.95)'
+    g.fillStyle = ok ? 'rgba(120,255,160,0.12)' : 'rgba(255,90,80,0.12)'
+    if (rect && Number.isFinite(rect.x0)) {
+      const x = view.sx(rect.x0 * CELL)
+      const y = view.sy(rect.z0 * CELL)
+      const w = (rect.x1 - rect.x0 + 1) * CELL * s
+      const h = (rect.z1 - rect.z0 + 1) * CELL * s
+      g.fillRect(x, y, w, h)
+      g.strokeRect(x, y, w, h)
+    }
+    // Footprints of the individual parts.
+    if (ok) {
+      g.setLineDash([4, 3])
+      for (const part of plan.parts) {
+        const b = part.type === 'atrium' ? part.descriptor.globalBounds
+          : part.type === 'stairwell' ? part.plan.globalCore
+            : part.type === 'wing' ? part.corridor : null
+        if (!b) continue
+        g.strokeRect(view.sx(b.x0 * CELL), view.sy(b.z0 * CELL), (b.x1 - b.x0 + 1) * CELL * s, (b.z1 - b.z0 + 1) * CELL * s)
+      }
+      g.setLineDash([])
+    }
+    const hv = view.hover
+    if (hv) {
+      const text = ok ? `${plan.label} · cy ${plan.baseCy}…${plan.topCy}` : plan.error
+      g.font = '12px ui-monospace, monospace'
+      const x = view.sx((hv.gx + 1) * CELL) + 8
+      const y = view.sy(hv.gz * CELL) - 8
+      g.fillStyle = 'rgba(13,13,9,0.85)'
+      g.fillRect(x - 4, y - 13, g.measureText(text).width + 8, 18)
+      g.fillStyle = ok ? '#9fffb8' : '#ff9a90'
+      g.fillText(text, x, y)
+    }
+  }
+}
+
 export function createTools(app) {
   return [
     new SelectTool(app),
@@ -406,5 +609,8 @@ export function createTools(app) {
     new ObjectTool(app),
     new LampTool(app),
     new EraseTool(app),
+    new SectionTool(app),
+    new ProbeTool(app),
+    new AuthorTool(app),
   ]
 }

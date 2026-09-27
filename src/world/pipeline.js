@@ -8,6 +8,8 @@ import { placeLights } from './lamps.js'
 import { stampStairs } from './structures/stairStamp.js'
 import { stampMultilevelRooms, stampTowerStructure } from './structures/multilevelStamp.js'
 import { stampLatticeStructure } from './structures/latticeStamp.js'
+import { stampCatalogStructure } from './structures/catalog/stamp.js'
+import { isCatalogStructure } from './structures/catalog/engine.js'
 import { DEFAULT_WORLD_CONFIG } from './config.js'
 import {
   MAP_FAMILY_HOTEL,
@@ -136,41 +138,47 @@ export function buildChunk(seed, cx, cy, cz, config = DEFAULT_WORLD_CONFIG, exit
   // routed lobbies; open zones receive the same semantic label here. Run after
   // repair so nothing re-walls the halo, before lamps so fixtures see holes,
   // and before L6 so anomaly carves respect protected guard edges.
-  if (
+  // L4.5/L4.6 — generic stairs, then the chunk's canonical structure.
+  // Structure ownership suppresses generic slab stairs in its columns
+  // (slab.js), so the two never collide. v26: every family stamps generic
+  // slab stairs (Tower/Lattice floors between landmarks were unreachable
+  // from each other before), and a catalog volume (structures/catalog) takes
+  // any chunk-storey the family landmark leaves free.
+  const structure = structureAt(seed, cx, cz, cy, config)
+  if (profile.family === MAP_FAMILY_SEWER) {
+    // Every emitted manhole-up/down module gets a real canonical riser half.
+    // Reusing root-seeded slab contracts keeps adjacent layers byte-identical;
+    // the shared descriptor primitive preserves the existing guarded-halo path.
+    stampStairs(data, seed, cx, cy, cz, sewerStairConfig(config))
+  } else {
+    // Office/Hotel district grammars reserve these halos as routed lobbies
+    // before laying out rooms; the infrastructure plans do the same since v26.
+    stampStairs(data, seed, cx, cy, cz, config)
+  }
+  if (isCatalogStructure(structure)) {
+    // v26 catalog volume: footprint + ring carve, railed voids, piers, its own
+    // flights and (optionally) an enclosed core — see catalog/stamp.js.
+    stampCatalogStructure(data, structure)
+  } else if (
     profile.family === MAP_FAMILY_OFFICE ||
     profile.family === MAP_FAMILY_HOTEL
   ) {
-    // Hotel is the second office-fabric family: same stair slabs, same
-    // canonical multilevel volumes (read as hotel atria/light wells). Its
-    // identity lives in the room catalog, palette and furnishing, not in a
-    // different structural grammar.
-    stampStairs(data, seed, cx, cy, cz, config)
-
     // L4.6 — tall-structure stamp (v13). A root-seeded district/band contract is
     // sliced identically by both sides of every slab across a two-chunk, up-to-
     // 15-storey volume. The monotone hall/gallery carve explicitly opens its
     // owned chunk seam; protected windows, approaches and bridge guards survive
     // later anomalies. Lamps see the exact per-storey aperture/bridge mask.
-    stampMultilevelRooms(data, structureAt(seed, cx, cz, cy, config))
-  } else if (profile.family === MAP_FAMILY_SEWER) {
-    // Every emitted manhole-up/down module gets a real canonical riser half.
-    // Reusing root-seeded slab contracts keeps adjacent layers byte-identical;
-    // the shared descriptor primitive preserves the existing guarded-halo path.
-    stampStairs(data, seed, cx, cy, cz, sewerStairConfig(config))
+    stampMultilevelRooms(data, structure)
   } else if (profile.family === MAP_FAMILY_TOWER) {
     // Tower reuses the canonical task-4.4 descriptor as its sole structure
     // carrier. Rooms/deck, exact vertical links, and descriptor-scoped lethal
-    // halves all land before lights and anomalies; Tower remains release-disabled.
-    stampTowerStructure(data, structureAt(seed, cx, cz, cy, config))
+    // halves all land before lights and anomalies.
+    stampTowerStructure(data, structure)
   } else if (profile.family === MAP_FAMILY_LATTICE) {
     // Lattice projects the immutable planner graph into sparse chamber/deck
     // geometry and the existing stair/lethal carriers at the same canonical
     // pre-light, pre-anomaly stage. No test envelope becomes runtime state.
-    stampLatticeStructure(
-      data,
-      structureAt(seed, cx, cz, cy, config),
-      profile
-    )
+    stampLatticeStructure(data, structure, profile)
   }
 
   // L5 — lights (independent stream, global module grid).

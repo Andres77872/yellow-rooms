@@ -6,7 +6,11 @@ import { EditorMap, isPristineChunk } from '../EditorMap.js'
 // .yrmap — the editor's map container. Binary, little-endian, varint-heavy:
 //
 //   "YRM1" · u8 container version · u8 codec (0 raw, 1 gzip) · payload
-//   payload := meta · rooms · descriptor table · chunks
+//   payload := meta · rooms · descriptor table · chunks · [authored]
+//
+// `authored` (count · json records) is an optional trailing section: readers
+// that predate it stop after the chunks, and files without it load with no
+// authored structures.
 //
 // Tile rasters ride byte-run RLE (long solid/empty runs dominate); spaceId
 // uses varint-valued RLE. Stair/structure descriptors are JSON-encoded once
@@ -117,6 +121,10 @@ export function serializeMap(map) {
     for (const ref of chunkRefs[n]) w.svarint(ref)
   })
 
+  // authored structure records (optional trailing section)
+  w.varint(map.authored.length)
+  for (const rec of map.authored) w.string(JSON.stringify(rec))
+
   return w.finish()
 }
 
@@ -184,6 +192,10 @@ export function deserializeMap(payload) {
       }
     }
     map.chunks.set(chunkKey3(cx, cy, cz), d)
+  }
+  if (r.remaining > 0) {
+    const count = r.varint()
+    for (let i = 0; i < count; i++) map.authored.push(JSON.parse(r.string()))
   }
   return map
 }

@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { ChunkData } from '../../world/ChunkData.js'
+import { auditLayeredPatch } from '../../world/audit.js'
+import { CHUNK } from '../../world/constants.js'
+import { formatLayeredIntegrity } from '../mapInspect.js'
 import {
   formatMultilevelAudit,
   formatMultilevelStructure,
@@ -68,5 +72,43 @@ describe('WorldMapTool multilevel diagnostics', () => {
     })).toBe(
       'struct 1 · pairs 28 · slices 56 · mismatch 0 · bad room/struct 0/0 · orphan 0 · stray 0 · missing 0 · seams 0'
     )
+  })
+
+  it('reports incomplete live graph scope without hiding a complete-sample disconnection', () => {
+    const first = new ChunkData(0, 0, 0, 0)
+    const middle = new ChunkData(1, 0, 0, 0)
+    const last = new ChunkData(2, 0, 0, 0)
+    const sample = (withMiddle) => auditLayeredPatch(
+      (cx) => [first, withMiddle ? middle : null, last][cx], 0, 0, 0, 3, 1, 1
+    )
+    const incomplete = sample(false)
+    expect(incomplete.components).toBe(2)
+    expect(incomplete.ok).toBe(false)
+    expect(formatLayeredIntegrity(incomplete, 3)).toBe(
+      'partial · sample 2/3 · desc 0 · holes 0 · orphan 0 · bad links 0/0 · comp 2'
+    )
+    expect(formatLayeredIntegrity(sample(true), 3)).toBe(
+      'ok · desc 0 · holes 0 · orphan 0 · bad links 0/0 · comp 1'
+    )
+    for (let z = 0; z < CHUNK; z++) middle.setV(0, z, 1)
+    const disconnected = sample(true)
+    expect(disconnected.components).toBe(2)
+    expect(formatLayeredIntegrity(disconnected, 3)).toBe(
+      'FAIL · desc 0 · holes 0 · orphan 0 · bad links 0/0 · comp 2'
+    )
+  })
+
+  it('keeps real structural failures visible in an incomplete sample', () => {
+    const first = new ChunkData(0, 0, 0, 0)
+    const last = new ChunkData(2, 0, 0, 0)
+    const audit = auditLayeredPatch(
+      (cx) => [first, null, last][cx], 0, 0, 0, 3, 1, 1
+    )
+    audit.invalidCanonicalLinks = 1
+    audit.details.invalidCanonicalLinks.push({ cx: 0, cy: 0, cz: 0, reasons: ['invalid lower mouth'] })
+    expect(formatLayeredIntegrity(audit, 3)).toBe(
+      'FAIL · sample 2/3 · desc 0 · holes 0 · orphan 0 · bad links 1/0 · comp 2'
+    )
+    expect(formatLayeredIntegrity(null, 3)).toBe('off')
   })
 })

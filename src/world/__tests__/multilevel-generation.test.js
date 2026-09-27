@@ -36,6 +36,8 @@ function forcedConfig({ kind = 'bridged', levels = 15 } = {}) {
   config.multilevel.bridgeChance = kind === 'bridged' ? 1 : 0
   config.multilevel.minLevels = levels
   config.multilevel.maxLevels = levels
+  // Isolate the office atrium: v26 catalog volumes would share its district.
+  config.catalog.enabled = false
   return config
 }
 

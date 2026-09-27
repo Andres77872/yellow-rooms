@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js'
 import { makeLampUniforms } from './LightField.js'
+import { FLICKER_SAFE } from '../world/lampCharacter.js'
 import { FrameGpuTimer, PassTimer } from './PassTimer.js'
 import { FS_VERT, SAMPLER_PRECISION } from './shaders/common.js'
 import { lightingFrag } from './shaders/lighting.js'
@@ -331,6 +332,9 @@ export class DeferredRenderer {
       tGridGI: { value: ph.gi },
       tGridOcc: { value: ph.occ },
       uTime: { value: 0 },
+      // Bad-tube strobe (rate Hz, floor) for grid gFlicker: the GPU twin of
+      // LightField's lampFlicker profile (setFlickerProfile). Safe by default.
+      uBadStrobe: { value: new THREE.Vector2(FLICKER_SAFE.badRate, FLICKER_SAFE.badLo) },
       uGridOn: { value: 0 },
       // Look: fixture source height (floor-local) and soft-shadow size,
       // shared by every pass that shades or shadows fixtures.
@@ -760,6 +764,13 @@ export class DeferredRenderer {
     g.exposure.value = base
     g.exposureRef.value = base
     this.exposure?.configure(look.exposure, pal?.exposure ?? GRADE_EXPOSURE)
+  }
+
+  // Settings 'reduceFlicker' (photosensitivity): the grid lights' bad-tube
+  // strobe follows the same lampCharacter profile LightField evaluates on the
+  // CPU, so a grid pixel and a fallback-lamp pixel never disagree.
+  setFlickerProfile(profile) {
+    this.gridUniforms.uBadStrobe.value.set(profile.badRate, profile.badLo)
   }
 
   // Settings 'cameraFx': the look's lens distortion and CA follow it.

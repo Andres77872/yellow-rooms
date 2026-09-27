@@ -236,6 +236,17 @@ export const LAMP_BAD_CHANCE = 0.07 // fraction of lit tubes that strobe
 export const LAMP_BAD_LO = 0.2 // strobe floor (bad tube nearly dies at the bottom)
 export const LAMP_BAD_RATE = 9 // stepped-buzz rate (Hz-ish) for bad tubes
 export const LAMP_TINT_VAR = 0.045 // per-channel colour-temperature drift (subtle)
+// Photosensitivity-safe profile (Settings 'reduceFlicker', ON by default).
+// WCAG 2.3.1 counts a flash as a pair of opposing luminance changes of >= 10%
+// and fails more than three a second over a large area — and a bad tube lights
+// a whole room. The safe profile clears BOTH limits on its own: a step is at
+// most one change, so 2 steps/s is at most 1 flash/s, and a 0.92 floor keeps
+// every step under an 8% change. Render-side only: no world-gen byte reads
+// these (lamp character is a pure function of position and time).
+export const LAMP_SAFE_BAD_RATE = 2 // bad-tube steps per second (<= 3 Hz)
+export const LAMP_SAFE_BAD_LO = 0.92 // bad-tube floor: an 8% swing (< 10%)
+export const LAMP_SAFE_HUM_SCALE = 0.5 // global tube-hum ripple, x the full ripple
+export const LAMP_SAFE_DIP = 0.92 // global dead-tube dip multiplier (full: 0.4)
 
 // Flashlight (analytic cone in the lighting pass)
 export const FLASH_RANGE = 26
@@ -474,7 +485,23 @@ export const OUTLINE_FADE_FAR = 0.34
 
 // --- Thin-wall model (refactor) ---------------------------------------
 // World-gen version: bump whenever the algorithm changes the bytes a seed
-// produces. Guards the golden determinism test. v24 is the multilayer
+// produces. Guards the golden determinism test. v27 is a Tower-only byte
+// change: every upper storey of a Tower landmark opens both outer gallery
+// walks onto the ring at each participant's end wall, so no walk is stranded
+// behind its court rails and glazing (in a 25-seed scan, 38% of Tower
+// landmark chunk-storeys were two components on their own). v26 separates the
+// families' SKELETONS and adds the structure catalog: every non-office family
+// re-keys its zone, border, portal, stair, atrium and lamp streams and owns
+// its district size/offset, portal width, room module and lamp grid (Office,
+// Hotel, Tower and Lattice no longer share door positions, stair shafts or
+// zone maps for one seed); every family elects procedural small / medium /
+// large catalog volumes (structures/catalog: light wells, stair halls,
+// Portman atria, cisterns, stepwells, carceri naves, panoptic wells, catwalk
+// hills…) with their own flights on every slab; Tower and Lattice stamp
+// generic slab stairs between their landmarks. v25 gives every family its own
+// spatial vocabulary: empty office landmarks, hotel guest wings, sewer
+// collector/bypass forms, tower courts, and varied lattice landings/spans.
+// v24 is the multilayer
 // lattice-district redesign: 4x4-chunk districts, five terraced floors, an
 // 8x8 anchor grid at a uniform 7-cell pitch, four terracing modes with
 // hash-drawn band cuts, a higher cycle budget, and as many stairs as the
@@ -500,7 +527,7 @@ export const OUTLINE_FADE_FAR = 0.34
 // release-eligible bounded Lattice stream; v17 introduced the bounded
 // Tower/skybridge stream, v16 the bounded Sewer stream; v15 added the
 // collision-real furniture layer.
-export const WORLD_GEN_VERSION = 24
+export const WORLD_GEN_VERSION = 27
 
 // Interior archetypes. The room-dominant macro planner bounds the two open
 // styles; the registry in zones/index.js maps ids to their chunk compilers.

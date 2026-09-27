@@ -1,3 +1,4 @@
+import { catalogVoidAt, isCatalogKind } from './structures/catalog/engine.js'
 import * as THREE from 'three'
 import {
   CELL,
@@ -308,6 +309,9 @@ function multilevelHoleOutsideChunk(data, lx, lz) {
   if (!room?.hasRoom) return false
   const gx = data.cx * CHUNK + lx
   const gz = data.cz * CHUNK + lz
+  // Catalog volumes (v26) carry per-storey void shapes (terraces, courts):
+  // answer from the canonical descriptor, not the footprint rectangle.
+  if (isCatalogKind(room.kind)) return catalogVoidAt(data.structure, room.levelCy, gx, gz)
   const bounds = room.globalBounds
   if (
     gx < bounds.x0 || gx > bounds.x1 ||

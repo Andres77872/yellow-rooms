@@ -133,3 +133,31 @@ describe('pristine detection and cloning', () => {
     expect(copy.lamps[0].lit).toBe(1)
   })
 })
+
+describe('seedFromText', () => {
+  it('hashes seed text like the game and accepts #<uint32> seeds', async () => {
+    const { seedFromText } = await import('../EditorMap.js')
+    const { hashStr } = await import('../../world/core/hash.js')
+    expect(seedFromText('lobby')).toBe(hashStr('lobby'))
+    expect(seedFromText('#519299066')).toBe(519299066)
+    expect(seedFromText(' #42 ')).toBe(42)
+    expect(seedFromText('#x42')).toBe(hashStr('#x42'))
+  })
+})
+
+describe('undo restores the generated world', () => {
+  it('rolls meta.seed/family back with the chunks a bake replaced', () => {
+    const map = new EditorMap()
+    map.bakeProcedural({ seedText: 'lobby', family: 'office', radius: 0, floors: [0] })
+    const first = { ...map.meta }
+    map.bakeProcedural({ seedText: 'other', family: 'tower', radius: 0, floors: [0] })
+    expect(map.meta.family).toBe('tower')
+    map.meta.name = 'renamed'
+    expect(map.undo()).toBe(true)
+    expect(map.meta.seed).toBe(first.seed)
+    expect(map.meta.family).toBe('office')
+    expect(map.meta.name).toBe('renamed')
+    expect(map.redo()).toBe(true)
+    expect(map.meta.family).toBe('tower')
+  })
+})

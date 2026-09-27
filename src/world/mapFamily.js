@@ -1,4 +1,4 @@
-import { DEFAULT_WORLD_CONFIG } from './config.js'
+import { DEFAULT_WORLD_CONFIG, FAMILY_CATALOG_PROFILES } from './config.js'
 import {
   MAP_FAMILY_HOTEL,
   MAP_FAMILY_LATTICE,
@@ -96,9 +96,9 @@ function normalizeProfile(family, profile, requireEnabled) {
   if (family === MAP_FAMILY_OFFICE) {
     normalized = { family, enabled: profile.enabled }
   } else if (family === MAP_FAMILY_HOTEL) {
-    // Hotel rides the office fabric (district plans, stairs, multilevel
-    // atria) with its own room catalog and palette; like Office, the profile
-    // carries no structural knobs to validate.
+    // Hotel supplies its own guest-wing grammar inside the shared district
+    // contract (portals, stairs, multilevel atria). The shipped grammar has
+    // no profile-specific structural knobs to validate.
     normalized = { family, enabled: profile.enabled }
   } else if (family === MAP_FAMILY_SEWER) {
     requireConstraint(
@@ -201,21 +201,60 @@ function selectedProfile(config) {
 // also lets downstream planner caches key on the resolved profile object.
 const RESOLVED_PROFILE_CACHE = new WeakMap()
 
+// Cheap content check for the resolve cache (profiles are flat records of
+// primitives plus small arrays of primitives or flat records).
+const snapshotValue = (v) => Array.isArray(v)
+  ? v.map((e) => (isRecord(e) ? { ...e } : e))
+  : v
+function profileSnapshot(profile) {
+  return Object.keys(profile).map((k) => [k, snapshotValue(profile[k])])
+}
+function sameValue(a, b) {
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false
+    for (let i = 0; i < a.length; i++) {
+      const x = a[i]
+      const y = b[i]
+      if (isRecord(x)) {
+        if (!isRecord(y)) return false
+        const keys = Object.keys(x)
+        if (keys.length !== Object.keys(y).length || keys.some((k) => !Object.is(x[k], y[k]))) return false
+      } else if (!Object.is(x, y)) return false
+    }
+    return true
+  }
+  return Object.is(a, b)
+}
+function sameProfileSnapshot(snapshot, profile) {
+  let n = 0
+  for (const k in profile) {
+    if (Object.prototype.hasOwnProperty.call(profile, k)) n++
+  }
+  if (n !== snapshot.length) return false
+  for (const [k, v] of snapshot) {
+    if (!sameValue(v, profile[k])) return false
+  }
+  return true
+}
+
 // Resolve exactly one selected family. Invalid explicit selections fail before
 // generation can construct or partially stamp ChunkData.
 export function resolveMapFamily(config = DEFAULT_WORLD_CONFIG) {
   const { family, profile } = selectedProfile(config)
   if (!isRecord(profile)) return normalizeProfile(family, profile, true)
 
+  // The entry keeps a content fingerprint: a profile edited in place (tests,
+  // tools) must re-normalize — and fail closed if it became invalid or
+  // disabled — rather than return the stale frozen result.
   const cached = RESOLVED_PROFILE_CACHE.get(profile)?.get(family)
-  if (cached) return cached
+  if (cached && sameProfileSnapshot(cached.snapshot, profile)) return cached.value
   const normalized = normalizeProfile(family, profile, true)
   let byFamily = RESOLVED_PROFILE_CACHE.get(profile)
   if (!byFamily) {
     byFamily = new Map()
     RESOLVED_PROFILE_CACHE.set(profile, byFamily)
   }
-  byFamily.set(family, normalized)
+  byFamily.set(family, { snapshot: profileSnapshot(profile), value: normalized })
   return normalized
 }
 
@@ -288,8 +327,128 @@ export function worldConfigForFamily(kind, base = DEFAULT_WORLD_CONFIG) {
   config.mapFamily.selected = kind
 
   if (kind === MAP_FAMILY_SEWER) applySewerSettings(config, profile)
+  applyFamilySkeleton(config, kind)
 
   return config
+}
+
+// v26 — every family owns its SKELETON, not just its dressing. Before v26 the
+// Office, Hotel, Tower and Lattice worlds of one seed shared the same zone
+// map, district edges, door positions, stair shafts and lamp grid (measured
+// by scripts/family-distinctness.mjs: 69–79% chance-corrected seam agreement,
+// Office~Hotel layouts statistically indistinguishable). The projection below
+// gives each family its own random streams (every shared salt is re-keyed)
+// and its own proportions: district size, portal rhythm and width, room
+// sizes, stair density, lamp module and landmark-hall frequency. Office keeps
+// the base config untouched; Sewer already owns its zone and seams.
+export const FAMILY_SKELETONS = Object.freeze({
+  [MAP_FAMILY_HOTEL]: Object.freeze({
+    salt: 0x48074807,
+    districtChunks: 4,
+    districtOffset: 2,
+    portals: { jitter: 1, minSpacing: 7, width: 1 },
+    office: {
+      roomShapeChance: 0,
+      roomMin: 2,
+      roomMax: 4,
+      braid: 0.05,
+      hotel: { wingSpacing: [8, 9], bay: [2, 3], suiteChance: 0.12 },
+    },
+    stairs: { chance: 0.24 },
+    lamps: { step: 3, corridorStep: 3, deadChance: 0.1 },
+    dominance: { chance: 0.5, heroChance: 0.15 },
+    multilevel: { longSpan: 18, shortSpan: 10, minLevels: 5, maxLevels: 13, bridgeChance: 0.35 },
+  }),
+  [MAP_FAMILY_TOWER]: Object.freeze({
+    salt: 0x74077407,
+    districtChunks: 4,
+    districtOffset: 1,
+    portals: { jitter: 4, minSpacing: 4, width: 3 },
+    office: { roomMin: 5, roomMax: 12, roomShapeChance: 0.2 },
+    stairs: { chance: 0.16 },
+    // The tower landmark's fixture socket sits on the corridor lamp module
+    // (tower.js TOWER_FIXTURE_LAMP_STEP/SALT), so only the room grid moves.
+    lamps: { step: 5, deadChance: 0.3 },
+    keepSalts: ['lamps.corridorSalt'],
+    dominance: { chance: 0.95, maxSpanChunks: 3, heroChance: 0.5 },
+  }),
+  [MAP_FAMILY_LATTICE]: Object.freeze({
+    salt: 0x1a071a07,
+    districtChunks: 4,
+    districtOffset: 3,
+    portals: { jitter: 5, minSpacing: 4, width: 2 },
+    office: { roomMin: 3, roomMax: 6, lattice: { alleyPitch: [5, 7], extraPlazas: 2, openBlockChance: 0.45 } },
+    stairs: { chance: 0.16 },
+    lamps: { step: 6, corridorStep: 4, deadChance: 0.34 },
+    dominance: { chance: 0.9, heroChance: 0.4 },
+  }),
+  [MAP_FAMILY_SEWER]: Object.freeze({ salt: 0x5e075e07 }),
+})
+
+const SALT_PATHS = Object.freeze([
+  ['region', 'salt'],
+  ['region', 'roomDominance', 'salt'],
+  ['region', 'roomDominance', 'spanSalt'],
+  ['region', 'roomDominance', 'heroSalt'],
+  ['region', 'roomDominance', 'signatureSalt'],
+  ['region', 'roomDominance', 'positionSalt'],
+  ['region', 'roomDominance', 'shapeSalt'],
+  ['border', 'saltV'],
+  ['border', 'saltH'],
+  ['border', 'mouthSalt'],
+  ['border', 'stubSalt'],
+  ['office', 'portals', 'salt'],
+  ['stairs', 'salt'],
+  ['stairs', 'posSalt'],
+  ['stairs', 'layoutSalt'],
+  ['stairs', 'fallbackSalt'],
+  ['multilevel', 'salt'],
+  ['multilevel', 'baseSalt'],
+  ['multilevel', 'posSalt'],
+  ['multilevel', 'fallbackSalt'],
+  ['multilevel', 'heightSalt'],
+  ['multilevel', 'kindSalt'],
+  ['multilevel', 'deckSalt'],
+  ['lamps', 'salt'],
+  ['lamps', 'deadSalt'],
+  ['lamps', 'corridorSalt'],
+  ['pillars', 'monumentalSalt'],
+])
+
+function rekeySalts(config, familySalt, keep = []) {
+  for (const path of SALT_PATHS) {
+    if (keep.includes(path.join('.'))) continue
+    let node = config
+    for (const key of path.slice(0, -1)) node = isRecord(node) ? node[key] : null
+    const leaf = path.at(-1)
+    if (isRecord(node) && Number.isFinite(node[leaf])) {
+      node[leaf] = (node[leaf] ^ familySalt) | 0
+    }
+  }
+}
+
+const assignRecord = (target, patch) => {
+  if (!isRecord(target) || !isRecord(patch)) return
+  Object.assign(target, patch)
+}
+
+function applyFamilySkeleton(config, kind) {
+  if (FAMILY_CATALOG_PROFILES[kind]) {
+    config.catalog = structuredClone(FAMILY_CATALOG_PROFILES[kind])
+  }
+  const skeleton = FAMILY_SKELETONS[kind]
+  if (!skeleton) return
+  rekeySalts(config, skeleton.salt, skeleton.keepSalts)
+  if (skeleton.districtChunks && isRecord(config.office)) config.office.districtChunks = skeleton.districtChunks
+  if (skeleton.districtOffset !== undefined && isRecord(config.office)) config.office.districtOffset = skeleton.districtOffset
+  if (skeleton.portals && isRecord(config.office)) {
+    config.office.portals = { ...(config.office.portals ?? {}), ...skeleton.portals }
+  }
+  assignRecord(config.office, skeleton.office)
+  assignRecord(config.stairs, skeleton.stairs)
+  assignRecord(config.lamps, skeleton.lamps)
+  assignRecord(config.region?.roomDominance, skeleton.dominance)
+  assignRecord(config.multilevel, skeleton.multilevel)
 }
 
 // Untrusted family selection (URL param, title UI, debug tools) -> runnable

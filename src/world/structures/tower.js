@@ -83,8 +83,14 @@ export function hasExactTowerSocketKinds(kinds) {
 // many independent districts can be recovered elsewhere in the world.
 const DISTRICT_CHUNKS = 4
 const VERTICAL_PERIOD = STRUCTURE_VERTICAL_PERIOD
-const LONG_SPAN = CHUNK + 8
-const SHORT_SPAN = 6
+// The footprint and upper-floor void grammar change together. These are
+// architectural forms, not dressing themes: each has a different section,
+// gallery plan, and ground-floor structural rhythm.
+const TOWER_FORMS = Object.freeze([
+  Object.freeze({ form: 'nave', longSpan: 24, shortSpan: 6, columnBay: 3 }),
+  Object.freeze({ form: 'splitCourt', longSpan: 20, shortSpan: 10, columnBay: 4 }),
+  Object.freeze({ form: 'overlookCourt', longSpan: 22, shortSpan: 8, columnBay: 5 }),
+])
 const TOWER_FIXTURE_LAMP_STEP = 4
 const TOWER_FIXTURE_LAMP_SALT = 0x2f61
 
@@ -99,6 +105,7 @@ const SALTS = Object.freeze({
   deckLine: 0x745006,
   id: 0x745007,
   linkParticipants: 0x745008,
+  architecture: 0x745009,
   signage: 0x745101,
   clock: 0x745102,
   litAccent: 0x745103,
@@ -144,9 +151,10 @@ function bandIndexAtBase(seed, districtX, districtZ, baseCy) {
   )
 }
 
-function footprintBounds(seed, districtX, districtZ, bandIndex, anchor, bridgeAxis) {
-  const longStartSlots = CHUNK * 2 - LONG_SPAN - 1
-  const shortStartSlots = CHUNK - SHORT_SPAN - 1
+function footprintBounds(seed, districtX, districtZ, bandIndex, anchor, bridgeAxis, architecture) {
+  const { longSpan, shortSpan } = architecture
+  const longStartSlots = CHUNK * 2 - longSpan - 1
+  const shortStartSlots = CHUNK - shortSpan - 1
   const longOffset = 1 + (
     plannerHash(seed, SALTS.longOffset, districtX, bandIndex, districtZ) %
     longStartSlots
@@ -162,21 +170,23 @@ function footprintBounds(seed, districtX, districtZ, bandIndex, anchor, bridgeAx
     return {
       x0: originX + longOffset,
       z0: originZ + shortOffset,
-      x1: originX + longOffset + LONG_SPAN - 1,
-      z1: originZ + shortOffset + SHORT_SPAN - 1,
+      x1: originX + longOffset + longSpan - 1,
+      z1: originZ + shortOffset + shortSpan - 1,
     }
   }
   return {
     x0: originX + shortOffset,
     z0: originZ + longOffset,
-    x1: originX + shortOffset + SHORT_SPAN - 1,
-    z1: originZ + longOffset + LONG_SPAN - 1,
+    x1: originX + shortOffset + shortSpan - 1,
+    z1: originZ + longOffset + longSpan - 1,
   }
 }
 
 function deckForBounds(seed, districtX, districtZ, bandIndex, baseCy, bridgeAxis, bounds) {
   const shortStart = bridgeAxis === 'x' ? bounds.z0 : bounds.x0
-  const centerLines = [shortStart + 2, shortStart + 3]
+  const shortEnd = bridgeAxis === 'x' ? bounds.z1 : bounds.x1
+  const center = Math.floor((shortStart + shortEnd) / 2)
+  const centerLines = [center, center + 1]
   const lineIndex = plannerHash(
     seed,
     SALTS.deckLine,
@@ -444,13 +454,17 @@ function structureForDistrict(seed, districtX, districtZ, baseCy, profile) {
     ({ cx, cz }) => ({ cx, cz })
   )
   const anchor = participants[0]
+  const architecture = TOWER_FORMS[plannerHash(
+    seed, SALTS.architecture, districtX, bandIndex, districtZ
+  ) % TOWER_FORMS.length]
   const globalBounds = footprintBounds(
     seed,
     districtX,
     districtZ,
     bandIndex,
     anchor,
-    bridgeAxis
+    bridgeAxis,
+    architecture
   )
   const deck = deckForBounds(
     seed,
@@ -484,6 +498,7 @@ function structureForDistrict(seed, districtX, districtZ, baseCy, profile) {
     participants,
     anchor,
     bridgeAxis,
+    architecture,
     globalBounds,
     decks: [deck],
     verticalLinks: verticalLinks(

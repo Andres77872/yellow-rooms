@@ -41,6 +41,11 @@ export const DEFAULTS = {
   outline: true,
   volume: 0.9,
   minimap: true,
+  // Photosensitivity: caps the bad-tube strobe (<= 2 steps/s, < 10% swing)
+  // and softens the global tube hum and dead-tube dip, keeping every lamp
+  // flicker under the WCAG 2.3.1 flash limits (world/lampCharacter.js). ON by
+  // default — the full ~9 Hz strobe is an opt-in, never a surprise.
+  reduceFlicker: true,
   // Graphics: the preset plus the advanced keys it pins (core/graphics.js).
   // Fresh installs are 'auto' (classified per device at boot); the advanced
   // defaults are the pre-classification fallback EXPANDED, so the advanced
@@ -71,6 +76,7 @@ const COERCE = {
   dynamicRes: bool,
   outline: bool,
   minimap: bool,
+  reduceFlicker: bool,
   preset: oneOf(PRESET_CHOICES),
   renderScale: num(0.5, 1),
   worldDetail: oneOf(WORLD_DETAIL_ORDER),

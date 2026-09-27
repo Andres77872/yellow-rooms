@@ -12,6 +12,7 @@ import {
   CELL_ROOM,
   CELL_STAIR,
   CELL_VOID,
+  MAP_FAMILY_HOTEL,
   MAP_FAMILY_LATTICE,
   MAP_FAMILY_OFFICE,
   MAP_FAMILY_SEWER,
@@ -38,6 +39,7 @@ import { structureAdapterFor } from '../world/structures/contract.js'
 import { worldConfigForFamilyOrOffice } from '../world/mapFamily.js'
 import { TOWER_STRUCTURE_KIND } from '../world/structures/tower.js'
 import { LATTICE_STRUCTURE_KIND } from '../world/structures/lattice.js'
+import { describeCatalogStructure, isCatalogStructure } from '../world/structures/catalog/engine.js'
 
 export const validStructureBounds = (bounds) =>
   Number.isInteger(bounds?.x0) &&
@@ -131,6 +133,23 @@ export function formatMultilevelAudit(audit) {
   return `struct ${audit.multilevelStructures ?? 0} · pairs ${audit.multilevelPairs ?? 0} · slices ${audit.multilevelSlices ?? 0} · mismatch ${audit.mismatchedMultilevelDescriptors ?? 0} · bad room/struct ${audit.invalidMultilevelRooms ?? 0}/${audit.invalidMultilevelStructures ?? 0} · orphan ${audit.orphanedMultilevelHalves ?? 0} · stray ${audit.strayWallFeatures ?? 0} · missing ${audit.missingMultilevelSlices ?? 0} · seams ${audit.closedBridgeSeams ?? 0}`
 }
 
+// LIVE contains a full nearby floor box plus sparse distant slices of tall
+// structures. Missing chunks can separate the sampled graph even when their
+// unloaded corridors connect it in the generated world. Report that scope
+// without turning structural failures, or a complete disconnected sample,
+// into a successful validation.
+export function formatLayeredIntegrity(audit, expectedChunks) {
+  if (!audit) return 'off'
+  const partial = Number.isInteger(expectedChunks) && audit.chunks < expectedChunks
+  const graphOnlyFailure = audit.connected === false && audit.details &&
+    Object.values(audit.details).every((failures) => Array.isArray(failures) && failures.length === 0)
+  const status = !audit.ok && !(partial && graphOnlyFailure)
+    ? 'FAIL'
+    : partial ? 'partial' : 'ok'
+  const scope = partial ? ` · sample ${audit.chunks}/${expectedChunks}` : ''
+  return `${status}${scope} · desc ${audit.mismatchedDescriptors} · holes ${audit.holeMismatches} · orphan ${audit.orphanedHalves} · bad links ${audit.invalidCanonicalLinks}/${audit.canonicalLinks} · comp ${audit.components}`
+}
+
 // --- Family palettes -------------------------------------------------------
 
 export const ZONE_TINT = {
@@ -145,6 +164,7 @@ export const STRUCTURE_FAMILY_COLORS = {
   [MAP_FAMILY_SEWER]: '#7fbf8f',
   [MAP_FAMILY_TOWER]: '#7fd0e8',
   [MAP_FAMILY_LATTICE]: '#c884e0',
+  [MAP_FAMILY_HOTEL]: '#e8a07f',
 }
 
 export const SPACE_ROLE_PALETTE = {
@@ -191,6 +211,9 @@ export function exploreConfigForFamily(family) {
 export function formatStructureDetail(structures, selected, source = 'visible') {
   if (structures.length === 0) return 'visible 0 · current —'
   const structure = selected ?? structures[0]
+  if (isCatalogStructure(structure)) {
+    return `visible ${structures.length} · ${source} #${structure.id} ${structure.kind} · ${formatCatalogAnatomy(structure)}`
+  }
   const kind = structureKind(structure)
   if (kind === TOWER_STRUCTURE_KIND) {
     const deck = structure.decks?.[0]
@@ -204,6 +227,52 @@ export function formatStructureDetail(structures, selected, source = 'visible') 
     return `visible ${structures.length} · ${source} #${structure.id} ${structure.kind} · cy ${structure.baseCy}…${structure.topCy} · anchors ${structure.anchors?.length ?? 0} · edges bb${roles.backbone} sp${roles.spine} cy${roles.cycle} vt${roles.vertical}`
   }
   return formatMultilevelStructure(structures, selected, source)
+}
+
+// v26 per-family catalog structures (officeCatalog, sewerCatalog, …): the
+// recipe label + size class, storey span, stair flights, core type and the
+// authored deviation, if any.
+export function catalogCoreLabel(core) {
+  if (!core) return 'no core'
+  return `${core.enclosed ? 'enclosed' : 'open'} ${core.well ? 'open-well' : 'switchback'} core`
+}
+
+export function formatCatalogAnatomy(structure) {
+  const storeys = Number.isInteger(structure.levelCount)
+    ? structure.levelCount
+    : structure.topCy - structure.baseCy + 1
+  const flights = structure.verticalLinks?.length ?? 0
+  const parts = [
+    `${structure.label ?? structure.type ?? '—'} (${structure.sizeClass ?? '?'})`,
+    `cy ${structure.baseCy}…${structure.topCy}`,
+    `${storeys} storeys`,
+    `${flights} flights`,
+    catalogCoreLabel(structure.core),
+  ]
+  const piers = (structure.columns?.length ?? 0) + (structure.piers?.length ?? 0)
+  if (piers) parts.push(`${piers} piers`)
+  parts.push(structure.deviation ? `dev ${structure.deviation.kind} @cy${structure.deviation.levelCy}` : 'no deviation')
+  return parts.join(' · ')
+}
+
+// Multi-line block for the selected structure panel: the engine's own
+// summary rows for catalog structures (plus the recipe type and the voids of
+// the drawn floor), nothing for the other kinds (their one-line readout is
+// already complete).
+export function catalogStructureLines(structure, floor) {
+  if (!isCatalogStructure(structure)) return []
+  const lines = [`#${structure.id} ${structure.kind} · ${structure.type}`, ...describeCatalogStructure(structure)]
+  const k = Number.isInteger(floor) ? floor - structure.baseCy : -1
+  const level = k >= 0 ? structure.levels?.[k] : null
+  if (level) {
+    const flights = (structure.verticalLinks ?? []).filter(
+      (link) => link.lowerCy === floor || link.lowerCy + 1 === floor
+    ).length
+    lines.push(`cy ${floor} (storey ${k + 1}/${structure.levelCount}): ${level.voids?.length ?? 0} voids · ${level.bridges?.length ?? 0} bridges · ${flights} flights`)
+  } else if (Number.isInteger(floor)) {
+    lines.push(`cy ${floor}: outside cy ${structure.baseCy}…${structure.topCy}`)
+  }
+  return lines
 }
 
 const countGroup = (label, counts) => {

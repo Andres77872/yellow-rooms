@@ -211,7 +211,7 @@ describe('void-safety family eligibility', () => {
       lattice: true,
       hotel: false,
     })
-    expect(WORLD_GEN_VERSION).toBe(24)
+    expect(WORLD_GEN_VERSION).toBe(27)
     expect(DEFAULT_WORLD_CONFIG.mapFamily.profiles).toMatchObject({
       office: { enabled: true },
       sewer: { enabled: true },

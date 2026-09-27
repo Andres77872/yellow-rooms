@@ -1,6 +1,6 @@
 import { CELL, CHUNK, THICK, WALL_H, vIdx, hIdx } from '../../constants.js'
 import { hash2i } from '../../core/hash.js'
-import {
+import { WALL_PLAIN,
   SEWER_DIR_EAST,
   SEWER_DIR_WEST,
   SEWER_MODULE_CHAMBER_LARGE,
@@ -40,8 +40,12 @@ export function collectSewerDressing(data) {
   const descriptor = data.sewerDescriptor
   if (!descriptor) return { trim, props, signs }
 
-  const wallV = (lx, z) => (lx <= 0 || lx >= CHUNK ? 1 : data.wallV[vIdx(lx, z)])
-  const wallH = (x, lz) => (lz <= 0 || lz >= CHUNK ? 1 : data.wallH[hIdx(x, lz)])
+  // A pipe needs solid masonry: guard rails and glazing (catalog volumes,
+  // v26) are closed for collision but have nothing to bolt a pipe to.
+  const solidV = (i) => data.wallV[i] && data.wallFeatureV[i] === WALL_PLAIN
+  const solidH = (i) => data.wallH[i] && data.wallFeatureH[i] === WALL_PLAIN
+  const wallV = (lx, z) => (lx <= 0 || lx >= CHUNK ? 1 : solidV(vIdx(lx, z)))
+  const wallH = (x, lz) => (lz <= 0 || lz >= CHUNK ? 1 : solidH(hIdx(x, lz)))
 
   // Pipe runs keyed per GLOBAL wall line + face, so a run continues cell to
   // cell along a gallery instead of stuttering per cell.
@@ -76,6 +80,14 @@ export function collectSewerDressing(data) {
     const cx = (m.lx + 0.5) * CELL
     const cz = (m.lz + 0.5) * CELL
     const horizontal = m.dir === SEWER_DIR_EAST || m.dir === SEWER_DIR_WEST
+    // A catalog volume (drop shaft, cistern, stepwell…) may overlay the
+    // module: nothing is dressed over its openings.
+    const overFloorHole = data.hasFloorHole(m.lx, m.lz)
+    const underCeilHole = data.hasCeilHole(m.lx, m.lz)
+    if (overFloorHole) {
+      if (index < descriptor.trunkCount) trunkStep++
+      continue
+    }
 
     if (index < descriptor.trunkCount) {
       // Trunk gallery: drain gutter down the middle, grates and vault ribs on
@@ -90,7 +102,7 @@ export function collectSewerDressing(data) {
             : { px: cx, py: GRATE_H / 2, pz: cz + o, sx: GUTTER_W + 0.18, sy: GRATE_H, sz: 0.14, tint: SEWER_TINT.grate })
         }
       }
-      if (trunkStep % 3 === 2) {
+      if (trunkStep % 3 === 2 && !underCeilHole) {
         // Rib across the gallery under the ceiling: the cast-vault rhythm.
         props.push(horizontal
           ? { px: cx, py: WALL_H - RIB_H / 2, pz: cz, sx: RIB_D, sy: RIB_H, sz: CELL, tint: SEWER_TINT.rib }
@@ -130,9 +142,10 @@ function placeChamberHardware(data, chamber, wide, props) {
   for (let lz = chamber.z0; lz <= chamber.z1; lz++) {
     for (let lx = chamber.x0; lx <= chamber.x1; lx++) {
       const centre = { x: (lx + 0.5) * CELL, z: (lz + 0.5) * CELL }
+      if (data.hasFloorHole(lx, lz)) continue
       const faces = [
-        { closed: lx === 0 || data.wallV[vIdx(lx, lz)] === 1, px: lx * CELL, pz: centre.z, vertical: true, side: 1 },
-        { closed: lz === 0 || data.wallH[hIdx(lx, lz)] === 1, px: centre.x, pz: lz * CELL, vertical: false, side: 1 },
+        { closed: lx === 0 || (data.wallV[vIdx(lx, lz)] === 1 && data.wallFeatureV[vIdx(lx, lz)] === WALL_PLAIN), px: lx * CELL, pz: centre.z, vertical: true, side: 1 },
+        { closed: lz === 0 || (data.wallH[hIdx(lx, lz)] === 1 && data.wallFeatureH[hIdx(lx, lz)] === WALL_PLAIN), px: centre.x, pz: lz * CELL, vertical: false, side: 1 },
       ]
       for (const f of faces) {
         if (!f.closed) continue

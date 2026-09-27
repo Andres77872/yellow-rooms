@@ -1,3 +1,4 @@
+import { CATALOG_KINDS, isCatalogKind } from '../structures/catalog/engine.js'
 import { createHash } from 'node:crypto'
 import { describe, it, expect } from 'vitest'
 import { buildChunk } from '../pipeline.js'
@@ -59,8 +60,11 @@ import {
 } from '../zones/regions.js'
 import { MAP_FAMILY_CODES, worldConfigForFamily } from '../mapFamily.js'
 import { latticeCandidateLinks } from '../structures/lattice.js'
+import { latticeChamberApproaches, latticeChamberPerimeter } from '../structures/latticeStamp.js'
 import { structureAt } from '../structures/contract.js'
 import { ZONES } from '../zones/index.js'
+
+const CATALOG_KIND_LIST = Object.values(CATALOG_KINDS)
 
 const RASTER_FIELDS = [
   'wallV',
@@ -109,8 +113,14 @@ function digest(d) {
           ? 3
           : kind === 'latticeDistrict'
             ? 4
-            : 0
+            : isCatalogKind(kind)
+              ? 5 + CATALOG_KIND_LIST.indexOf(kind)
+              : 0
   )
+  const foldString = (value) => {
+    fold(typeof value === 'string' ? value.length : -1)
+    for (const character of value ?? '') fold(character.charCodeAt(0))
+  }
   const foldCells = (cells, xKey = 'lx', zKey = 'lz') => {
     fold(cells.length)
     for (const cell of cells) {
@@ -204,7 +214,13 @@ function digest(d) {
     foldMaybeInt(room.globalBridgeLine)
     foldCells(room.voidCells)
     foldCells(room.bridgeCells)
-    if (
+    if (isCatalogKind(room.kind)) {
+      // v26 catalog slices: family, recipe type and the aperture partition.
+      fold(MAP_FAMILY_CODES[room.family] ?? -1)
+      foldString(room.type)
+      fold(room.apertureRects.length)
+      for (const r of room.apertureRects) foldBounds(r)
+    } else if (
       room.family === MAP_FAMILY_LATTICE ||
       room.kind === 'latticeDistrict'
     ) {
@@ -234,6 +250,60 @@ function digest(d) {
     fold(1)
     fold(structure.hasRoom ? 1 : 0)
     fold(structure.id)
+    if (isCatalogKind(structure.kind)) {
+      // v26 catalog volume: every behaviour-bearing field.
+      foldKind(structure.kind)
+      fold(MAP_FAMILY_CODES[structure.family] ?? -1)
+      foldString(structure.type)
+      foldString(structure.sizeClass)
+      fold(structure.district.x)
+      fold(structure.district.z)
+      fold(structure.district.size)
+      fold(structure.bandIndex)
+      fold(structure.slot)
+      fold(structure.baseCy)
+      fold(structure.topCy)
+      fold(structure.levelCount)
+      fold(structure.participants.length)
+      for (const p of structure.participants) {
+        fold(p.cx)
+        fold(p.cz)
+      }
+      foldBounds(structure.globalBounds)
+      foldAxis(structure.bridgeAxis)
+      fold(structure.glazing === 'window' ? 1 : 0)
+      fold(structure.levels.length)
+      for (const level of structure.levels) {
+        fold(level.levelCy)
+        fold(level.voids.length)
+        for (const r of level.voids) foldBounds(r)
+        fold(level.bridges.length)
+        for (const r of level.bridges) foldBounds(r)
+      }
+      foldCells(structure.columns, 'gx', 'gz')
+      foldCells(structure.piers, 'gx', 'gz')
+      if (structure.core) {
+        fold(1)
+        for (const key of ['gx', 'gz', 'dir', 'side']) fold(structure.core[key])
+        fold(structure.core.well ? 1 : 0)
+        fold(structure.core.enclosed ? 1 : 0)
+        fold(structure.core.doorSide === 'far' ? 1 : 0)
+        foldBounds(structure.core.rect)
+      } else fold(0)
+      fold(structure.verticalLinks.length)
+      for (const link of structure.verticalLinks) {
+        fold(link.lowerCy)
+        fold(link.cx)
+        fold(link.cz)
+        foldStair(link.stair)
+      }
+      if (structure.deviation) {
+        fold(1)
+        foldString(structure.deviation.kind)
+        fold(structure.deviation.levelCy)
+      } else fold(0)
+      return
+    }
     if (
       structure.family === MAP_FAMILY_TOWER ||
       structure.kind === 'towerSkybridge'
@@ -247,6 +317,10 @@ function digest(d) {
       fold(structure.topCy)
       fold(structure.levelCount)
       foldAxis(structure.bridgeAxis)
+      fold(['nave', 'splitCourt', 'overlookCourt'].indexOf(structure.architecture?.form) + 1)
+      fold(structure.architecture?.longSpan ?? 0)
+      fold(structure.architecture?.shortSpan ?? 0)
+      fold(structure.architecture?.columnBay ?? 0)
       fold(structure.anchor.cx)
       fold(structure.anchor.cz)
       fold(structure.participants.length)
@@ -316,6 +390,7 @@ function digest(d) {
         fold(anchor.gz)
         fold(anchor.levelCy)
         foldMaybeInt(anchor.exposureM)
+        fold(['landing', 'pierX', 'pierZ', 'crossing'].indexOf(anchor.platform) + 1)
       }
       fold(structure.edges.length)
       for (const edge of structure.edges) {
@@ -413,12 +488,38 @@ function digest(d) {
       foldBounds(descriptor.bounds)
       fold(descriptor.trunkRoot.lx)
       fold(descriptor.trunkRoot.lz)
+      const foldText = (value) => {
+        fold(value.length)
+        for (const character of value) fold(character.charCodeAt(0))
+      }
+      foldText(descriptor.layout)
+      fold(SEWER_DIRECTIONS.indexOf(descriptor.heading) + 1)
+      fold(descriptor.trunkLine)
+      fold(descriptor.trunkCount)
+      fold(descriptor.chambers.length)
+      for (const chamber of descriptor.chambers) {
+        foldBounds(chamber)
+        foldCells([chamber.anchor])
+        fold(SEWER_MODULE_KINDS.indexOf(chamber.kind) + 1)
+      }
+      fold(descriptor.structures.length)
+      for (const structure of descriptor.structures) {
+        foldText(structure.kind)
+        foldBounds(structure.bounds)
+        foldBounds(structure.core)
+        foldCells(structure.anchor ? [structure.anchor] : [])
+        foldCells(structure.junction ? [structure.junction] : [])
+        foldCells(structure.cells ?? [])
+        foldMaybeInt(structure.loopEdge?.a)
+        foldMaybeInt(structure.loopEdge?.b)
+      }
       fold(descriptor.modules.length)
       for (const module of descriptor.modules) {
         fold(SEWER_MODULE_KINDS.indexOf(module.kind) + 1)
         fold(module.lx)
         fold(module.lz)
         fold(SEWER_DIRECTIONS.indexOf(module.dir) + 1)
+        foldText(module.region)
       }
       for (const edges of [descriptor.treeEdges, descriptor.loopEdges]) {
         fold(edges.length)
@@ -439,33 +540,33 @@ function digest(d) {
 // v13 structures. The final twelve entries pin bottom/middle/top in both
 // chunks of deterministic maximum-height bridged and open-void structures.
 const GOLDEN = {
-  '0,0,0': 'f123a956',
-  '3,0,-2': '6ec4ae7d',
-  '12,0,12': 'd2dc9cfa',
-  '-10,0,10': 'bd9fe501',
-  '0,1,0': '20ff1f15',
-  '3,-1,-2': '7404e99a',
-  '12,2,12': '2227a79b',
-  '3,-2,-12': '0c825849',
-  '3,-1,-12': '069eeb1b',
-  '1,0,-2': 'af7af6af',
-  '2,1,-2': 'b73d4116',
-  '1,7,-2': 'b264be96',
-  '-1,0,2': 'f7af4449',
-  '-1,3,3': '12b79410',
-  '-7,9,-8': 'e29664a9',
-  '-3,-15,-1': 'f0238c40',
-  '-2,-15,-1': 'a55be18f',
-  '-3,-8,-1': '939df0ca',
-  '-2,-8,-1': '9c5d8e31',
-  '-3,-1,-1': 'aa630e5b',
-  '-2,-1,-1': 'ce691831',
-  '-10,0,8': '78f3fa18',
-  '-10,0,9': 'bb979d9a',
-  '-10,7,8': '35045df4',
-  '-10,7,9': '46837b5d',
-  '-10,14,8': 'b69e9f35',
-  '-10,14,9': '8d0bec0c',
+  '0,0,0': '0d18b5be',
+  '3,0,-2': '7ecdc11f',
+  '12,0,12': '4aaa8e2c',
+  '-10,0,10': '7eac053c',
+  '0,1,0': '7cb2f07e',
+  '3,-1,-2': 'b41b8403',
+  '12,2,12': '932f84da',
+  '3,-2,-12': 'd5fca0e6',
+  '3,-1,-12': '7e7bfbca',
+  '1,0,-2': 'e5ea120a',
+  '2,1,-2': 'f43f43bb',
+  '1,7,-2': '567ad882',
+  '-1,0,2': '17d367c7',
+  '-1,3,3': 'a742e6c6',
+  '-7,9,-8': '3c837b81',
+  '-3,-15,-1': '72260916',
+  '-2,-15,-1': 'd28fd9c1',
+  '-3,-8,-1': '749d3d23',
+  '-2,-8,-1': '45929843',
+  '-3,-1,-1': 'a9585a89',
+  '-2,-1,-1': 'b509c611',
+  '-10,0,8': '358511a3',
+  '-10,0,9': 'ba9f89f1',
+  '-10,7,8': '77118e32',
+  '-10,7,9': '603e3389',
+  '-10,14,8': '4757009b',
+  '-10,14,9': 'a996c926',
 }
 
 const MAX_HEIGHT_GOLDEN = {
@@ -474,127 +575,127 @@ const MAX_HEIGHT_GOLDEN = {
 }
 
 const SEWER_GOLDEN = Object.freeze([
-  { key: '24151,2,-1,-3', seed: 24151, cx: 2, cy: -1, cz: -3, digest: '607412c3' },
-  { key: '24151,2,0,-3', seed: 24151, cx: 2, cy: 0, cz: -3, digest: '30efb61b' },
-  { key: '24151,2,1,-3', seed: 24151, cx: 2, cy: 1, cz: -3, digest: '3567b0c6' },
-  { key: 'audit-0:4084550820,-3,0,-4', seed: 4084550820, cx: -3, cy: 0, cz: -4, digest: 'c5456bce' },
-  { key: 'audit-15:3752583958,-2,0,-1', seed: 3752583958, cx: -2, cy: 0, cz: -1, digest: '7abb9a92' },
-  { key: 'audit-31:3566893867,0,0,-2', seed: 3566893867, cx: 0, cy: 0, cz: -2, digest: 'c4730aad' },
+  { key: '24151,2,-1,-3', seed: 24151, cx: 2, cy: -1, cz: -3, digest: '24673f8a' },
+  { key: '24151,2,0,-3', seed: 24151, cx: 2, cy: 0, cz: -3, digest: '7c185cc9' },
+  { key: '24151,2,1,-3', seed: 24151, cx: 2, cy: 1, cz: -3, digest: '6d4cec5c' },
+  { key: 'audit-0:4084550820,-3,0,-4', seed: 4084550820, cx: -3, cy: 0, cz: -4, digest: '764a6011' },
+  { key: 'audit-15:3752583958,-2,0,-1', seed: 3752583958, cx: -2, cy: 0, cz: -1, digest: '447aa8a7' },
+  { key: 'audit-31:3566893867,0,0,-2', seed: 3566893867, cx: 0, cy: 0, cz: -2, digest: '64e2a97e' },
 ])
 
-const SEWER_GOLDEN_DIGEST = 'd1f42fd10655dff3f00da6eea39ad999579ba056089c3dbfaef4a30c27166740'
+const SEWER_GOLDEN_DIGEST = '6e2e3bac0a2dded2243cc2044221172ec63cd5a9ff1681239428301bb64a6315'
 
 const TOWER_GOLDEN = Object.freeze([
-  { key: '23063,-4,-22,-3', seed: 23063, cx: -4, cy: -22, cz: -3, digest: 'a55495b2' },
-  { key: '23063,-4,-22,-2', seed: 23063, cx: -4, cy: -22, cz: -2, digest: 'b7618bfa' },
-  { key: '23063,-4,-21,-3', seed: 23063, cx: -4, cy: -21, cz: -3, digest: '9ad47fc6' },
-  { key: '23063,-4,-21,-2', seed: 23063, cx: -4, cy: -21, cz: -2, digest: 'f8a268dc' },
-  { key: '23063,-4,-20,-3', seed: 23063, cx: -4, cy: -20, cz: -3, digest: '30e13d55' },
-  { key: '23063,-4,-20,-2', seed: 23063, cx: -4, cy: -20, cz: -2, digest: '37474c3d' },
+  { key: '23063,-4,-22,-3', seed: 23063, cx: -4, cy: -22, cz: -3, digest: '22cc442f' },
+  { key: '23063,-4,-22,-2', seed: 23063, cx: -4, cy: -22, cz: -2, digest: 'd86848da' },
+  { key: '23063,-4,-21,-3', seed: 23063, cx: -4, cy: -21, cz: -3, digest: 'db1fb5a4' },
+  { key: '23063,-4,-21,-2', seed: 23063, cx: -4, cy: -21, cz: -2, digest: 'd214e669' },
+  { key: '23063,-4,-20,-3', seed: 23063, cx: -4, cy: -20, cz: -3, digest: 'de4a6b87' },
+  { key: '23063,-4,-20,-2', seed: 23063, cx: -4, cy: -20, cz: -2, digest: 'f248f173' },
 ])
 
-const TOWER_GOLDEN_DIGEST = 'b48c1802a97f139613eff007745b3270b13f5b4b5d98f0c96246c876155b6777'
+const TOWER_GOLDEN_DIGEST = '669f3426b980c13b954bb845fe5a790c75f8b22bcc1c251307c0837186a22dbc'
 
 const LATTICE_GOLDEN = Object.freeze([
-  { key: '2387080720,0,-21,-4', seed: 2387080720, cx: 0, cy: -21, cz: -4, digest: '270dab0b' },
-  { key: '2387080720,1,-21,-4', seed: 2387080720, cx: 1, cy: -21, cz: -4, digest: '1062d9d7' },
-  { key: '2387080720,2,-21,-4', seed: 2387080720, cx: 2, cy: -21, cz: -4, digest: 'ad85cb4d' },
-  { key: '2387080720,3,-21,-4', seed: 2387080720, cx: 3, cy: -21, cz: -4, digest: '810f9c87' },
-  { key: '2387080720,0,-21,-3', seed: 2387080720, cx: 0, cy: -21, cz: -3, digest: 'c6d13dbf' },
-  { key: '2387080720,1,-21,-3', seed: 2387080720, cx: 1, cy: -21, cz: -3, digest: '23c359e4' },
-  { key: '2387080720,2,-21,-3', seed: 2387080720, cx: 2, cy: -21, cz: -3, digest: '63e190b2' },
-  { key: '2387080720,3,-21,-3', seed: 2387080720, cx: 3, cy: -21, cz: -3, digest: '0b3ca13c' },
-  { key: '2387080720,0,-21,-2', seed: 2387080720, cx: 0, cy: -21, cz: -2, digest: '345ab055' },
-  { key: '2387080720,1,-21,-2', seed: 2387080720, cx: 1, cy: -21, cz: -2, digest: 'df243142' },
-  { key: '2387080720,2,-21,-2', seed: 2387080720, cx: 2, cy: -21, cz: -2, digest: '95fd79f6' },
-  { key: '2387080720,3,-21,-2', seed: 2387080720, cx: 3, cy: -21, cz: -2, digest: '6368aa5e' },
-  { key: '2387080720,0,-21,-1', seed: 2387080720, cx: 0, cy: -21, cz: -1, digest: '0f476737' },
-  { key: '2387080720,1,-21,-1', seed: 2387080720, cx: 1, cy: -21, cz: -1, digest: 'a2854e5e' },
-  { key: '2387080720,2,-21,-1', seed: 2387080720, cx: 2, cy: -21, cz: -1, digest: '42716bd4' },
-  { key: '2387080720,3,-21,-1', seed: 2387080720, cx: 3, cy: -21, cz: -1, digest: 'a03b1c5f' },
-  { key: '2387080720,0,-20,-4', seed: 2387080720, cx: 0, cy: -20, cz: -4, digest: '5cecd8ad' },
-  { key: '2387080720,1,-20,-4', seed: 2387080720, cx: 1, cy: -20, cz: -4, digest: 'aff208d5' },
-  { key: '2387080720,2,-20,-4', seed: 2387080720, cx: 2, cy: -20, cz: -4, digest: '9639574a' },
-  { key: '2387080720,3,-20,-4', seed: 2387080720, cx: 3, cy: -20, cz: -4, digest: 'f6c6c2a9' },
-  { key: '2387080720,0,-20,-3', seed: 2387080720, cx: 0, cy: -20, cz: -3, digest: '7a0b484d' },
-  { key: '2387080720,1,-20,-3', seed: 2387080720, cx: 1, cy: -20, cz: -3, digest: '01db5df3' },
-  { key: '2387080720,2,-20,-3', seed: 2387080720, cx: 2, cy: -20, cz: -3, digest: '9aa918b4' },
-  { key: '2387080720,3,-20,-3', seed: 2387080720, cx: 3, cy: -20, cz: -3, digest: '0b3a0e1e' },
-  { key: '2387080720,0,-20,-2', seed: 2387080720, cx: 0, cy: -20, cz: -2, digest: 'c0dee887' },
-  { key: '2387080720,1,-20,-2', seed: 2387080720, cx: 1, cy: -20, cz: -2, digest: 'c14ad04a' },
-  { key: '2387080720,2,-20,-2', seed: 2387080720, cx: 2, cy: -20, cz: -2, digest: 'c1495e6f' },
-  { key: '2387080720,3,-20,-2', seed: 2387080720, cx: 3, cy: -20, cz: -2, digest: '60b1f5d4' },
-  { key: '2387080720,0,-20,-1', seed: 2387080720, cx: 0, cy: -20, cz: -1, digest: '39043ee3' },
-  { key: '2387080720,1,-20,-1', seed: 2387080720, cx: 1, cy: -20, cz: -1, digest: '4e73c5ec' },
-  { key: '2387080720,2,-20,-1', seed: 2387080720, cx: 2, cy: -20, cz: -1, digest: '5a0d9cff' },
-  { key: '2387080720,3,-20,-1', seed: 2387080720, cx: 3, cy: -20, cz: -1, digest: '28419314' },
-  { key: '2387080720,0,-19,-4', seed: 2387080720, cx: 0, cy: -19, cz: -4, digest: '6e955b67' },
-  { key: '2387080720,1,-19,-4', seed: 2387080720, cx: 1, cy: -19, cz: -4, digest: '5059662c' },
-  { key: '2387080720,2,-19,-4', seed: 2387080720, cx: 2, cy: -19, cz: -4, digest: 'f9380db0' },
-  { key: '2387080720,3,-19,-4', seed: 2387080720, cx: 3, cy: -19, cz: -4, digest: '1335fdcd' },
-  { key: '2387080720,0,-19,-3', seed: 2387080720, cx: 0, cy: -19, cz: -3, digest: 'faa8c426' },
-  { key: '2387080720,1,-19,-3', seed: 2387080720, cx: 1, cy: -19, cz: -3, digest: '7bb84f5c' },
-  { key: '2387080720,2,-19,-3', seed: 2387080720, cx: 2, cy: -19, cz: -3, digest: 'fb655773' },
-  { key: '2387080720,3,-19,-3', seed: 2387080720, cx: 3, cy: -19, cz: -3, digest: '11c69fdc' },
-  { key: '2387080720,0,-19,-2', seed: 2387080720, cx: 0, cy: -19, cz: -2, digest: 'fb3d0823' },
-  { key: '2387080720,1,-19,-2', seed: 2387080720, cx: 1, cy: -19, cz: -2, digest: '56fe76e5' },
-  { key: '2387080720,2,-19,-2', seed: 2387080720, cx: 2, cy: -19, cz: -2, digest: '1ecdaa1d' },
-  { key: '2387080720,3,-19,-2', seed: 2387080720, cx: 3, cy: -19, cz: -2, digest: '50706114' },
-  { key: '2387080720,0,-19,-1', seed: 2387080720, cx: 0, cy: -19, cz: -1, digest: '8cae6a2d' },
-  { key: '2387080720,1,-19,-1', seed: 2387080720, cx: 1, cy: -19, cz: -1, digest: 'a393fcd8' },
-  { key: '2387080720,2,-19,-1', seed: 2387080720, cx: 2, cy: -19, cz: -1, digest: 'cff3a0c4' },
-  { key: '2387080720,3,-19,-1', seed: 2387080720, cx: 3, cy: -19, cz: -1, digest: '40380f3a' },
-  { key: '2387080720,0,-18,-4', seed: 2387080720, cx: 0, cy: -18, cz: -4, digest: 'd75675d3' },
-  { key: '2387080720,1,-18,-4', seed: 2387080720, cx: 1, cy: -18, cz: -4, digest: '62486c3e' },
-  { key: '2387080720,2,-18,-4', seed: 2387080720, cx: 2, cy: -18, cz: -4, digest: 'd8172805' },
-  { key: '2387080720,3,-18,-4', seed: 2387080720, cx: 3, cy: -18, cz: -4, digest: '9a91200e' },
-  { key: '2387080720,0,-18,-3', seed: 2387080720, cx: 0, cy: -18, cz: -3, digest: '946cf370' },
-  { key: '2387080720,1,-18,-3', seed: 2387080720, cx: 1, cy: -18, cz: -3, digest: '02f2d613' },
-  { key: '2387080720,2,-18,-3', seed: 2387080720, cx: 2, cy: -18, cz: -3, digest: '40644f66' },
-  { key: '2387080720,3,-18,-3', seed: 2387080720, cx: 3, cy: -18, cz: -3, digest: 'f1c70213' },
-  { key: '2387080720,0,-18,-2', seed: 2387080720, cx: 0, cy: -18, cz: -2, digest: '6501173d' },
-  { key: '2387080720,1,-18,-2', seed: 2387080720, cx: 1, cy: -18, cz: -2, digest: '65b441e9' },
-  { key: '2387080720,2,-18,-2', seed: 2387080720, cx: 2, cy: -18, cz: -2, digest: '07062120' },
-  { key: '2387080720,3,-18,-2', seed: 2387080720, cx: 3, cy: -18, cz: -2, digest: '0449c429' },
-  { key: '2387080720,0,-18,-1', seed: 2387080720, cx: 0, cy: -18, cz: -1, digest: '7d668ba9' },
-  { key: '2387080720,1,-18,-1', seed: 2387080720, cx: 1, cy: -18, cz: -1, digest: '43bb2d3f' },
-  { key: '2387080720,2,-18,-1', seed: 2387080720, cx: 2, cy: -18, cz: -1, digest: '033f88f9' },
-  { key: '2387080720,3,-18,-1', seed: 2387080720, cx: 3, cy: -18, cz: -1, digest: 'bdd9efdd' },
-  { key: '2387080720,0,-17,-4', seed: 2387080720, cx: 0, cy: -17, cz: -4, digest: 'dc1a0ced' },
-  { key: '2387080720,1,-17,-4', seed: 2387080720, cx: 1, cy: -17, cz: -4, digest: 'acf7ad0b' },
-  { key: '2387080720,2,-17,-4', seed: 2387080720, cx: 2, cy: -17, cz: -4, digest: '08d0bb16' },
-  { key: '2387080720,3,-17,-4', seed: 2387080720, cx: 3, cy: -17, cz: -4, digest: '25061394' },
-  { key: '2387080720,0,-17,-3', seed: 2387080720, cx: 0, cy: -17, cz: -3, digest: '9942aac5' },
-  { key: '2387080720,1,-17,-3', seed: 2387080720, cx: 1, cy: -17, cz: -3, digest: '440209d6' },
-  { key: '2387080720,2,-17,-3', seed: 2387080720, cx: 2, cy: -17, cz: -3, digest: '795ad443' },
-  { key: '2387080720,3,-17,-3', seed: 2387080720, cx: 3, cy: -17, cz: -3, digest: '372029b9' },
-  { key: '2387080720,0,-17,-2', seed: 2387080720, cx: 0, cy: -17, cz: -2, digest: '3ad42a2f' },
-  { key: '2387080720,1,-17,-2', seed: 2387080720, cx: 1, cy: -17, cz: -2, digest: 'c5b54e16' },
-  { key: '2387080720,2,-17,-2', seed: 2387080720, cx: 2, cy: -17, cz: -2, digest: '080f597f' },
-  { key: '2387080720,3,-17,-2', seed: 2387080720, cx: 3, cy: -17, cz: -2, digest: '2fa93955' },
-  { key: '2387080720,0,-17,-1', seed: 2387080720, cx: 0, cy: -17, cz: -1, digest: '72fcf7b5' },
-  { key: '2387080720,1,-17,-1', seed: 2387080720, cx: 1, cy: -17, cz: -1, digest: '57c26247' },
-  { key: '2387080720,2,-17,-1', seed: 2387080720, cx: 2, cy: -17, cz: -1, digest: '1834faa2' },
-  { key: '2387080720,3,-17,-1', seed: 2387080720, cx: 3, cy: -17, cz: -1, digest: 'a0222ae4' },
+  { key: '2387080720,0,-21,-4', seed: 2387080720, cx: 0, cy: -21, cz: -4, digest: 'eca6a692' },
+  { key: '2387080720,1,-21,-4', seed: 2387080720, cx: 1, cy: -21, cz: -4, digest: '129cfb64' },
+  { key: '2387080720,2,-21,-4', seed: 2387080720, cx: 2, cy: -21, cz: -4, digest: 'ffc7e65d' },
+  { key: '2387080720,3,-21,-4', seed: 2387080720, cx: 3, cy: -21, cz: -4, digest: '52ea14cd' },
+  { key: '2387080720,0,-21,-3', seed: 2387080720, cx: 0, cy: -21, cz: -3, digest: '49aad1a4' },
+  { key: '2387080720,1,-21,-3', seed: 2387080720, cx: 1, cy: -21, cz: -3, digest: '6771f861' },
+  { key: '2387080720,2,-21,-3', seed: 2387080720, cx: 2, cy: -21, cz: -3, digest: '2be97eea' },
+  { key: '2387080720,3,-21,-3', seed: 2387080720, cx: 3, cy: -21, cz: -3, digest: '01a26cbb' },
+  { key: '2387080720,0,-21,-2', seed: 2387080720, cx: 0, cy: -21, cz: -2, digest: 'b5739f1f' },
+  { key: '2387080720,1,-21,-2', seed: 2387080720, cx: 1, cy: -21, cz: -2, digest: '47bf5b75' },
+  { key: '2387080720,2,-21,-2', seed: 2387080720, cx: 2, cy: -21, cz: -2, digest: '634d9bb2' },
+  { key: '2387080720,3,-21,-2', seed: 2387080720, cx: 3, cy: -21, cz: -2, digest: '4cdf2de9' },
+  { key: '2387080720,0,-21,-1', seed: 2387080720, cx: 0, cy: -21, cz: -1, digest: '6f99921f' },
+  { key: '2387080720,1,-21,-1', seed: 2387080720, cx: 1, cy: -21, cz: -1, digest: '8627aa5b' },
+  { key: '2387080720,2,-21,-1', seed: 2387080720, cx: 2, cy: -21, cz: -1, digest: 'ec71d664' },
+  { key: '2387080720,3,-21,-1', seed: 2387080720, cx: 3, cy: -21, cz: -1, digest: '9348616f' },
+  { key: '2387080720,0,-20,-4', seed: 2387080720, cx: 0, cy: -20, cz: -4, digest: '07487502' },
+  { key: '2387080720,1,-20,-4', seed: 2387080720, cx: 1, cy: -20, cz: -4, digest: '11892513' },
+  { key: '2387080720,2,-20,-4', seed: 2387080720, cx: 2, cy: -20, cz: -4, digest: '71fc701e' },
+  { key: '2387080720,3,-20,-4', seed: 2387080720, cx: 3, cy: -20, cz: -4, digest: '4debadb6' },
+  { key: '2387080720,0,-20,-3', seed: 2387080720, cx: 0, cy: -20, cz: -3, digest: 'a04ee7e1' },
+  { key: '2387080720,1,-20,-3', seed: 2387080720, cx: 1, cy: -20, cz: -3, digest: 'e762d4ce' },
+  { key: '2387080720,2,-20,-3', seed: 2387080720, cx: 2, cy: -20, cz: -3, digest: '27eb6927' },
+  { key: '2387080720,3,-20,-3', seed: 2387080720, cx: 3, cy: -20, cz: -3, digest: 'b765e12b' },
+  { key: '2387080720,0,-20,-2', seed: 2387080720, cx: 0, cy: -20, cz: -2, digest: '0c878616' },
+  { key: '2387080720,1,-20,-2', seed: 2387080720, cx: 1, cy: -20, cz: -2, digest: '1df5f83e' },
+  { key: '2387080720,2,-20,-2', seed: 2387080720, cx: 2, cy: -20, cz: -2, digest: 'e4c4d832' },
+  { key: '2387080720,3,-20,-2', seed: 2387080720, cx: 3, cy: -20, cz: -2, digest: 'f6d044d0' },
+  { key: '2387080720,0,-20,-1', seed: 2387080720, cx: 0, cy: -20, cz: -1, digest: '3fc30c13' },
+  { key: '2387080720,1,-20,-1', seed: 2387080720, cx: 1, cy: -20, cz: -1, digest: '168c0692' },
+  { key: '2387080720,2,-20,-1', seed: 2387080720, cx: 2, cy: -20, cz: -1, digest: 'fea45970' },
+  { key: '2387080720,3,-20,-1', seed: 2387080720, cx: 3, cy: -20, cz: -1, digest: '3dfe25a4' },
+  { key: '2387080720,0,-19,-4', seed: 2387080720, cx: 0, cy: -19, cz: -4, digest: '540a5e95' },
+  { key: '2387080720,1,-19,-4', seed: 2387080720, cx: 1, cy: -19, cz: -4, digest: '46b494b6' },
+  { key: '2387080720,2,-19,-4', seed: 2387080720, cx: 2, cy: -19, cz: -4, digest: '7ce87df2' },
+  { key: '2387080720,3,-19,-4', seed: 2387080720, cx: 3, cy: -19, cz: -4, digest: '01e48a0f' },
+  { key: '2387080720,0,-19,-3', seed: 2387080720, cx: 0, cy: -19, cz: -3, digest: 'abc752a0' },
+  { key: '2387080720,1,-19,-3', seed: 2387080720, cx: 1, cy: -19, cz: -3, digest: '1ac45f1b' },
+  { key: '2387080720,2,-19,-3', seed: 2387080720, cx: 2, cy: -19, cz: -3, digest: '7dfa46d4' },
+  { key: '2387080720,3,-19,-3', seed: 2387080720, cx: 3, cy: -19, cz: -3, digest: '583b3365' },
+  { key: '2387080720,0,-19,-2', seed: 2387080720, cx: 0, cy: -19, cz: -2, digest: '356e4a15' },
+  { key: '2387080720,1,-19,-2', seed: 2387080720, cx: 1, cy: -19, cz: -2, digest: '4cc3dbed' },
+  { key: '2387080720,2,-19,-2', seed: 2387080720, cx: 2, cy: -19, cz: -2, digest: '0338e79c' },
+  { key: '2387080720,3,-19,-2', seed: 2387080720, cx: 3, cy: -19, cz: -2, digest: '85c9ea07' },
+  { key: '2387080720,0,-19,-1', seed: 2387080720, cx: 0, cy: -19, cz: -1, digest: 'ec020ba8' },
+  { key: '2387080720,1,-19,-1', seed: 2387080720, cx: 1, cy: -19, cz: -1, digest: '6f490888' },
+  { key: '2387080720,2,-19,-1', seed: 2387080720, cx: 2, cy: -19, cz: -1, digest: '60c5cdd3' },
+  { key: '2387080720,3,-19,-1', seed: 2387080720, cx: 3, cy: -19, cz: -1, digest: '4664556b' },
+  { key: '2387080720,0,-18,-4', seed: 2387080720, cx: 0, cy: -18, cz: -4, digest: 'd73e3e2d' },
+  { key: '2387080720,1,-18,-4', seed: 2387080720, cx: 1, cy: -18, cz: -4, digest: 'cfdda7e9' },
+  { key: '2387080720,2,-18,-4', seed: 2387080720, cx: 2, cy: -18, cz: -4, digest: '0409a8b2' },
+  { key: '2387080720,3,-18,-4', seed: 2387080720, cx: 3, cy: -18, cz: -4, digest: '6105cb76' },
+  { key: '2387080720,0,-18,-3', seed: 2387080720, cx: 0, cy: -18, cz: -3, digest: '85281149' },
+  { key: '2387080720,1,-18,-3', seed: 2387080720, cx: 1, cy: -18, cz: -3, digest: '69ef607b' },
+  { key: '2387080720,2,-18,-3', seed: 2387080720, cx: 2, cy: -18, cz: -3, digest: '26012b42' },
+  { key: '2387080720,3,-18,-3', seed: 2387080720, cx: 3, cy: -18, cz: -3, digest: 'de5400bb' },
+  { key: '2387080720,0,-18,-2', seed: 2387080720, cx: 0, cy: -18, cz: -2, digest: '9292db98' },
+  { key: '2387080720,1,-18,-2', seed: 2387080720, cx: 1, cy: -18, cz: -2, digest: '457b0451' },
+  { key: '2387080720,2,-18,-2', seed: 2387080720, cx: 2, cy: -18, cz: -2, digest: '7822f3a7' },
+  { key: '2387080720,3,-18,-2', seed: 2387080720, cx: 3, cy: -18, cz: -2, digest: '68a19b13' },
+  { key: '2387080720,0,-18,-1', seed: 2387080720, cx: 0, cy: -18, cz: -1, digest: 'd7cfd0eb' },
+  { key: '2387080720,1,-18,-1', seed: 2387080720, cx: 1, cy: -18, cz: -1, digest: '8a397f8e' },
+  { key: '2387080720,2,-18,-1', seed: 2387080720, cx: 2, cy: -18, cz: -1, digest: 'e9a01205' },
+  { key: '2387080720,3,-18,-1', seed: 2387080720, cx: 3, cy: -18, cz: -1, digest: '97747a9e' },
+  { key: '2387080720,0,-17,-4', seed: 2387080720, cx: 0, cy: -17, cz: -4, digest: '79083ce9' },
+  { key: '2387080720,1,-17,-4', seed: 2387080720, cx: 1, cy: -17, cz: -4, digest: '156c4020' },
+  { key: '2387080720,2,-17,-4', seed: 2387080720, cx: 2, cy: -17, cz: -4, digest: 'b553bf56' },
+  { key: '2387080720,3,-17,-4', seed: 2387080720, cx: 3, cy: -17, cz: -4, digest: 'c77af9b3' },
+  { key: '2387080720,0,-17,-3', seed: 2387080720, cx: 0, cy: -17, cz: -3, digest: '24d5253d' },
+  { key: '2387080720,1,-17,-3', seed: 2387080720, cx: 1, cy: -17, cz: -3, digest: '9c7ce384' },
+  { key: '2387080720,2,-17,-3', seed: 2387080720, cx: 2, cy: -17, cz: -3, digest: '68c66edf' },
+  { key: '2387080720,3,-17,-3', seed: 2387080720, cx: 3, cy: -17, cz: -3, digest: '6659e673' },
+  { key: '2387080720,0,-17,-2', seed: 2387080720, cx: 0, cy: -17, cz: -2, digest: '0ef9b39e' },
+  { key: '2387080720,1,-17,-2', seed: 2387080720, cx: 1, cy: -17, cz: -2, digest: 'f3fda67f' },
+  { key: '2387080720,2,-17,-2', seed: 2387080720, cx: 2, cy: -17, cz: -2, digest: '37397ebf' },
+  { key: '2387080720,3,-17,-2', seed: 2387080720, cx: 3, cy: -17, cz: -2, digest: '71dd2909' },
+  { key: '2387080720,0,-17,-1', seed: 2387080720, cx: 0, cy: -17, cz: -1, digest: 'cac7bf43' },
+  { key: '2387080720,1,-17,-1', seed: 2387080720, cx: 1, cy: -17, cz: -1, digest: '6ba7c581' },
+  { key: '2387080720,2,-17,-1', seed: 2387080720, cx: 2, cy: -17, cz: -1, digest: '6383079a' },
+  { key: '2387080720,3,-17,-1', seed: 2387080720, cx: 3, cy: -17, cz: -1, digest: '74a4f782' },
 ])
 
-const LATTICE_GOLDEN_DIGEST = '97e573a42a6b45c97478b74bff03ed22611ef5c68ce1355ed99ee160dbd59338'
+const LATTICE_GOLDEN_DIGEST = '225647f28578a06ccb689b723de46802c21e9f1551f14bfb9c92ed87720e2e1e'
 
 // Hotel: representative residential-fabric block — 2x2 chunks over two
 // floors at the spawn neighbourhood (guest fabric, stairs, door joinery,
 // residential furnishing), pinned exactly like the other family goldens.
 const HOTEL_GOLDEN = Object.freeze([
-  { key: '777,-1,0,-1', seed: 777, cx: -1, cy: 0, cz: -1, digest: '71492cb5' },
-  { key: '777,0,0,-1', seed: 777, cx: 0, cy: 0, cz: -1, digest: '967982a1' },
-  { key: '777,-1,0,0', seed: 777, cx: -1, cy: 0, cz: 0, digest: '1ae76b8d' },
-  { key: '777,0,0,0', seed: 777, cx: 0, cy: 0, cz: 0, digest: '32072b98' },
-  { key: '777,-1,1,-1', seed: 777, cx: -1, cy: 1, cz: -1, digest: 'd42f4deb' },
-  { key: '777,0,1,-1', seed: 777, cx: 0, cy: 1, cz: -1, digest: 'e8160613' },
-  { key: '777,-1,1,0', seed: 777, cx: -1, cy: 1, cz: 0, digest: 'a48521ed' },
-  { key: '777,0,1,0', seed: 777, cx: 0, cy: 1, cz: 0, digest: '19e03db9' },
+  { key: '777,-1,0,-1', seed: 777, cx: -1, cy: 0, cz: -1, digest: '81d2b923' },
+  { key: '777,0,0,-1', seed: 777, cx: 0, cy: 0, cz: -1, digest: '7c94b2b8' },
+  { key: '777,-1,0,0', seed: 777, cx: -1, cy: 0, cz: 0, digest: '85b51344' },
+  { key: '777,0,0,0', seed: 777, cx: 0, cy: 0, cz: 0, digest: '02bac57b' },
+  { key: '777,-1,1,-1', seed: 777, cx: -1, cy: 1, cz: -1, digest: '45697caf' },
+  { key: '777,0,1,-1', seed: 777, cx: 0, cy: 1, cz: -1, digest: 'c3404ff6' },
+  { key: '777,-1,1,0', seed: 777, cx: -1, cy: 1, cz: 0, digest: '44418d68' },
+  { key: '777,0,1,0', seed: 777, cx: 0, cy: 1, cz: 0, digest: 'c542fad5' },
 ])
 
-const HOTEL_GOLDEN_DIGEST = '99916c6f5127f7f4d4df3819b3606028a76f2bb4d5bc5d9c8692ceebf1ac600a'
+const HOTEL_GOLDEN_DIGEST = '8a4ee645d544e44003095773bd35d0eb6f6657a2cefeac16527632b04393dfac'
 
 const OFFICE_PAIR_DESCRIPTOR_GOLDEN = {
   id: 1394823709,
@@ -790,58 +891,21 @@ const latticeEdgeKey = ({ a, b }) => `${Math.min(a, b)}:${Math.max(a, b)}`
 
 function latticeChamberCueEvidence(chunks, structure, anchor) {
   const railCells = new Set()
-  const sideStates = [[], [], [], []]
-  for (let offset = -1; offset <= 1; offset++) {
-    const north = generatedHEdge(
-      chunks,
-      anchor.gx + offset,
-      anchor.gz - 1,
-      anchor.levelCy
-    )
-    const south = generatedHEdge(
-      chunks,
-      anchor.gx + offset,
-      anchor.gz + 2,
-      anchor.levelCy
-    )
-    const west = generatedVEdge(
-      chunks,
-      anchor.gx - 1,
-      anchor.gz + offset,
-      anchor.levelCy
-    )
-    const east = generatedVEdge(
-      chunks,
-      anchor.gx + 2,
-      anchor.gz + offset,
-      anchor.levelCy
-    )
-    for (const [side, state, key] of [
-      [0, north, `${anchor.gx + offset},${anchor.gz - 2}`],
-      [1, east, `${anchor.gx + 2},${anchor.gz + offset}`],
-      [2, south, `${anchor.gx + offset},${anchor.gz + 2}`],
-      [3, west, `${anchor.gx - 2},${anchor.gz + offset}`],
-    ]) {
-      sideStates[side].push(state)
-      if (
-        state?.wall === 1 &&
-        state.passage === PASSAGE_WALL &&
-        state.feature === WALL_RAIL
-      ) railCells.add(key)
-    }
-  }
-
   const bridgeSeamCells = new Set()
-  for (const edge of structure.edges) {
-    if (edge.a !== anchor.id && edge.b !== anchor.id) continue
-    for (const cell of edge.cells) {
-      if (
-        cell.cy === anchor.levelCy &&
-        Math.abs(cell.gx - anchor.gx) <= 2 &&
-        Math.abs(cell.gz - anchor.gz) <= 2
-      ) bridgeSeamCells.add(`${cell.gx},${cell.gz}`)
+  const approaches = latticeChamberApproaches(structure, anchor)
+  const sideStates = latticeChamberPerimeter(anchor).map((side) => side.map((edge) => {
+    const state = (edge.axis === 'v' ? generatedVEdge : generatedHEdge)(
+      chunks, edge.gx, edge.gz, anchor.levelCy
+    )
+    const key = `${edge.axis}:${edge.gx},${edge.gz}`
+    if (
+      state?.wall === 1 && state.passage === PASSAGE_WALL && state.feature === WALL_RAIL
+    ) railCells.add(key)
+    if (approaches.has(key) && state?.wall === 0 && state.passage !== PASSAGE_WALL) {
+      bridgeSeamCells.add(key)
     }
-  }
+    return state
+  }))
   const combined = new Set([...railCells, ...bridgeSeamCells])
   const plainWallSides = sideStates.filter((states) =>
     states.every((state) =>
@@ -1207,9 +1271,11 @@ describe('release sewer pipeline', () => {
   })
 
   it('[R23-S01][D03][D05] stamps deterministic manhole modules through the existing stair descriptor primitive', () => {
-    const data = buildChunk(0x5e57, 2, 0, -3, releaseSewerConfig())
-    const above = buildChunk(0x5e57, 2, 1, -3, releaseSewerConfig())
-    const below = buildChunk(0x5e57, 2, -1, -3, releaseSewerConfig())
+    // v26: (2, 0, -3) now sits under a surge chamber (catalog volumes own
+    // their column's risers); (3, 0, -3) keeps both manhole modules.
+    const data = buildChunk(0x5e57, 3, 0, -3, releaseSewerConfig())
+    const above = buildChunk(0x5e57, 3, 1, -3, releaseSewerConfig())
+    const below = buildChunk(0x5e57, 3, -1, -3, releaseSewerConfig())
     const cases = [
       ['manholeUp', data.stairUp, 'hasCeilHole'],
       ['manholeDown', data.stairDown, 'hasFloorHole'],
@@ -1237,7 +1303,7 @@ describe('release sewer pipeline', () => {
       }
     }
 
-    expect(sewerSnapshot(buildChunk(0x5e57, 2, 0, -3, releaseSewerConfig())))
+    expect(sewerSnapshot(buildChunk(0x5e57, 3, 0, -3, releaseSewerConfig())))
       .toEqual(sewerSnapshot(data))
   })
 })
@@ -1383,6 +1449,10 @@ describe('forced Tower stamping (task 4.5 GREEN)', () => {
       ['anchor', (value) => { value.structure.anchor.cx++ }],
       ['participant', (value) => { value.structure.participants[0].cz++ }],
       ['structure bounds', (value) => { value.structure.globalBounds.x0++ }],
+      ['architectural form', (value) => { value.structure.architecture.form = 'unknown' }],
+      ['structural bay', (value) => { value.structure.architecture.columnBay++ }],
+      ['architectural width', (value) => { value.structure.architecture.shortSpan++ }],
+      ['architectural length', (value) => { value.structure.architecture.longSpan++ }],
       ['deck floor', (value) => { value.structure.decks[0].levelCy++ }],
       ['deck lower floor', (value) => { value.structure.decks[0].lowerCy++ }],
       ['deck line', (value) => { value.structure.decks[0].globalBridgeLine++ }],
@@ -1629,6 +1699,7 @@ describe('forced Lattice stamping (task 5.5 GREEN)', () => {
       ['anchor x', (value) => { value.structure.anchors[0].gx++ }],
       ['anchor floor', (value) => { value.structure.anchors[0].levelCy++ }],
       ['anchor exposure', (value) => { value.structure.anchors[0].exposureM = 6 }],
+      ['anchor platform', (value) => { value.structure.anchors[0].platform = 'unknown' }],
       ['edge endpoint', (value) => { value.structure.edges[0].a++ }],
       ['edge role', (value) => { value.structure.edges[0].role = 'cycle' }],
       ['edge cell x', (value) => { value.structure.edges[0].cells[0].gx++ }],
@@ -1675,7 +1746,8 @@ describe('seam consistency', () => {
     if (
       !structure ||
       structure.id !== b.structure?.id ||
-      structure.bridgeAxis !== axis ||
+      // Catalog volumes (v26) may cross seams on both axes.
+      (structure.bridgeAxis !== axis && !isCatalogKind(structure.kind)) ||
       a.cy !== b.cy ||
       a.cy < structure.baseCy ||
       a.cy > structure.topCy ||

@@ -1,9 +1,243 @@
 # World Generation Architecture
 
-Verified on 2026-07-23 against world-gen version 24. This documents the current
+Updated on 2026-09-26 for world-gen version 27. This documents the current
 module layout and runtime performance model; `design-review.md`,
 `liminal-horror-design.md`, and `map-generation-research.md` preserve the
 versioned design history.
+
+## v27 — one walk per Tower landmark storey
+
+**The defect.** On a Tower landmark's upper storeys, rails guard every court
+edge and the long outer walls are glazed. Each participant opened its end
+wall onto the ring only at the two stair-corridor rows. So the gallery walk on
+the far side of a participant's stair halo reached the ring only through the
+other participant's chunk. Two cases hit this:
+- a split or overlook court's second long side, wherever the chunk has no
+  transfer gallery or terrace;
+- the nave's one-row side (the deck sits one row off centre, so one side of
+  the three-row void keeps a single row).
+
+Streaming and the layered audits saw the pair as connected, but the
+chunk-storey on its own was two components. Example: seed `hashStr('exit-20')`,
+chunk (−10, −1, 0), where the south walk of a nave deck floor was cut off.
+Across 275 landmarks in 25 seeds, 628 of 1,650 Tower chunk-storeys (38%) were
+split, in every form. The v24 nave had the same defect.
+
+**The fix** (`towerRoomOpenings` in `structures/multilevelStamp.js`). On every
+upper storey, each participant also opens its end wall at both outer gallery
+rows, the rows along the footprint's long walls. No form ever voids those
+rows, so each walk now meets the ring inside its own chunk. The end-wall
+windows at those rows become wide mouths. Nothing else changes: the base
+hall, voids, deck, rails, stairs, sockets and the descriptor stay the same.
+
+**Evidence.** `__tests__/tower-architecture.test.js` pins the `exit-20` chunk.
+It also requires `countChunkComponents(data, true) === 1` for all six
+chunk-storeys of every landmark in a 16-seed scan that covers every form on
+both axes. The 275-landmark corpus above now has no split storey, and neither
+does a wider scan of 2,524 landmarks (15,144 chunk-storeys, 121 seeds, 17×17
+chunks × 17 floors). v27 re-pins every golden and every family's
+representative and corpus digest; only Tower geometry moved.
+
+## v26 — family skeletons and the structure catalog
+
+**The problem v26 fixes.** v25 gave each family its own interior plan, but the
+frame around it was still shared. For one seed, Office, Hotel, Tower and
+Lattice drew the same zone map, district edges, door positions, stair shafts
+and lamp grid (border contracts, zone election and lamps never read the
+family). Office and Hotel even shared every atrium and stair. Tower's
+landmarks covered 0.7–2.8% of chunks and Lattice's 12–30%, so most of those
+maps were a flat room-and-corridor fabric. `npm run report:families`
+(`scripts/family-distinctness.mjs`, features in `src/world/familySignature.js`,
+layout only) measured it:
+
+| pair | v25 effect size | v25 seam κ | v26 effect size | v26 seam κ |
+|---|---|---|---|---|
+| office~hotel | 0.34 | 0.77 | 1.38 | 0.10 |
+| office~tower | 1.61 | 0.78 | 1.59 | −0.14 |
+| office~lattice | 1.42 | 0.69 | 1.93 | −0.15 |
+| hotel~tower | 1.92 | 0.79 | 2.84 | −0.12 |
+| hotel~lattice | 1.64 | 0.69 | 2.84 | −0.09 |
+| tower~lattice | 1.14 | 0.70 | 1.89 | −0.13 |
+| any pair with sewer | ≈ 16.9 | 0.00 | 5.6–6.1 | ≤ 0.03 |
+
+Effect size is the centroid distance in pooled standard deviations across 17
+layout features. Seam κ is Cohen's kappa of the chunk-seam wall/opening
+states at the same seed and coordinates (0 = unrelated skeletons, 1 = the
+same). Nearest-centroid accuracy from layout alone rose from 86% to 95% over 8
+seeds × 2 windows × 3 floors. The sewer effect sizes dropped from ≈ 17 only
+because v26 gives every family real verticality; sewer is still by far the
+most distinct. `__tests__/family-distinctness.test.js` guards the
+result: κ < 0.3 and effect > 1 for every pair, accuracy > 0.8.
+
+**Family skeletons** (`FAMILY_SKELETONS`, applied by `worldConfigForFamily` in
+`mapFamily.js`). Every non-office family re-keys all of these shared random
+streams: the zone field and landmark placement, border seams, district
+portals, stair slabs, the atrium planner, lamps and pillar landmarks. Each
+also owns its proportions. Office keeps the base config.
+
+| | office | hotel | tower | lattice |
+|---|---|---|---|---|
+| district / offset | 3×3 / 0 | 4×4 / 2 | 4×4 / 1 | 4×4 / 3 |
+| district portals | doors ±3 | doors ±1, spacing 7 | 3-wide mouths | 2-wide mouths |
+| room module | irregular 3–8 | guest bays 2–3 × rows 3–4, wing module 8–9, rectangular | cores 5–12 | booths 3–6, alley pitch 5–7, 45% open yards |
+| generic stair chance | 0.30 | 0.24 | 0.16 (new) | 0.16 (new) |
+| lamp grid / dead | 4 / 0.18 | 3 / 0.10 | 5 room grid (corridor grid kept for landmark sockets) / 0.30 | 6 / 0.34 |
+| landmark halls | base | 0.5 chance | 0.95, up to 3 chunks | 0.9 |
+| atrium planner | base | 18×10, 5–13 storeys, bridges 0.35 | — | — |
+
+New carriers in the code: `office.districtOffset` and `office.portals.width`
+(`zones/officePlan.js`), hotel wing and bay options (`office.hotel`,
+`zones/hotelArchitecture.js`), and lattice alley pitch, extra plazas and open
+yards (`office.lattice`, `zones/infrastructureArchitecture.js`).
+
+**The structure catalog** (`src/world/structures/catalog/`). Each family owns
+procedural volumes in three size classes, listed in the table below:
+
+| size | footprint | examples |
+|---|---|---|
+| small | 1 chunk | light wells, stair halls, open-well stairs, drop shafts, stair cores and pylons |
+| medium | an adjacent pair | light courts, Portman atria, cisterns, carceri naves, escalator spines |
+| large | a 2×2 block | bureau halls, grand atria, stepwells, pressure tanks, panoptic wells, module hills |
+
+There are 39 types: office 8, hotel 7, sewer 8, tower 8, lattice 8.
+`recipes.js` lists every type with its real-world reference, and
+[liminal-horror-design.md](liminal-horror-design.md#structure-catalog-v26)
+has the research basis.
+
+- **Descriptor** (`engine.js`) is one frozen plain-JSON object:
+  - `family`, `kind` (`<family>Catalog`), `type`, `sizeClass`;
+  - `globalBounds` (inset one cell so the walkable ring stays in the participants);
+  - per-storey `levels[k].voids` and `levels[k].bridges` (inclusive global rects);
+  - ground-storey `columns` and full-height `piers`;
+  - an optional aligned switchback or open-well `core`, which can be enclosed with one door per storey;
+  - `verticalLinks` in the canonical stair form (at least one flight per slab);
+  - a single designed `deviation` (one missing bridge, one pier out of line, and so on).
+- **Placement** (`index.js`) is a pure function of (root seed, family config,
+  4×4 district, vertical band):
+  - Bands have a per-district phase; `period` is set per family.
+  - Each band runs a fixed number of salted attempts. An attempt draws a size
+    class, a recipe, a footprint, a height and one of the frame's 4–8
+    symmetries.
+  - An attempt is accepted only if every chunk-storey it needs is free of the
+    family landmark (landmarks keep precedence in `structureAt`), of earlier
+    volumes and of the spawn hub.
+  - No storey of a district may exceed `maxChunksPerFloor` structure chunks,
+    so the stair fallback always finds a free chunk.
+  - Plans are cached per district and band, keyed by config content.
+- **Fail-closed analyzer** (`analyzeCatalogDescriptor`). A draft that breaks
+  any of these rules becomes no structure at all:
+  - no void edge on a chunk seam (seams inside a carve stay open, as the seam
+    tests require);
+  - decks span their void and never touch a seam;
+  - piers stay off the footprint edge and off seam-adjacent cells;
+  - the core stays inside one chunk's [1..12]²;
+  - every flight is canonical, with a stair-safe halo on both storeys and no
+    same-chunk overlap;
+  - every walkable cell of every storey reaches the ring **inside each
+    participant chunk on its own**.
+- **Stamp** (`stamp.js`) runs at the pipeline's structure stage, in order:
+  1. carve the footprint and ring, and open the owned seams;
+  2. label ground hall, gallery, void and deck cells, and raise piers;
+  3. guard every walkable/void edge with a rail, or with glazing on glazed
+     types (decks always get rails), protected against later carves;
+  4. write both slab slices, with apertures for light and AI sight;
+  5. stamp the structure's own flights;
+  6. enclose the core, if the type has one;
+  7. carve an approach when sewer rock seals the ring.
+- **Contract:** `structureAt` returns the landmark, else the catalog volume.
+  `CATALOG_STRUCTURE_ADAPTERS` hold the policies (1–4 participants that exactly
+  match the footprint), `catalogApertureRegions` supplies the apertures, and
+  runtime validation, residency and slab reservation all go through the same
+  adapters. Every void is guarded and non-lethal, so none of the lethal
+  allowlists change.
+- **Generic stairs everywhere:** Tower and Lattice now stamp slab stairs
+  between their landmarks, and their district plans reserve the halos. Before
+  v26, a Tower floor with no landmark had no way to another storey.
+
+**Audits and accessibility evidence.**
+- `audit.js` judges catalog slab pairs with `catalog/audit.js`:
+  - each slice is the canonical projection of the chunk's descriptor;
+  - holes fall exactly on voids;
+  - every walkable/void edge is guarded.
+- Family registration and `audit:world` emit a catalog kind with real fixtures
+  for every family.
+- In sewer chunks overlaid by a volume, modules under its voids are declared
+  `overlaidModules`, and every other module must still reach the trunk on the
+  real walk graph.
+- `__tests__/structure-catalog.test.js` covers:
+  - every recipe × orientation × height;
+  - that every family places every size class;
+  - identical descriptors from every participant and storey;
+  - runtime validation on every storey;
+  - layered audits of one volume per size class per family;
+  - each stamped chunk-storey being one component;
+  - a stair on every slab of every stair district.
+- `npm run review:structures` now reviews the landmark plus one volume per
+  size class for every family, sewer included. The 2026-09-26 sweeps passed
+  57 and 456 volumes with 0 failures.
+
+**Cost.** Mean chunk build, same corpus, catalog off → on:
+- office 2.69 → 2.98 ms
+- hotel 2.90 → 3.00 ms
+- sewer 0.67 → 0.73 ms
+- tower 2.59 → 3.22 ms
+- lattice 1.45 → 1.62 ms
+
+v26 re-pins every golden and every family's representative and corpus digest.
+
+## v25 — distinct family architecture
+
+The family now changes the physical plan, not just its room catalog or palette.
+See [the research record](map-generation-research.md#world-gen-v25-architecture-before-dressing)
+for references and the interpretation behind these rules. Older versioned
+sections below describe their release; v25 supersedes fixed dimensions and
+claims that Hotel uses the Office layout.
+
+- **Office** (`zones/officeArchitecture.js`): district-level empty bullpens,
+  dogleg galleries and two-cell-wide waiting loops are reserved before room
+  allocation. Sites exclude stairs/atrium reservations. Waiting loops retain
+  a single real central room; routing cannot erase the island. These spaces
+  remain unfurnished and connect into the existing irregular room network.
+- **Hotel** (`zones/hotelArchitecture.js`): an independent guest-wing graph and
+  aligned suite-bay field replace Office's circulation/BSP steps. Parallel
+  double-loaded wings, transverse halls, gallery loops/offset returns and open
+  reception halls vary by seed. Portals, stairs and tall atrium approaches are
+  routed into the graph before shared partition/connectivity validation.
+- **Sewer** (`zones/sewer.js`): elongated interceptor chambers, perpendicular
+  collector confluences and bypass rings around solid bulkheads form three
+  structural variants. Bypasses consume the real loop budget; full-span
+  collectors stay circulation even through chambers so furniture cannot
+  obstruct the sightline. Existing dry, bounded seam/manhole contracts remain.
+- **Tower background** (`zones/infrastructureArchitecture.js`): broad perimeter
+  galleries frame large service cores, crossed by axial halls and transfer
+  galleries. Perimeter-gallery, twin-core and processional-hall variants replace
+  the Office BSP even on safe spawn floors and between vertical structures.
+- **Tower landmarks** (`structures/tower.js`, `structures/multilevelStamp.js`): a 24×6
+  nave, a 20×10 split court with transverse upper gallery, or a 22×8 overlook
+  court with alternating terraces. Column bays vary with the form. All upper
+  solid/void interfaces receive real guard rails, including internal courts
+  and owned chunk seams; canonical stairs and skybridges connect the floors.
+- **Lattice background** (`zones/infrastructureArchitecture.js`): service
+  alleys outline unequal utility blocks, connected by concourses and empty
+  transfer plazas. These remain solid floors; only canonical structures
+  introduce actual slab holes. Tower/Lattice no longer reserve phantom Office
+  stairwells or atria in their background plans.
+- **Lattice landmarks** (`structures/lattice.js`, `structures/latticeStamp.js`): anchor
+  bays vary within stair-safe local coordinates, producing 6–9-cell spans.
+  Platforms are 3×3 landings, 5×3/3×5 piers or 5×5 junction decks selected by
+  graph degree. Perimeter, approaches, lighting and guard cues derive from
+  the actual platform bounds. The connected terraced graph remains canonical.
+
+Version 25 intentionally changes all family byte streams. Tests pin physical
+shape and route behavior separately from exact representative/corpus digests.
+The cross-family regression disables furniture and compares only walls and
+structural columns, including safe spawn chunks without any landmark; changing
+texture, room role or family tag cannot pass it. Exit placement queries actual
+generated family floors/risers and can relocate an objective within the same
+Lattice structure when its initially elected chunk has no floor. The LIVE map
+audit labels incomplete streamed samples as partial rather than treating missing
+neighbour routes as a broken generated world; complete disconnected samples and
+real structural errors still fail.
 
 ## v24 — the multilayer lattice district
 
@@ -479,6 +713,20 @@ pinned output contract. Removing the pre-stamp work therefore requires a
 versioned release-evidence refresh, not an unversioned refactor.
 
 ## Fixed defects
+
+- (v26 review) Interior dressing hung props over slab openings. Sewer gutters,
+  grates, pipes and valve stations sat over catalog voids, and pipes were
+  mounted on guard rails. The generic edge dressing put thresholds, radiators
+  and baseboards over atrium and catalog voids; the pre-v26 office atria had
+  about 60k such props. Dressing now skips every face over a floor hole, sewer
+  ribs skip ceiling holes, and rails and glazing no longer count as masonry.
+  Regression test: `props.test.js`, "dressing over slab openings".
+- (v26 review) Stale caches when configs are edited in place.
+  - The catalog band-plan key now includes the resolved family profile, so
+    Lattice `cycleRate` moves its landmarks.
+  - The office-plan cache signature now covers `lamps` and the family profile.
+  - `resolveMapFamily` checks a content snapshot, so a profile disabled in
+    place fails closed instead of resolving from cache.
 
 - `mesh.js` bridge-beam emission assumed office/tower slices
   (`bridgeAxis`/`bridgeLine`). Lattice slices carry `bridgeCells` without

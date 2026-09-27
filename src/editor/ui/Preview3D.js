@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { CHUNK_WORLD, LAYER_H, PANEL_GLOW, layerY } from '../../world/constants.js'
+import { CELL, CHUNK_WORLD, LAYER_H, PANEL_GLOW, WALL_H, layerY } from '../../world/constants.js'
 import { buildChunkMeshes } from '../../world/mesh.js'
 import { createGeometries, disposeGeometries } from '../../render/geometries.js'
 import { ceilingTexture, floorTexture, wallTexture } from '../../render/textures.js'
@@ -19,7 +19,27 @@ import { GRAPHICS_PRESETS, resolveGraphics } from '../../core/graphics.js'
 //             edited chunks, so authors approve the look the game ships.
 // Orbit views sit far above the plate, so the game-look fog is thinned.
 export const PREVIEW_GEOMETRY = 'geometry'
+// Stacked storeys hide each other from an orbit camera; tall structures are
+// reviewed as cutaways. `below` keeps every floor up to the current one (the
+// structure's lower storeys stay in context), `floor` isolates one storey.
+export const PREVIEW_CLIP_MODES = Object.freeze([
+  Object.freeze({ id: 'all', label: 'all' }),
+  Object.freeze({ id: 'below', label: '≤ floor' }),
+  Object.freeze({ id: 'floor', label: 'floor' }),
+])
+
+export function previewChunkVisible(clip, chunkCy, floor) {
+  if (clip === 'below') return chunkCy <= floor
+  if (clip === 'floor') return chunkCy === floor
+  return true
+}
 const EDITOR_FOG_DENSITY = 0.0035
+// Geometry-mode haze scales with the orbit distance: the historical 0.008 at
+// a 60-unit orbit, so a framed 4×4-chunk Lattice district (~200 units away)
+// is not swallowed by fog while small plates keep their depth cue.
+const GEOMETRY_FOG_AT_UNIT = 0.48
+export const geometryFogDensity = (radius) =>
+  Math.min(0.012, Math.max(0.0012, GEOMETRY_FOG_AT_UNIT / Math.max(1, radius)))
 // The quality tier the look preview renders at: the desktop default. Without
 // one the renderer never builds the furniture shadow/box AO variant, and the
 // passes run on constructor placeholders instead of real tier values.
@@ -77,11 +97,13 @@ export class Preview3D {
     dir.position.set(0.6, 1, 0.35)
     this.scene.add(dir)
     this.geom = createGeometries()
-    this.materials = buildMaterials(this.renderer, app.map.meta.family)
-    this._family = app.map.meta.family
+    this.materials = buildMaterials(this.renderer, app.previewSource().meta.family)
+    this._family = app.previewSource().meta.family
     this.mode = PREVIEW_GEOMETRY
     this.game = null // { scene, materials, grid, deferred } while a look is previewed
     this._ceiling = true
+    this.clip = app.previewClip ?? 'all'
+    this._highlight = null // Box3Helper around the selected structure volume
     this.built = new Map() // key3 -> {group, dispose}
     this.orbit = { tx: 0, ty: 0, tz: 0, radius: 60, theta: -0.7, phi: 1.0 }
     this._bind()
@@ -161,7 +183,7 @@ export class Preview3D {
   }
 
   fit() {
-    const b = this.app.map.bounds()
+    const b = this.app.previewSource().bounds()
     if (!b) return
     this.orbit.tx = ((b.x0 + b.x1 + 1) / 2) * CHUNK_WORLD
     this.orbit.tz = ((b.z0 + b.z1 + 1) / 2) * CHUNK_WORLD
@@ -173,6 +195,68 @@ export class Preview3D {
   setCeiling(visible) {
     this._ceiling = visible
     this._applyCeiling()
+  }
+
+  setClip(clip) {
+    this.clip = clip
+    this._applyClip()
+  }
+
+  // Floor changes keep the author's orbit; only the pivot height follows
+  // (and the cutaway, when one is active).
+  onFloorChanged() {
+    this.orbit.ty = layerY(this.app.floor) + LAYER_H / 2
+    this._applyClip()
+  }
+
+  // A cutaway lifts the lid of the cut storey: its ceiling and troffers are
+  // hidden (via the mesher's semantic parts) so the floor plan reads from
+  // above, while lower storeys keep theirs. The global "ceiling in 3D"
+  // toggle still hides every ceiling through the shared materials.
+  _applyClip() {
+    const floor = this.app?.floor ?? 0
+    for (const built of this.built.values()) this._applyClipTo(built, floor)
+  }
+
+  _applyClipTo(built, floor) {
+    built.group.visible = previewChunkVisible(this.clip, built.cy, floor)
+    const lid = !(this.clip !== 'all' && built.cy === floor)
+    const parts = built.parts
+    if (!parts) return
+    for (const part of [parts.ceiling, parts.litPanels, parts.deadPanels]) {
+      if (part) part.visible = lid
+    }
+  }
+
+  // Outline (geometry mode) and frame a structure volume: bounds × band.
+  setHighlight(structure) {
+    if (this._highlight) {
+      this._highlight.parent?.remove(this._highlight)
+      this._highlight.geometry.dispose()
+      this._highlight.material.dispose()
+      this._highlight = null
+    }
+    if (!structure?.globalBounds) return
+    const b = structure.globalBounds
+    const box = new THREE.Box3(
+      new THREE.Vector3(b.x0 * CELL, layerY(structure.baseCy), b.z0 * CELL),
+      new THREE.Vector3((b.x1 + 1) * CELL, layerY(structure.topCy) + WALL_H, (b.z1 + 1) * CELL)
+    )
+    this._highlight = new THREE.Box3Helper(box, 0x7fd0e8)
+    // The deferred look path renders G-buffer materials only; the helper
+    // lives in the geometry scene.
+    this.scene.add(this._highlight)
+  }
+
+  frameStructure(structure) {
+    const b = structure?.globalBounds
+    if (!b) return
+    this.orbit.tx = ((b.x0 + b.x1 + 1) / 2) * CELL
+    this.orbit.tz = ((b.z0 + b.z1 + 1) / 2) * CELL
+    this.orbit.ty = (layerY(structure.baseCy) + layerY(structure.topCy + 1)) / 2
+    const span = Math.max((b.x1 - b.x0 + 1) * CELL, (b.z1 - b.z0 + 1) * CELL,
+      (structure.topCy - structure.baseCy + 1) * LAYER_H)
+    this.orbit.radius = Math.max(24, span * 1.1)
   }
 
   _bind() {
@@ -211,7 +295,7 @@ export class Preview3D {
 
   // Rebuild chunks whose data changed; drop chunks deleted from the document.
   sync(dirtyKeys = null) {
-    const { map } = this.app
+    const map = this.app.previewSource()
     if (map.meta.family !== this._family) {
       this._family = map.meta.family
       for (const m of Object.values(this.materials)) m.dispose?.()
@@ -249,6 +333,7 @@ export class Preview3D {
       built.cx = d.cx
       built.cy = d.cy
       built.cz = d.cz
+      this._applyClipTo(built, this.app.floor)
       scene.add(built.group)
       this.built.set(key, built)
       if (game) game.grid.addChunk(d)
@@ -276,11 +361,13 @@ export class Preview3D {
       applyPreviewPanelLook(this.game.materials, this.game.deferred)
       this.game.deferred.render(performance.now() / 1000)
     } else {
+      this.scene.fog.density = geometryFogDensity(o.radius)
       this.renderer.render(this.scene, this.camera)
     }
   }
 
   dispose() {
+    this.setHighlight(null)
     for (const [, built] of this.built) this._drop(built)
     this.built.clear()
     this._disposeGame()

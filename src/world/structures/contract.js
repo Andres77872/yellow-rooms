@@ -10,10 +10,17 @@ import {
   MAP_FAMILY_HOTEL,
   MAP_FAMILY_LATTICE,
   MAP_FAMILY_OFFICE,
+  MAP_FAMILY_SEWER,
   MAP_FAMILY_TOWER,
 } from '../mapTypes.js'
 import { multilevelStructureAt } from './multilevel.js'
 import { TOWER_STRUCTURE_KIND, towerStructureAt } from './tower.js'
+import {
+  CATALOG_KINDS,
+  catalogStructureAt,
+  isCatalogKind,
+  participantsForBounds,
+} from './catalog/index.js'
 
 export const STRUCTURE_KIND_OFFICE = 'officeMultilevel'
 export const STRUCTURE_KIND_TOWER = TOWER_STRUCTURE_KIND
@@ -62,8 +69,25 @@ function noStructure(family, levelCy) {
 }
 
 // Resolve the selected family's canonical descriptor without consulting
-// generated ChunkData. Tower planning is still release-inert: only a valid,
-// explicitly enabled forced profile can reach it until the activation gate.
+// generated ChunkData. Eligibility is controlled by the selected profile.
+// The family's canonical landmark planner (office/hotel atria, tower forms,
+// lattice districts). Sewer has none. Office and Hotel run the same atrium
+// contract (their descriptors carry no family field and validate through the
+// office adapter); worldConfigForFamily projects Hotel's own atrium grammar.
+function primaryStructureAt(family, profile, seed, cx, cz, cy, config) {
+  return family === MAP_FAMILY_OFFICE || family === MAP_FAMILY_HOTEL
+    ? multilevelStructureAt(seed, cx, cz, cy, config)
+    : family === MAP_FAMILY_TOWER
+      ? towerStructureAt(seed, cx, cz, cy, profile) ?? noStructure(family, cy)
+      : family === MAP_FAMILY_LATTICE
+        ? latticeStructureAt(seed, cx, cz, cy, profile) ?? noStructure(family, cy)
+    : noStructure(family, cy)
+}
+
+// One descriptor per (chunk, storey). The landmark planner has precedence;
+// the family's structure catalog (structures/catalog, v26) fills chunks and
+// storeys the landmark leaves free — its planner never claims a chunk-storey
+// the landmark owns, so both lookups agree from every participant.
 export function structureAt(
   seed,
   cx,
@@ -73,17 +97,18 @@ export function structureAt(
 ) {
   const profile = resolveMapFamily(config)
   const { family } = profile
-  // Hotel is an office-fabric family: it plans and stamps the same canonical
-  // multilevel descriptors (atria read as hotel light wells), which carry no
-  // family field and therefore validate through the office adapter.
-  const structure = family === MAP_FAMILY_OFFICE || family === MAP_FAMILY_HOTEL
-    ? multilevelStructureAt(seed, cx, cz, cy, config)
-    : family === MAP_FAMILY_TOWER
-      ? towerStructureAt(seed, cx, cz, cy, profile) ?? noStructure(family, cy)
-      : family === MAP_FAMILY_LATTICE
-        ? latticeStructureAt(seed, cx, cz, cy, profile) ?? noStructure(family, cy)
-    : noStructure(family, cy)
-  return deepFreeze(structure)
+  const primary = primaryStructureAt(family, profile, seed, cx, cz, cy, config)
+  if (primary?.hasRoom) return deepFreeze(primary)
+  const catalog = catalogStructureAt(
+    seed,
+    cx,
+    cz,
+    cy,
+    config,
+    family,
+    (x, z, y) => primaryStructureAt(family, profile, seed, x, z, y, config)
+  )
+  return catalog ?? deepFreeze(primary)
 }
 
 // Canonical ownership is evidence from a family lookup, not an inference from
@@ -617,6 +642,40 @@ const LATTICE_POLICY = Object.freeze({
     structure?.levelCount === 5 && structure?.topCy === structure?.baseCy + 4,
 })
 
+// Catalog volumes: one kind per family, a filled rectangle of 1..4 chunks
+// that is exactly the chunks the footprint and its ring touch.
+function canonicalCatalogShape(structure, participants) {
+  return canonicalParticipantOrder(participants) &&
+    JSON.stringify(participantsForBounds(structure?.globalBounds ?? {})) ===
+      JSON.stringify(participants.map(({ cx, cz }) => ({ cx, cz })))
+}
+
+function catalogApertureRegions(slice) {
+  return slice?.hasRoom === true && Array.isArray(slice.apertureRects)
+    ? slice.apertureRects
+    : EMPTY_REGIONS
+}
+
+function catalogPolicy(family) {
+  return Object.freeze({
+    family,
+    kind: CATALOG_KINDS[family],
+    cardinality: (count) => count >= 1 && count <= 4,
+    shape: canonicalCatalogShape,
+    band: (structure) =>
+      Number.isInteger(structure?.levelCount) &&
+      structure.topCy === structure.baseCy + structure.levelCount - 1 &&
+      structure.levelCount >= 2,
+  })
+}
+
+export const CATALOG_STRUCTURE_ADAPTERS = Object.freeze(Object.fromEntries(
+  [MAP_FAMILY_OFFICE, MAP_FAMILY_HOTEL, MAP_FAMILY_SEWER, MAP_FAMILY_TOWER, MAP_FAMILY_LATTICE]
+    .map((family) => [CATALOG_KINDS[family], makeAdapter(catalogPolicy(family), catalogApertureRegions)])
+))
+
+export { isCatalogKind }
+
 export const OFFICE_STRUCTURE_ADAPTER = makeAdapter(
   OFFICE_POLICY,
   rectilinearApertureRegions
@@ -636,6 +695,7 @@ export const STRUCTURE_ADAPTERS = Object.freeze({
   [STRUCTURE_KIND_OFFICE]: OFFICE_STRUCTURE_ADAPTER,
   [STRUCTURE_KIND_TOWER]: TOWER_STRUCTURE_ADAPTER,
   [STRUCTURE_KIND_LATTICE]: LATTICE_STRUCTURE_ADAPTER,
+  ...CATALOG_STRUCTURE_ADAPTERS,
 })
 
 export function structureAdapterFor(structure) {

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { SettingsBlock } from '../settingsPanel.js'
+import { describe, expect, it, vi } from 'vitest'
+import { SETTINGS_HTML, SettingsBlock } from '../settingsPanel.js'
 import { DEFAULTS } from '../../core/Settings.js'
 
 // Node-env test on SettingsBlock.prototype.refresh with plain element fakes
@@ -40,5 +40,42 @@ describe('DYNAMIC RESOLUTION checkbox', () => {
     expect(b.el.dynres.checked).toBe(false)
     expect(b.el.dynres.disabled).toBe(false)
     expect(b.el.dynres.title).toBe('')
+  })
+})
+
+describe('REDUCE FLICKER checkbox', () => {
+  it('sits in the simple view, not behind ADVANCED', () => {
+    const adv = SETTINGS_HTML.indexOf('data-k="adv"')
+    const box = SETTINGS_HTML.indexOf('data-k="flicker"')
+    expect(box).toBeGreaterThan(0)
+    expect(box).toBeLessThan(adv)
+    expect(SETTINGS_HTML).toMatch(/PHOTOSENSITIVITY/)
+  })
+
+  it('shows the stored value, checked by default', () => {
+    const b = bareBlock()
+    b.refresh(store({}))
+    expect(b.el.flicker.checked).toBe(true)
+    b.refresh(store({ reduceFlicker: false }))
+    expect(b.el.flicker.checked).toBe(false)
+  })
+
+  it('reports edits as the reduceFlicker setting', () => {
+    const els = {}
+    const root = {
+      querySelectorAll: () =>
+        [...SETTINGS_HTML.matchAll(/data-k="([^"]+)"/g)].map(([, k]) => {
+          const el = { dataset: { k }, listeners: {}, classList: { toggle: () => true } }
+          el.addEventListener = (evt, fn) => (el.listeners[evt] = fn)
+          el.setAttribute = () => {}
+          els[k] = el
+          return el
+        }),
+    }
+    const onSetting = vi.fn()
+    new SettingsBlock(root, { onSetting })
+    els.flicker.checked = false
+    els.flicker.listeners.change()
+    expect(onSetting).toHaveBeenCalledWith('reduceFlicker', false)
   })
 })

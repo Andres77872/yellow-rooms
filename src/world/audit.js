@@ -1,3 +1,5 @@
+import { catalogPairErrors, catalogSliceErrors } from './structures/catalog/audit.js'
+import { isCatalogKind } from './structures/catalog/engine.js'
 import {
   CHUNK,
   ZONE_OFFICE,
@@ -416,7 +418,9 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
           )
           const reasons = explicitFamilyPair
             ? []
-            : multilevelPairErrors(lower, upper, roomUp, roomDown)
+            : isCatalogKind(roomUp.kind) || isCatalogKind(roomDown.kind)
+              ? catalogPairErrors(lower, upper, roomUp, roomDown)
+              : multilevelPairErrors(lower, upper, roomUp, roomDown)
           if (reasons.length > 0) {
             audit.invalidMultilevelRooms++
             details.invalidMultilevelRooms.push({ cx, cy, cz, id: roomUp.id, reasons })
@@ -503,7 +507,9 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
           data.structureDown.kind === 'latticeDistrict'
         )
           ? []
-          : multilevelSurfaceErrors(data, data.structureDown)
+          : isCatalogKind(data.structureDown.kind)
+            ? catalogSliceErrors(data, data.structureDown, 'down')
+            : multilevelSurfaceErrors(data, data.structureDown)
         if (reasons.length > 0) {
           const [cx, cy, cz] = key.split(',').map(Number)
           audit.invalidMultilevelRooms++
@@ -527,7 +533,9 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
         data.structureUp.kind === 'latticeDistrict'
       )
         ? []
-        : multilevelLowerHalfErrors(data, data.structureUp)
+        : isCatalogKind(data.structureUp.kind)
+          ? catalogSliceErrors(data, data.structureUp, 'up')
+          : multilevelLowerHalfErrors(data, data.structureUp)
       if (reasons.length > 0) {
         const [cx, cy, cz] = key.split(',').map(Number)
         audit.invalidMultilevelRooms++

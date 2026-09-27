@@ -6,6 +6,10 @@ import {
   CELL_LOBBY,
   CELL_OPEN,
   CELL_ROOM,
+  MAP_FAMILY_HOTEL,
+  MAP_FAMILY_LATTICE,
+  MAP_FAMILY_OFFICE,
+  MAP_FAMILY_TOWER,
   PASSAGE_DOOR,
   PASSAGE_OPEN,
   PASSAGE_WALL,
@@ -14,9 +18,14 @@ import {
 import { selectZone } from './regions.js'
 import { chunkStairs, stairStrip, STAIR_DX, STAIR_DZ } from '../structures/slab.js'
 import { chunkMultilevelRooms } from '../structures/multilevel.js'
+import { structureAt } from '../structures/contract.js'
+import { isCatalogStructure } from '../structures/catalog/engine.js'
 import { assignSpaceRoles } from '../rooms/election.js'
 import { carveLeafShapes } from '../rooms/shapes.js'
 import { bsp } from './ZoneGenerator.js'
+import { createHotelArchitecture } from './hotelArchitecture.js'
+import { reserveOfficeArchitecture } from './officeArchitecture.js'
+import { createInfrastructureArchitecture } from './infrastructureArchitecture.js'
 
 // Office planning happens on a district grid above streaming chunks. Boundary
 // portals are derived first, routed into a shared circulation graph, and only
@@ -71,20 +80,33 @@ function officePlanConfig(config) {
     portalJitter: integer(portals.jitter, 3, 0),
     portalMinSpacing: integer(portals.minSpacing, 5, 2),
     portalSalt: number(portals.salt, SALT_PORTALS) | 0,
+    // v26: district portals may be wider than one door (tower galleries and
+    // lattice alleys continue across districts); width 1 keeps a door.
+    portalWidth: clamp(integer(portals.width, 1, 1), 1, 4),
+    // v26: a family may shift its district lattice so its district edges
+    // (walls with sparse portals) never coincide with another family's.
+    districtOffset: integer(office.districtOffset, 0, 0),
   }
 }
 
 export function officeDistrictCoords(cx, cz, config) {
-  const chunks = officePlanConfig(config).districtChunks
-  const dx = Math.floor(cx / chunks)
-  const dz = Math.floor(cz / chunks)
+  const cfg = officePlanConfig(config)
+  const chunks = cfg.districtChunks
+  const off = cfg.districtOffset % chunks
+  const dx = Math.floor((cx + off) / chunks)
+  const dz = Math.floor((cz + off) / chunks)
   return {
     chunks,
     dx,
     dz,
-    localCx: cx - dx * chunks,
-    localCz: cz - dz * chunks,
+    localCx: cx + off - dx * chunks,
+    localCz: cz + off - dz * chunks,
   }
+}
+
+// Chunk coordinate of a district's first chunk along one axis.
+function districtOrigin(d, cfg) {
+  return d * cfg.districtChunks - (cfg.districtOffset % cfg.districtChunks)
 }
 
 export function chunksShareOfficeDistrict(ax, az, bx, bz, config) {
@@ -111,6 +133,7 @@ class OfficePlan {
     this.portals = []
     this.stairLobbies = []
     this.multilevelLobbies = []
+    this.architecture = []
     this.metrics = {}
     this.score = Infinity
   }
@@ -140,18 +163,18 @@ class OfficePlan {
 }
 
 function edgeSegmentZones(axis, dx, dz, segment, config, seed) {
-  const n = officePlanConfig(config).districtChunks
+  const cfg = officePlanConfig(config)
   if (axis === 'v') {
-    const westCx = (dx + 1) * n - 1
+    const westCx = districtOrigin(dx + 1, cfg) - 1
     const eastCx = westCx + 1
-    const cz = dz * n + segment
+    const cz = districtOrigin(dz, cfg) + segment
     return [
       selectZone(westCx, cz, seed, config),
       selectZone(eastCx, cz, seed, config),
     ]
   }
-  const cx = dx * n + segment
-  const northCz = (dz + 1) * n - 1
+  const cx = districtOrigin(dx, cfg) + segment
+  const northCz = districtOrigin(dz + 1, cfg) - 1
   const southCz = northCz + 1
   return [
     selectZone(cx, northCz, seed, config),
@@ -190,8 +213,9 @@ export function buildOfficeDistrictEdgeContract(seed, axis, dx, dz, config) {
   const validSegments = valid.flatMap((isValid, segment) => isValid ? [segment] : [])
   for (let i = 0; i < validSegments.length; i++) {
     const segment = validSegments[i]
+    const width = cfg.portalWidth
     const lo = segment * CHUNK + 1
-    const hi = (segment + 1) * CHUNK - 2
+    const hi = (segment + 1) * CHUNK - 1 - width
     const target = Math.round((lo + hi) * 0.5)
     const jitterHash = hash3i((seed ^ cfg.portalSalt) | 0, dx + segment, dz + i, axisSalt)
     const jitter = (jitterHash % (cfg.portalJitter * 2 + 1)) - cfg.portalJitter
@@ -200,12 +224,15 @@ export function buildOfficeDistrictEdgeContract(seed, axis, dx, dz, config) {
       lo,
       hi,
       portals.map((portal) => portal.offset),
-      cfg.portalMinSpacing
+      cfg.portalMinSpacing + width - 1
     )
     if (p === null) continue
-    walls[p] = 0
-    passages[p] = PASSAGE_DOOR
-    portals.push({ offset: p, width: 1, kind: PASSAGE_DOOR })
+    const kind = width > 1 ? PASSAGE_WIDE : PASSAGE_DOOR
+    for (let w = 0; w < width; w++) {
+      walls[p + w] = 0
+      passages[p + w] = kind
+    }
+    portals.push({ offset: p, width, kind })
   }
   return { kind: 'office', axis, dx, dz, walls, passages, portals }
 }
@@ -219,10 +246,12 @@ function boundaryPortals(seed, dx, dz, config) {
     s: buildOfficeDistrictEdgeContract(seed, 'h', dx, dz, config),
   }
   const out = []
-  for (const portal of edges.w.portals) out.push({ side: 'w', x: 0, z: portal.offset })
-  for (const portal of edges.e.portals) out.push({ side: 'e', x: size - 1, z: portal.offset })
-  for (const portal of edges.n.portals) out.push({ side: 'n', x: portal.offset, z: 0 })
-  for (const portal of edges.s.portals) out.push({ side: 's', x: portal.offset, z: size - 1 })
+  // Every opening cell of a (possibly wide) portal is a routed endpoint.
+  const cells = (portal) => Array.from({ length: portal.width ?? 1 }, (_, w) => portal.offset + w)
+  for (const portal of edges.w.portals) for (const z of cells(portal)) out.push({ side: 'w', x: 0, z })
+  for (const portal of edges.e.portals) for (const z of cells(portal)) out.push({ side: 'e', x: size - 1, z })
+  for (const portal of edges.n.portals) for (const x of cells(portal)) out.push({ side: 'n', x, z: 0 })
+  for (const portal of edges.s.portals) for (const x of cells(portal)) out.push({ side: 's', x, z: size - 1 })
   return out
 }
 
@@ -230,8 +259,8 @@ function markActiveChunks(plan, seed, config) {
   const n = officePlanConfig(config).districtChunks
   for (let localCz = 0; localCz < n; localCz++) {
     for (let localCx = 0; localCx < n; localCx++) {
-      const cx = plan.dx * n + localCx
-      const cz = plan.dz * n + localCz
+      const cx = districtOrigin(plan.dx, officePlanConfig(config)) + localCx
+      const cz = districtOrigin(plan.dz, officePlanConfig(config)) + localCz
       if (selectZone(cx, cz, seed, config) !== ZONE_OFFICE) continue
       for (let z = localCz * CHUNK; z < (localCz + 1) * CHUNK; z++) {
         for (let x = localCx * CHUNK; x < (localCx + 1) * CHUNK; x++) {
@@ -263,8 +292,8 @@ function collectStairLobbies(plan, seed, config, context) {
       const chunkX0 = localCx * CHUNK
       const chunkZ0 = localCz * CHUNK
       if (!plan.active[idx(plan.size, chunkX0, chunkZ0)]) continue
-      const cx = plan.dx * n + localCx
-      const cz = plan.dz * n + localCz
+      const cx = districtOrigin(plan.dx, officePlanConfig(config)) + localCx
+      const cz = districtOrigin(plan.dz, officePlanConfig(config)) + localCz
       const contracts = chunkStairs(ctx.rootSeed, cx, cz, ctx.cy, config)
       for (const kind of ['up', 'down']) {
         const contract = contracts[kind]
@@ -331,8 +360,8 @@ function collectMultilevelLobbies(plan, seed, config, context) {
       const chunkX0 = localCx * CHUNK
       const chunkZ0 = localCz * CHUNK
       if (!plan.active[idx(plan.size, chunkX0, chunkZ0)]) continue
-      const cx = plan.dx * n + localCx
-      const cz = plan.dz * n + localCz
+      const cx = districtOrigin(plan.dx, officePlanConfig(config)) + localCx
+      const cz = districtOrigin(plan.dz, officePlanConfig(config)) + localCz
       const contracts = chunkMultilevelRooms(ctx.rootSeed, cx, cz, ctx.cy, config)
       const { structure } = contracts
       if (!structure.hasRoom) continue
@@ -387,6 +416,72 @@ function collectMultilevelLobbies(plan, seed, config, context) {
         cells: [...new Set(cells)],
         mouths,
         room,
+      })
+    }
+  }
+  return out
+}
+
+// Reserve catalog volumes (v26) the same way: the whole footprint + ring is
+// circulation on every storey (the stamp carves it open and guards its
+// voids), and one or two ring cells in this chunk become routed mouths so
+// the district's corridors reach the structure on every floor.
+function collectCatalogLobbies(plan, seed, config, context) {
+  const ctx = layerContext(seed, context)
+  const n = officePlanConfig(config).districtChunks
+  const out = []
+  for (let localCz = 0; localCz < n; localCz++) {
+    for (let localCx = 0; localCx < n; localCx++) {
+      const chunkX0 = localCx * CHUNK
+      const chunkZ0 = localCz * CHUNK
+      if (!plan.active[idx(plan.size, chunkX0, chunkZ0)]) continue
+      const cx = districtOrigin(plan.dx, officePlanConfig(config)) + localCx
+      const cz = districtOrigin(plan.dz, officePlanConfig(config)) + localCz
+      const structure = structureAt(ctx.rootSeed, cx, cz, ctx.cy, config)
+      if (!isCatalogStructure(structure)) continue
+      const b = structure.globalBounds
+      const ox = cx * CHUNK
+      const oz = cz * CHUNK
+      const x0 = Math.max(0, b.x0 - 1 - ox)
+      const z0 = Math.max(0, b.z0 - 1 - oz)
+      const x1 = Math.min(CHUNK - 1, b.x1 + 1 - ox)
+      const z1 = Math.min(CHUNK - 1, b.z1 + 1 - oz)
+      const cells = []
+      for (let lz = z0; lz <= z1; lz++) {
+        for (let lx = x0; lx <= x1; lx++) {
+          const i = idx(plan.size, chunkX0 + lx, chunkZ0 + lz)
+          if (plan.active[i]) cells.push(i)
+        }
+      }
+      const midX = Math.floor((b.x0 + b.x1) / 2)
+      const midZ = Math.floor((b.z0 + b.z1) / 2)
+      const candidates = [
+        { gx: midX, gz: b.z0 - 1 },
+        { gx: midX, gz: b.z1 + 1 },
+        { gx: b.x0 - 1, gz: midZ },
+        { gx: b.x1 + 1, gz: midZ },
+      ]
+      const mouths = []
+      for (const m of candidates) {
+        const lx = m.gx - ox
+        const lz = m.gz - oz
+        if (lx < 0 || lx >= CHUNK || lz < 0 || lz >= CHUNK) continue
+        const x = chunkX0 + lx
+        const z = chunkZ0 + lz
+        if (plan.active[idx(plan.size, x, z)] && mouths.length < 2) mouths.push({ x, z })
+      }
+      if (!mouths.length && cells.length) {
+        const i = cells[0]
+        mouths.push({ x: i % plan.size, z: Math.floor(i / plan.size) })
+      }
+      out.push({
+        kind: 'catalog',
+        cx,
+        cy: ctx.cy,
+        cz,
+        cells,
+        mouths,
+        room: { bounds: { x0, z0, x1, z1 }, voidCells: [], bridgeCells: [] },
       })
     }
   }
@@ -535,6 +630,23 @@ function planCirculation(plan, seed, config, candidate) {
   plan.portals = boundaryPortals(seed, plan.dx, plan.dz, config)
     .filter((portal) => plan.active[idx(plan.size, portal.x, portal.z)])
 
+  // Family selection changes the architectural graph and room subdivision,
+  // while boundary/stair/volume ownership remains shared and canonical.
+  if (config.mapFamily?.selected === MAP_FAMILY_HOTEL) {
+    const hotel = createHotelArchitecture(plan, seed, candidate, components, config.office?.hotel)
+    plan.architecture = hotel.architecture
+    return hotel
+  }
+  if (config.mapFamily?.selected === MAP_FAMILY_TOWER ||
+      config.mapFamily?.selected === MAP_FAMILY_LATTICE) {
+    const infrastructure = createInfrastructureArchitecture(
+      plan, seed, candidate, components, config.mapFamily.selected,
+      config.office?.[config.mapFamily.selected]
+    )
+    plan.architecture = infrastructure.architecture
+    return infrastructure
+  }
+
   const endpointsByComponent = components.cells.map(() => [])
   for (const portal of plan.portals) {
     const i = idx(plan.size, portal.x, portal.z)
@@ -622,6 +734,9 @@ function planCirculation(plan, seed, config, candidate) {
         }
       }
     }
+  }
+  if ((config.mapFamily?.selected ?? MAP_FAMILY_OFFICE) === MAP_FAMILY_OFFICE) {
+    plan.architecture = reserveOfficeArchitecture(plan, corridor, seed)
   }
   return { corridor, components }
 }
@@ -891,7 +1006,21 @@ function absorbInvalidRoomsIntoCirculation(plan, corridor, fragments, cfg) {
 }
 
 function allocateSpaces(plan, circulation, rng, cfg, seed) {
-  const leafField = buildLeafField(plan.size, rng, cfg)
+  const leafField = circulation.leafField ?? buildLeafField(plan.size, rng, cfg)
+  // A waiting loop needs an actual enclosed island. Treat its central core as
+  // one room bay so unrelated BSP cuts cannot reduce it to slivers that the
+  // validity repair would absorb back into the surrounding open hall.
+  let architectureLeaf = 0
+  for (const leaf of leafField) architectureLeaf = Math.max(architectureLeaf, leaf + 1)
+  for (const { coreBounds } of plan.architecture) {
+    if (!coreBounds) continue
+    for (let z = coreBounds.z0; z <= coreBounds.z1; z++) {
+      for (let x = coreBounds.x0; x <= coreBounds.x1; x++) {
+        leafField[idx(plan.size, x, z)] = architectureLeaf
+      }
+    }
+    architectureLeaf++
+  }
   const fragments = absorbInvalidRoomsIntoCirculation(
     plan,
     circulation.corridor,
@@ -1616,11 +1745,26 @@ function scorePlan(
 
 function buildCandidate(seed, dx, dz, config, candidate, context) {
   const cfg = officePlanConfig(config)
+  // Guest doors predominantly face the hall. Arbitrary inter-room braiding
+  // would turn repeated hotel suites back into an office maze.
+  if (config.mapFamily?.selected === MAP_FAMILY_HOTEL) {
+    cfg.braid = 0.025
+    cfg.maxRoomDepth = Math.min(cfg.maxRoomDepth, 2)
+    cfg.targetCoverage = 0.25
+  }
   const size = cfg.districtChunks * CHUNK
   const plan = new OfficePlan(size, dx, dz)
   markActiveChunks(plan, seed, config)
+  const infrastructure = config.mapFamily?.selected === MAP_FAMILY_TOWER ||
+    config.mapFamily?.selected === MAP_FAMILY_LATTICE
+  // Tower/Lattice stamp their own canonical landmarks, so they never reserve
+  // Office's atrium elections. Since v26 every family stamps real generic
+  // stairs and catalog volumes, and all of them are reserved before rooms.
   plan.stairLobbies = collectStairLobbies(plan, seed, config, context)
-  plan.multilevelLobbies = collectMultilevelLobbies(plan, seed, config, context)
+  plan.multilevelLobbies = [
+    ...(infrastructure ? [] : collectMultilevelLobbies(plan, seed, config, context)),
+    ...collectCatalogLobbies(plan, seed, config, context),
+  ]
   const circulation = planCirculation(plan, seed, config, candidate)
   const localSpace = allocateSpaces(
     plan,
@@ -1692,6 +1836,11 @@ function configSignature(config) {
     config.zoneBands,
     config.stairs,
     config.multilevel,
+    config.catalog ?? null,
+    // Role election reads the lamp grid (roomFurnishMetrics), and catalog /
+    // stair reservations read the resolved family profile via structureAt.
+    config.lamps ?? null,
+    config.mapFamily?.profiles?.[config.mapFamily?.selected] ?? null,
     // The selected family steers role election (rooms/catalog.js), so plans
     // for two families must never share a cache entry.
     config.mapFamily?.selected ?? null,
@@ -1758,6 +1907,7 @@ function clonePlan(source) {
       bridgeCells: lobby.room.bridgeCells.map((cell) => ({ ...cell })),
     },
   }))
+  plan.architecture = structuredClone(source.architecture)
   plan.metrics = { ...source.metrics }
   plan.score = source.score
   return plan
@@ -1830,10 +1980,7 @@ export function officeInternalHContract(seed, kx, kz, config, context = null) {
 }
 
 export function officeDistrictVContract(seed, kx, kz, config) {
-  const n = officePlanConfig(config).districtChunks
-  const dx = Math.floor(kx / n)
-  const dz = Math.floor(kz / n)
-  const segment = kz - dz * n
+  const { dx, dz, localCz: segment } = officeDistrictCoords(kx, kz, config)
   const edge = buildOfficeDistrictEdgeContract(seed, 'v', dx, dz, config)
   const offset = segment * CHUNK
   return {
@@ -1844,10 +1991,7 @@ export function officeDistrictVContract(seed, kx, kz, config) {
 }
 
 export function officeDistrictHContract(seed, kx, kz, config) {
-  const n = officePlanConfig(config).districtChunks
-  const dx = Math.floor(kx / n)
-  const dz = Math.floor(kz / n)
-  const segment = kx - dx * n
+  const { dx, dz, localCx: segment } = officeDistrictCoords(kx, kz, config)
   const edge = buildOfficeDistrictEdgeContract(seed, 'h', dx, dz, config)
   const offset = segment * CHUNK
   return {

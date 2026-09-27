@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_WORLD_CONFIG } from '../config.js'
 import { auditChunkFamilyRegistrations } from '../familyAudit.js'
-import { MAP_FAMILY_HOTEL, MAP_FAMILY_LATTICE, MAP_FAMILY_SEWER, MAP_FAMILY_TOWER } from '../mapTypes.js'
+import { MAP_FAMILY_HOTEL,
+  MAP_FAMILY_OFFICE, MAP_FAMILY_LATTICE, MAP_FAMILY_SEWER, MAP_FAMILY_TOWER } from '../mapTypes.js'
 import { worldConfigForFamily } from '../mapFamily.js'
 import { buildChunk } from '../pipeline.js'
 
@@ -80,7 +81,8 @@ describe('generated chunk family registration', () => {
   )
 
   it('fails closed when a family claims a descriptor it does not own', () => {
-    const hotel = buildChunk(12345, -3, -15, -1, worldConfigForFamily(MAP_FAMILY_HOTEL))
+    // v26: Hotel projects its own atrium grammar, so take the office pair.
+    const hotel = buildChunk(12345, -3, -15, -1, worldConfigForFamily(MAP_FAMILY_OFFICE))
     // The office multilevel descriptor carries no family of its own, so an
     // unrelated family must not be able to adopt it by assertion.
     const report = auditChunkFamilyRegistrations([

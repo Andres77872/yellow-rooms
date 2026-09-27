@@ -130,7 +130,8 @@ Per fixture, source `uLampChar` stores the rgb colour-temperature tint and
 `lampFlickerRaw` stores the live flicker. The renderer's derived visible
 `uLampChar` packs that tint plus the final flicker/fade weight in `.a`
 (`lampCharacter.js` — per-tube breathing, rare bad strobing tubes, room-role
-tints).
+tints). How hard the bad tubes strobe is a player setting; see
+[Flicker and photosensitivity](#flicker-and-photosensitivity-reduceflicker).
 
 `LightField` also publishes `cutoffR`: **where the uploaded set actually ends**.
 `LAMP_QUERY_R` is only the boundary while the candidate list fits in
@@ -178,6 +179,64 @@ the renderer, so an off-screen lamp reappears immediately on a camera turn.
 Raw flicker lives in `lamps.lampFlickerRaw` (written by `LightField`, or by the
 debug `LightRoom`); visible `.w` is always recombined from it, which keeps the
 fold idempotent while the sim is frozen.
+
+## Flicker and photosensitivity (`reduceFlicker`)
+
+Three things make the lights flicker, and one player setting governs all of
+them: **REDUCE FLICKER (PHOTOSENSITIVITY)**, in the simple settings view
+(never behind ADVANCED), stored as `reduceFlicker` and **on by default**.
+
+| Source | Where | Full profile | Safe profile (default) |
+| --- | --- | --- | --- |
+| Bad-tube strobe (7% of lit tubes, cast light) | `lampFlicker` on the CPU; `gFlicker` in `shaders/grid.js` on the GPU | 9 steps/s, 20–100% | 2 steps/s, 92–100% |
+| Shared tube hum (every panel's emissive; cast light as `0.6 + 0.4 × hum`) | `tubeHum`, driven by `Engine._updateFlicker` | 0.85–0.99 ripple (~2.9 Hz + ~6.8 Hz) | ripple halved: 0.885–0.955 |
+| Dead-tube dip (every 4–13 s, and on a husk death) | `tubeHum(t, dipping)` | hum × 0.4 for 0.12 s | hum × 0.92 (a sag) |
+| Title wordmark tube power-on and failing tube; NO-CLIP glitch | `ui/theme.js` | stepped opacity flicker | off; the failing tube keeps a slow 5 s sag |
+
+Why it is on by default: [WCAG 2.3.1](https://w3c.github.io/wcag21/understanding/three-flashes-or-below-threshold.html)
+treats a flash as a pair of opposing luminance changes of at least 10%, and
+more than three per second over a large area fails. A strobing bad tube lights
+a whole room, so the authored strobe fails outright (measured over 12 s at
+1 kHz: 4 flashes/s per tube, 80% swing). The shared hum alone reaches 3
+flashes/s at a 14% swing, which is right at the limit. The safe profile clears
+each limit on its own. A step is at most one change, so 2 steps/s allows at
+most 1 flash/s. The 0.92 floor keeps each step under 10% (8% at most), and
+the halved hum swings 7.3%. A room lit by a bad tube, including the hum and a
+dip, peaks at 1 flash/s. Healthy tubes' own ±7% breathing does not change.
+Bad tubes still read as dying, because their fixtures stay dim and browned
+(`lampPanelTint`); they just stop strobing.
+
+**One profile, three consumers.** `lampCharacter.js` exports `FLICKER_FULL`
+and `FLICKER_SAFE` (`{ badRate, badLo, humScale, dip }`, built from the
+`LAMP_BAD_*` / `LAMP_SAFE_*` constants). `Engine._setFlickerProfile` hands the
+chosen one to:
+
+- `Engine._updateFlicker` → `tubeHum` (panel `uIntensity`, `uLampFlicker`),
+- `LightField.flicker` → `lampFlicker` → `lampFlickerRaw` (fallback lamp set),
+- `DeferredRenderer.setFlickerProfile` → the shared `gridUniforms.uBadStrobe`
+  (`vec2(rate, floor)`), which the lighting, shadow, contact and volumetric
+  passes all read through `GRID_UNIFORMS_GLSL`. This is a uniform, not a baked
+  constant, so the toggle takes effect on the next frame with no shader
+  rebuild.
+
+The CPU and GPU paths must use the same profile, or a grid pixel and a
+fallback pixel of the same fixture would strobe differently. Every default
+(`lampFlicker`/`tubeHum` parameters, `LightField`, the uniform's initial value,
+the Engine before settings load) is the safe profile, so a caller that forgets
+to pass one cannot strobe. `ui/overlays.js` puts a `reduce-flicker` class on
+`#ui` for the CSS side. The OS-level `prefers-reduced-motion` still removes
+every UI animation regardless.
+
+**Determinism.** The profile is render-side only. Lamp character is a pure
+function of fixture position and time, so world-gen bytes and digests do not
+change. Captures record `reduceFlicker` because a bad tube's brightness at the
+pinned time depends on it. Replay applies the captured profile at runtime only
+(`_setFlickerProfile`, never `_applySetting`), so replaying someone else's
+capture can never persist a switch-off of a player's photosensitivity setting.
+`resumeFromCapture` restores the stored choice. Tests:
+`world/__tests__/lampCharacter.test.js` (step rate, swing, and a WCAG flash
+counter on both profiles), `render/__tests__/reduce-flicker.test.js`,
+`core/__tests__/engine-flicker.test.js`.
 
 ## Runtime graphics quality (`core/graphics.js`)
 

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  catalogStructureLines,
   collectRoomLabels,
+  formatCatalogAnatomy,
   describeCell,
   exploreConfigForFamily,
   formatFamilyCounts,
@@ -25,6 +27,24 @@ import {
 } from '../../world/mapTypes.js'
 import { structureAt } from '../../world/structures/contract.js'
 import { discoverTowerFixture } from '../../world/__tests__/tower-fixture.js'
+import { describeCatalogStructure, isCatalogStructure } from '../../world/structures/catalog/engine.js'
+import { structureTag } from '../familyOverlays.js'
+
+// First v26 catalog structure in a small window of tower-family chunks.
+function findCatalogStructure(family = 'tower') {
+  const config = worldConfigForFamily(family)
+  for (const seed of [0x10bb7, 777, 0xc0ffee]) {
+    for (let cy = -1; cy <= 1; cy++) {
+      for (let cz = -3; cz <= 3; cz++) {
+        for (let cx = -3; cx <= 3; cx++) {
+          const structure = structureAt(seed, cx, cz, cy, config)
+          if (isCatalogStructure(structure)) return structure
+        }
+      }
+    }
+  }
+  return null
+}
 
 const LATTICE_SCAN_SEEDS = Object.freeze([0x1a771ce, 0x5a17, 0xc0ffee])
 
@@ -38,7 +58,7 @@ function discoverLatticeFixture() {
       for (let cz = -4; cz <= 4; cz++) {
         for (let cx = -4; cx <= 4; cx++) {
           const structure = structureAt(seed, cx, cz, cy, config)
-          if (structure?.hasRoom === true && structure.family === MAP_FAMILY_LATTICE) {
+          if (structure?.hasRoom === true && structure.family === MAP_FAMILY_LATTICE && structure.kind === 'latticeDistrict') {
             latticeDiscovery = { config, seed, structure }
             return latticeDiscovery
           }
@@ -86,6 +106,60 @@ describe('formatStructureDetail', () => {
     expect(text).toContain(`anchors ${structure.anchors.length}`)
     const backbone = structure.edges.filter((e) => e.role === 'backbone').length
     expect(text).toContain(`edges bb${backbone}`)
+  })
+})
+
+describe('catalog structure detail', () => {
+  it('describes a tower catalog structure instead of the office fallback', () => {
+    const structure = findCatalogStructure('tower')
+    expect(structure).not.toBeNull()
+    expect(structure.kind).toBe('towerCatalog')
+    const text = formatStructureDetail([structure, structure], structure, 'pinned')
+    expect(text).not.toBe(formatMultilevelStructure([structure, structure], structure, 'pinned'))
+    expect(text.startsWith(`visible 2 · pinned #${structure.id} towerCatalog · `)).toBe(true)
+    expect(text).toContain(`${structure.label} (${structure.sizeClass})`)
+    expect(['small', 'medium', 'large']).toContain(structure.sizeClass)
+    expect(text).toContain(`cy ${structure.baseCy}…${structure.topCy}`)
+    expect(text).toContain(`${structure.levelCount} storeys`)
+    expect(text).toContain(`${structure.verticalLinks.length} flights`)
+    expect(text).toContain(
+      structure.deviation
+        ? `dev ${structure.deviation.kind} @cy${structure.deviation.levelCy}`
+        : 'no deviation'
+    )
+    expect(text).not.toContain('bridges none')
+    expect(text).toBe(`visible 2 · pinned #${structure.id} towerCatalog · ${formatCatalogAnatomy(structure)}`)
+  })
+
+  it('formats every family catalog with its own recipe', () => {
+    const labels = new Set()
+    for (const family of MAP_FAMILY_ORDER) {
+      const structure = findCatalogStructure(family)
+      if (!structure) continue
+      expect(structure.kind).toBe(`${family}Catalog`)
+      expect(formatStructureDetail([structure], null)).toContain(`${structure.kind} · ${structure.label}`)
+      labels.add(structure.type)
+    }
+    expect(labels.size).toBeGreaterThan(1)
+  })
+
+  it('lists the engine summary plus the drawn storey for the detail block', () => {
+    const structure = findCatalogStructure('tower')
+    const floor = structure.baseCy + Math.min(1, structure.levelCount - 1)
+    const lines = catalogStructureLines(structure, floor)
+    expect(lines[0]).toBe(`#${structure.id} towerCatalog · ${structure.type}`)
+    expect(lines.slice(1, -1)).toEqual(describeCatalogStructure(structure))
+    const level = structure.levels[floor - structure.baseCy]
+    expect(lines.at(-1)).toContain(`cy ${floor} (storey ${floor - structure.baseCy + 1}/${structure.levelCount}): ${level.voids.length} voids · ${level.bridges.length} bridges`)
+    expect(catalogStructureLines(structure, structure.topCy + 5).at(-1)).toContain('outside')
+    expect(catalogStructureLines({ hasRoom: true, kind: 'bridged' }, 0)).toEqual([])
+    expect(catalogStructureLines(null, 0)).toEqual([])
+  })
+
+  it('tags the map bounds box by recipe, other kinds by kind', () => {
+    const structure = findCatalogStructure('tower')
+    expect(structureTag(structure)).toBe(`#${structure.id} ${structure.label} · ${structure.sizeClass}`)
+    expect(structureTag({ id: 4, hasRoom: true, kind: 'bridged' })).toBe('#4 bridged')
   })
 })
 

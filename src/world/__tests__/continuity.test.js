@@ -1,3 +1,4 @@
+import { isCatalogKind } from '../structures/catalog/engine.js'
 import { describe, it, expect } from 'vitest'
 import { buildChunk } from '../pipeline.js'
 import { DEFAULT_WORLD_CONFIG as CFG } from '../config.js'
@@ -30,14 +31,14 @@ const N = 14
 const SEEDS = [1, 42, 0xbeef, 314159, 0xc0ffee, 99999, 7, 2026]
 
 const OFFICE_CONTINUITY_GOLDEN = [
-  { seed: 1, open: 15, mouth: 14, office: 133, cornerWalls: 131, planned: 202, patterns: 66, officeChunks: 185, largestOpen: 11, maxOpenRun: 4 },
-  { seed: 42, open: 0, mouth: 0, office: 140, cornerWalls: 139, planned: 224, patterns: 70, officeChunks: 196, largestOpen: 0, maxOpenRun: 0 },
-  { seed: 0xbeef, open: 16, mouth: 20, office: 130, cornerWalls: 130, planned: 198, patterns: 73, officeChunks: 183, largestOpen: 11, maxOpenRun: 4 },
-  { seed: 314159, open: 1, mouth: 6, office: 137, cornerWalls: 137, planned: 220, patterns: 76, officeChunks: 194, largestOpen: 2, maxOpenRun: 2 },
-  { seed: 0xc0ffee, open: 1, mouth: 6, office: 137, cornerWalls: 136, planned: 220, patterns: 64, officeChunks: 194, largestOpen: 2, maxOpenRun: 2 },
-  { seed: 99999, open: 4, mouth: 12, office: 136, cornerWalls: 136, planned: 212, patterns: 79, officeChunks: 191, largestOpen: 4, maxOpenRun: 2 },
-  { seed: 7, open: 1, mouth: 10, office: 136, cornerWalls: 134, planned: 217, patterns: 71, officeChunks: 193, largestOpen: 2, maxOpenRun: 2 },
-  { seed: 2026, open: 30, mouth: 28, office: 126, cornerWalls: 126, planned: 180, patterns: 67, officeChunks: 174, largestOpen: 11, maxOpenRun: 4 },
+  { seed: 1, open: 15, mouth: 14, office: 133, cornerWalls: 130, planned: 202, patterns: 67, officeChunks: 185, largestOpen: 11, maxOpenRun: 4 },
+  { seed: 42, open: 0, mouth: 0, office: 140, cornerWalls: 134, planned: 224, patterns: 72, officeChunks: 196, largestOpen: 0, maxOpenRun: 0 },
+  { seed: 0xbeef, open: 16, mouth: 20, office: 130, cornerWalls: 127, planned: 198, patterns: 68, officeChunks: 183, largestOpen: 11, maxOpenRun: 4 },
+  { seed: 314159, open: 1, mouth: 6, office: 137, cornerWalls: 133, planned: 220, patterns: 87, officeChunks: 194, largestOpen: 2, maxOpenRun: 2 },
+  { seed: 0xc0ffee, open: 1, mouth: 6, office: 137, cornerWalls: 133, planned: 220, patterns: 78, officeChunks: 194, largestOpen: 2, maxOpenRun: 2 },
+  { seed: 99999, open: 4, mouth: 12, office: 136, cornerWalls: 134, planned: 212, patterns: 76, officeChunks: 191, largestOpen: 4, maxOpenRun: 2 },
+  { seed: 7, open: 1, mouth: 10, office: 136, cornerWalls: 124, planned: 217, patterns: 88, officeChunks: 193, largestOpen: 2, maxOpenRun: 2 },
+  { seed: 2026, open: 30, mouth: 28, office: 126, cornerWalls: 117, planned: 180, patterns: 75, officeChunks: 174, largestOpen: 11, maxOpenRun: 4 },
 ]
 
 const inBounds = (bounds, gx, gz) =>
@@ -52,7 +53,8 @@ function sharedStructure(a, b, axis) {
   if (
     !structure ||
     structure.id !== b.structure?.id ||
-    structure.bridgeAxis !== axis ||
+    // Catalog volumes (v26) may cross seams on both axes.
+    (structure.bridgeAxis !== axis && !isCatalogKind(structure.kind)) ||
     a.cy !== b.cy ||
     a.cy < structure.baseCy ||
     a.cy > structure.topCy ||
@@ -265,7 +267,7 @@ describe('chunk continuity (not isolated boxes)', () => {
     expect(sum('planned', 'n')).toBeGreaterThan(0)
   })
 
-  it('pins the unchanged office transition and continuity corpus', () => {
+  it('pins the v26 office transition and continuity corpus', () => {
     expect(SEEDS.map((seed, index) => continuityPin(seed, audits[index])))
       .toEqual(OFFICE_CONTINUITY_GOLDEN)
     for (const audit of audits) {

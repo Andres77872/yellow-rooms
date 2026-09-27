@@ -10,6 +10,8 @@ import { AiTool } from './AiTool.js'
 import { PerfTool } from './PerfTool.js'
 import { LightRoom } from './LightRoom.js'
 import { PbrReference } from './PbrReference.js'
+import { applyTip } from './widgets.js'
+import { installDebugTooltip, TOOLTIP_CSS } from './debugTooltip.js'
 
 const CSS = `
 #dbg-panel{ position:fixed; top:8px; right:8px; width:348px; max-height:calc(100vh - 16px);
@@ -60,6 +62,14 @@ const CSS = `
 `
 
 const TABS = ['world', 'light', 'ai', 'perf']
+
+// Tooltips for the panel chrome (the tools tip their own controls).
+export const TAB_TIPS = {
+  world: { title: 'World map', text: 'Top-down map of the generated floors: LIVE chunks or any seed/family in EXPLORE, with connectivity and structure audits.', keys: '1' },
+  light: { title: 'Lighting', text: 'Channel viewer, pass isolation, GPU timings, the isolated light room and live uniform tuning. Edits hit the live renderer and reset on reload.', keys: '2' },
+  ai: { title: 'AI', text: 'Stalker / pursuer / husk state readouts, freeze and visibility toggles, live parameter scrubs and 3D gizmos.', keys: '3' },
+  perf: { title: 'Performance', text: 'FPS, frame-time sparkline (0-50 ms, 60/30 fps guides) and renderer draw-call/memory counters. Updates only while shown.', keys: '4' },
+}
 
 // Debug-mode orchestrator. Inert until F2. Owns the tabbed panel, the four
 // tools, the isolated light room (scene + orbit camera), and all engine hooks.
@@ -112,7 +122,7 @@ export class DebugMode {
     if (this.root) return
     const style = document.createElement('style')
     style.id = 'dbg-style'
-    style.textContent = CSS
+    style.textContent = CSS + TOOLTIP_CSS
     document.head.appendChild(style)
 
     const root = document.createElement('div')
@@ -121,7 +131,11 @@ export class DebugMode {
 
     const head = document.createElement('div')
     head.id = 'dbg-head'
-    head.innerHTML = `<div class="t"><span>● DEBUG</span><button id="dbg-collapse" title="collapse panel">–</button></div>`
+    head.innerHTML = `<div class="t"><span>● DEBUG</span><button id="dbg-collapse" aria-label="collapse panel">–</button></div>`
+    applyTip(head.querySelector('#dbg-collapse'), {
+      title: 'Collapse panel',
+      text: 'Minimize the debug panel to its header (tabs and tools hidden); click again to expand. Debug mode stays on.',
+    })
     head.querySelector('#dbg-collapse').addEventListener('click', (e) => {
       const min = root.classList.toggle('dbg-min')
       e.target.textContent = min ? '+' : '–'
@@ -139,6 +153,7 @@ export class DebugMode {
     TABS.forEach((t, i) => {
       const b = document.createElement('button')
       b.textContent = `${i + 1} ${t.toUpperCase()}`
+      applyTip(b, TAB_TIPS[t])
       b.addEventListener('click', () => this.showTab(t))
       tabs.appendChild(b)
       this._tabBtns[t] = b
@@ -171,6 +186,9 @@ export class DebugMode {
     }
     root.addEventListener('keydown', guard)
     root.addEventListener('keyup', guard)
+
+    // Hover/focus help for every data-tip control inside the panel.
+    this._tooltip = installDebugTooltip(root)
   }
 
   toggle() {
@@ -220,6 +238,7 @@ export class DebugMode {
     e.husk.alwaysVisible = false
     e.husk.mesh.visible = e.husk.active
     if (this.ai?.gizmos) this.ai.gizmos.visible = false
+    this._tooltip?.hide()
     if (this.root) this.root.style.display = 'none'
     if (e.state.phase === Phase.PLAYING) e.controller.lock()
   }
@@ -431,6 +450,7 @@ export class DebugMode {
     if (this.lightRoom) this.lightRoom.dispose()
     this._pbrRef?.dispose()
     if (this._tools) for (const t of TABS) this._tools[t].dispose?.()
+    this._tooltip?.dispose()
     if (this.root) this.root.remove()
     document.getElementById('dbg-style')?.remove()
   }

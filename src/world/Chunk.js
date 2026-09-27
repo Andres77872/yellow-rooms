@@ -77,7 +77,7 @@ function structureApertureRegions(
 ) {
   const regions = adapter.apertureRegions(slice)
   if (Array.isArray(regions) && regions.length > 0) return regions
-  if (adapter.family !== MAP_FAMILY_LATTICE) return regions
+  if (adapter.family !== MAP_FAMILY_LATTICE || adapter.kind !== 'latticeDistrict') return regions
 
   const canonical = canonicalLatticeApertureSlice(
     structure,

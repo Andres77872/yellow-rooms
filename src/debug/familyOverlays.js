@@ -8,6 +8,7 @@ import { auditLethalVoidHalf } from '../world/familyAudit.js'
 import { structureFamily, structureKind } from '../world/structures/contract.js'
 import { TOWER_STRUCTURE_KIND } from '../world/structures/tower.js'
 import { LATTICE_STRUCTURE_KIND } from '../world/structures/lattice.js'
+import { isCatalogStructure, linkCells } from '../world/structures/catalog/engine.js'
 import {
   LATTICE_EDGE_COLORS,
   SPACE_ROLE_PALETTE,
@@ -266,6 +267,84 @@ function paintLatticeStructure(view, structure) {
   }
 }
 
+// v26 catalog structures: on the drawn storey, the floor voids (hatched) and
+// retained bridges, the aligned stair core (dashed box, or its open well),
+// and every flight touching this floor as a landing->exit arrow (solid when
+// it climbs FROM this floor, faint when it arrives here from below). The
+// deviation storey gets a warning corner tick.
+function paintCatalogStructure(view, structure) {
+  const { ctx, floor, scale, sx, sy } = view
+  const color = STRUCTURE_FAMILY_COLORS[structureFamily(structure)] ?? '#d8b24a'
+  const rectPx = (r) => [
+    sx(r.x0 * CELL),
+    sy(r.z0 * CELL),
+    (r.x1 - r.x0 + 1) * CELL * scale,
+    (r.z1 - r.z0 + 1) * CELL * scale,
+  ]
+  const level = structure.levels?.[floor - structure.baseCy]
+  if (level && floor >= structure.baseCy && floor <= structure.topCy) {
+    ctx.fillStyle = color
+    ctx.globalAlpha = 0.16
+    for (const r of level.voids ?? []) ctx.fillRect(...rectPx(r))
+    ctx.globalAlpha = 0.45
+    for (const r of level.bridges ?? []) ctx.fillRect(...rectPx(r))
+    ctx.globalAlpha = 1
+  }
+  const core = structure.core
+  if (core?.rect) {
+    ctx.strokeStyle = color
+    ctx.lineWidth = 1
+    ctx.setLineDash([2, 2])
+    ctx.strokeRect(...rectPx(core.rect))
+    ctx.setLineDash([])
+  }
+  for (const link of structure.verticalLinks ?? []) {
+    const up = link.lowerCy === floor
+    if (!up && link.lowerCy + 1 !== floor) continue
+    const cells = linkCells(link)
+    const a = cells[0]
+    const b = cells[cells.length - 1]
+    const x0 = sx((a.gx + 0.5) * CELL)
+    const y0 = sy((a.gz + 0.5) * CELL)
+    const x1 = sx((b.gx + 0.5) * CELL)
+    const y1 = sy((b.gz + 0.5) * CELL)
+    ctx.strokeStyle = color
+    ctx.globalAlpha = up ? 0.95 : 0.5
+    ctx.lineWidth = up ? 1.6 : 1
+    ctx.beginPath()
+    ctx.moveTo(x0, y0)
+    ctx.lineTo(x1, y1)
+    const ang = Math.atan2(y1 - y0, x1 - x0)
+    const head = Math.max(3, Math.min(6, scale))
+    ctx.moveTo(x1, y1)
+    ctx.lineTo(x1 - head * Math.cos(ang - 0.5), y1 - head * Math.sin(ang - 0.5))
+    ctx.moveTo(x1, y1)
+    ctx.lineTo(x1 - head * Math.cos(ang + 0.5), y1 - head * Math.sin(ang + 0.5))
+    ctx.stroke()
+    ctx.globalAlpha = 1
+  }
+  if (structure.deviation?.levelCy === floor && Number.isInteger(structure.globalBounds?.x1)) {
+    const b = structure.globalBounds
+    const x = sx((b.x1 + 1) * CELL)
+    const y = sy(b.z0 * CELL)
+    ctx.fillStyle = 'rgba(255,90,74,.9)'
+    ctx.beginPath()
+    ctx.moveTo(x, y)
+    ctx.lineTo(x - 8, y)
+    ctx.lineTo(x, y + 8)
+    ctx.fill()
+  }
+}
+
+// Canvas tag for a structure bounds box: catalog structures read as their
+// recipe (`#id surge chamber · medium`), everything else as `#id kind`.
+export function structureTag(structure) {
+  if (isCatalogStructure(structure)) {
+    return `#${structure.id} ${structure.label ?? structure.type} · ${structure.sizeClass}`
+  }
+  return `#${structure.id} ${structure.kind}`
+}
+
 function paintBounds(view, structure, pinned) {
   const bounds = structure.globalBounds
   if (!Number.isInteger(bounds?.x0)) return
@@ -281,17 +360,19 @@ function paintBounds(view, structure, pinned) {
   if (scale > 3) {
     ctx.fillStyle = color
     ctx.font = '10px ui-monospace, monospace'
-    ctx.fillText(`#${structure.id} ${structure.kind}`, x + 3, y - 3)
+    ctx.fillText(structureTag(structure), x + 3, y - 3)
   }
 }
 
 // Family dispatch over the deduped visible structures. Office multilevel keeps
 // its existing cell-level rendering (void/bridge overlays) — only tall
-// non-office families add descriptor glyphs on top of the bounds outline.
+// non-office families and the v26 catalog structures (every family) add
+// descriptor glyphs on top of the bounds outline.
 export function paintStructures(view, structures, pinned = null) {
   for (const structure of structures) {
     const kind = structureKind(structure)
-    if (kind === TOWER_STRUCTURE_KIND) paintTowerStructure(view, structure)
+    if (isCatalogStructure(structure)) paintCatalogStructure(view, structure)
+    else if (kind === TOWER_STRUCTURE_KIND) paintTowerStructure(view, structure)
     else if (kind === LATTICE_STRUCTURE_KIND) paintLatticeStructure(view, structure)
     paintBounds(view, structure, pinned?.id === structure.id)
   }

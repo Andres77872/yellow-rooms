@@ -17,7 +17,7 @@ import { generateChunk } from '../world/generate.js'
 import { hashStr } from '../world/core/hash.js'
 import { floodReachable } from '../world/connectivity.js'
 import { auditLayeredPatch, auditPatch } from '../world/audit.js'
-import { section, slider, toggle, button, segmented, readout, buttonRow, textBlock } from './widgets.js'
+import { applyTip, section, slider, toggle, button, segmented, readout, buttonRow, textBlock } from './widgets.js'
 import {
   COLUMN_MONUMENTAL,
   WALL_RAIL,
@@ -29,8 +29,10 @@ import {
   formatFamilyCounts,
   formatFamilyFailureSummary,
   formatLatticeMetrics,
+  formatLayeredIntegrity,
   formatMultilevelAudit,
   formatStructureDetail,
+  catalogStructureLines,
   listFamilyFailures,
   multilevelAuditBox,
   collectRoomLabels,
@@ -90,6 +92,11 @@ export class WorldMapTool {
     this._src = segmented({
       labels: ['LIVE', 'EXPLORE'],
       value: 0,
+      tips: [
+        { title: 'LIVE', text: 'Draw the chunks the game has actually loaded around you (unloaded chunks stay blank).' },
+        { title: 'EXPLORE', text: 'Generate any floor for a chosen seed and family without touching the running game. Shows the seed and family pickers.' },
+      ],
+      ariaLabel: 'map source',
       onPick: (i) => {
         this.source = i
         this._seedRow.el.style.display = i === 1 ? '' : 'none'
@@ -107,12 +114,25 @@ export class WorldMapTool {
     this._seedInput.type = 'text'
     this._seedInput.className = 'dbg-text'
     this._seedInput.value = this.engine.state.seedText || 'lobby'
+    this._seedInput.setAttribute('aria-label', 'preview seed')
+    applyTip(this._seedInput, {
+      title: 'Preview seed',
+      text: 'Seed text for EXPLORE (hashed with the current level, like the game). Enter or apply to regenerate.',
+    })
     this._seedInput.addEventListener('change', () => this._applySeed())
     seedWrap.appendChild(seedLab)
     seedWrap.appendChild(this._seedInput)
     const seedBtns = buttonRow('', [
-      button({ label: 'apply', onClick: () => this._applySeed() }),
-      button({ label: 'use current', onClick: () => this._useCurrentSeed() }),
+      button({
+        label: 'apply',
+        tip: 'Regenerate the EXPLORE preview from the seed text and clear its chunk cache.',
+        onClick: () => this._applySeed(),
+      }),
+      button({
+        label: 'use current',
+        tip: 'Copy the running game’s seed and level into the EXPLORE preview.',
+        onClick: () => this._useCurrentSeed(),
+      }),
     ])
     this._seedRow = { el: document.createElement('div') }
     this._seedRow.el.appendChild(seedWrap)
@@ -127,6 +147,11 @@ export class WorldMapTool {
     this._familySeg = segmented({
       labels: [...MAP_FAMILY_ORDER],
       value: Math.max(0, MAP_FAMILY_ORDER.indexOf(this.family)),
+      tips: MAP_FAMILY_ORDER.map((family) => ({
+        title: `family: ${family}`,
+        text: `Preview the ${family} map family in EXPLORE (its own generator config and structure catalog). Does not change the running game.`,
+      })),
+      ariaLabel: 'preview map family',
       onPick: (i) => this._setFamily(MAP_FAMILY_ORDER[i]),
     })
     famRow.appendChild(this._familySeg.el)
@@ -139,14 +164,23 @@ export class WorldMapTool {
     this._floorRead = readout('floor')
     ctl.body.appendChild(
       buttonRow('floor', [
-        button({ label: '−', onClick: () => this._stepFloor(-1) }),
-        button({ label: '+', onClick: () => this._stepFloor(1) }),
+        button({
+          label: '−',
+          tip: 'Show the floor below (cy − 1). Detaches from the player floor.',
+          onClick: () => this._stepFloor(-1),
+        }),
+        button({
+          label: '+',
+          tip: 'Show the floor above (cy + 1). Detaches from the player floor.',
+          onClick: () => this._stepFloor(1),
+        }),
       ]).el
     )
     ctl.body.appendChild(this._floorRead.el)
     this._follow = toggle({
       label: 'follow player floor',
       value: this.followFloor,
+      tip: 'Keep the drawn floor on the player’s current floor. The − / + buttons turn this off.',
       onChange: (v) => (this.followFloor = v),
     })
     ctl.body.appendChild(this._follow.el)
@@ -163,6 +197,13 @@ export class WorldMapTool {
     this._clickMode = segmented({
       labels: CLICK_MODES,
       value: 0,
+      tips: [
+        'Map clicks do nothing (drag still pans).',
+        'Click to place the stalker at that spot and floor in the LIVE world, even while viewing EXPLORE (ignored where the live cell is blocked).',
+        'Click to teleport the player to that spot and floor in the LIVE world, even while viewing EXPLORE (ignored where the live cell is blocked).',
+        'Click a structure to pin it for the detail readout and audit box; click empty space to unpin.',
+      ].map((text, i) => ({ title: `map click: ${CLICK_MODES[i]}`, text })),
+      ariaLabel: 'map click action',
       onPick: (i) => (this.dbg.mapClickMode = CLICK_MODES[i]),
     })
     clickRow.appendChild(this._clickMode.el)
@@ -181,6 +222,14 @@ export class WorldMapTool {
       segmented({
         labels: FILL_MODES,
         value: 0,
+        tips: [
+          'Tint each chunk by its generator zone (office, pillars, warehouse, sewer).',
+          'Hashed color per space id: each room/corridor space keeps a stable color.',
+          'Color named rooms by semantic role (meeting, kitchen, server…).',
+          'Wash each chunk a structure participates in with that structure’s family color.',
+          'No fill: walls, columns and glyphs only.',
+        ].map((text, i) => ({ title: `fill: ${FILL_MODES[i]}`, text })),
+        ariaLabel: 'cell fill layer',
         onPick: (i) => (this.fillMode = FILL_MODES[i]),
       }).el
     )
@@ -194,20 +243,32 @@ export class WorldMapTool {
         step: 0.1,
         value: this.view.scale,
         fmt: 1,
+        tip: 'Map zoom in pixels per world unit (0.6-14). Mouse wheel over the map zooms around the cursor.',
         onInput: (v) => (this.view.scale = v),
       }).el
     )
     this._zoom = ctl.body.lastChild
     ctl.body.appendChild(
-      toggle({ label: 'validate connectivity', value: false, onChange: (v) => (this.validate = v) }).el
+      toggle({
+        label: 'validate connectivity',
+        value: false,
+        tip: 'Flood-fill the drawn floor from the player (unreached open cells count as sealed) and run the 3D integrity audit around the selected structure. Costly on big views.',
+        onChange: (v) => (this.validate = v),
+      }).el
     )
     ctl.body.appendChild(
-      toggle({ label: 'seam continuity', value: false, onChange: (v) => (this.seams = v) }).el
+      toggle({
+        label: 'seam continuity',
+        value: false,
+        tip: 'Paint chunk borders: green where the seam is open, red where it is walled, and score continuity/architecture in the stats.',
+        onChange: (v) => (this.seams = v),
+      }).el
     )
     ctl.body.appendChild(
       toggle({
         label: 'family structures',
         value: this.showFamilyStructures,
+        tip: 'Draw structure outlines and glyphs: tower decks/sockets, lattice anchors/edges, sewer graph, catalog cores, flights and floor voids.',
         onChange: (v) => (this.showFamilyStructures = v),
       }).el
     )
@@ -215,6 +276,7 @@ export class WorldMapTool {
       toggle({
         label: 'room labels',
         value: this.showRoomLabels,
+        tip: 'Write the room type over each named room (one label per connected room).',
         onChange: (v) => (this.showRoomLabels = v),
       }).el
     )
@@ -222,19 +284,33 @@ export class WorldMapTool {
       toggle({
         label: 'lethal voids',
         value: this.showLethal,
+        tip: 'Shade lethal void cells (drops to a death plane); orange means that void half failed validation.',
         onChange: (v) => (this.showLethal = v),
       }).el
     )
     ctl.body.appendChild(
       buttonRow('', [
-        button({ label: 'recenter player', onClick: () => this._recenter() }),
-        button({ label: 'spawn', onClick: () => ((this.view.cx = SPAWN), (this.view.cz = SPAWN)) }),
+        button({
+          label: 'recenter player',
+          tip: 'Center the map on the player (double-clicking the map does the same).',
+          onClick: () => this._recenter(),
+        }),
+        button({
+          label: 'spawn',
+          tip: 'Center the map on the world spawn point.',
+          onClick: () => ((this.view.cx = SPAWN), (this.view.cz = SPAWN)),
+        }),
       ]).el
     )
 
     // --- Canvas ---------------------------------------------------------
     const canvas = document.createElement('canvas')
     canvas.className = 'dbg-canvas'
+    canvas.setAttribute('aria-label', 'world map')
+    applyTip(canvas, {
+      title: 'World map',
+      text: 'Drag to pan, wheel to zoom, double-click to recenter on the player. A click does what "map click" is set to.',
+    })
     const dpr = Math.min(window.devicePixelRatio || 1, 2)
     canvas.width = LOGW * dpr
     canvas.height = LOGH * dpr
@@ -265,6 +341,10 @@ export class WorldMapTool {
       cursor: readout('cursor'),
     }
     for (const k of Object.keys(this._stat)) stats.body.appendChild(this._stat[k].el)
+    // Selected v26 catalog structure anatomy (recipe, size class, storeys,
+    // flights, core, deviation, this floor's voids); empty for other kinds.
+    this._catalogDetail = textBlock()
+    this._stat.multilevel.el.after(this._catalogDetail.el)
 
     // Per-reason family failures — collapsed by default; the `family audit`
     // readout above carries the counts at a glance.
@@ -682,6 +762,7 @@ export class WorldMapTool {
     }
 
     let integrity = null
+    let expectedAuditChunks = 0
     if (this.validate) {
       const auditBox = multilevelAuditBox(
         selectedStructure,
@@ -691,6 +772,7 @@ export class WorldMapTool {
         c1z,
         this.floor
       )
+      expectedAuditChunks = auditBox.nx * auditBox.ny * auditBox.nz
       // The audit builds a full 3D graph. Cache it while the viewed chunk box,
       // selected structure, seed/source, and live resident count stay
       // unchanged; drawing still runs every frame without rebuilding thousands
@@ -741,11 +823,7 @@ export class WorldMapTool {
     this._stat.conn.set(
       this.validate ? `cy ${this.floor} · ${reached.size}/${openCount} open · ${sealed} sealed` : 'off'
     )
-    this._stat.integrity.set(
-      integrity
-        ? `${integrity.ok ? 'ok' : 'FAIL'} · desc ${integrity.mismatchedDescriptors} · holes ${integrity.holeMismatches} · orphan ${integrity.orphanedHalves} · bad links ${integrity.invalidCanonicalLinks}/${integrity.canonicalLinks} · comp ${integrity.components}`
-        : 'off'
-    )
+    this._stat.integrity.set(formatLayeredIntegrity(integrity, expectedAuditChunks))
     this._stat.multilevel.set(
       formatStructureDetail(
         visibleStructures,
@@ -753,6 +831,7 @@ export class WorldMapTool {
         selectedSource
       )
     )
+    this._catalogDetail.set(catalogStructureLines(selectedStructure, this.floor))
     this._stat.multilevelAudit.set(formatMultilevelAudit(integrity))
     this._stat.family.set(formatFamilyCounts(integrity?.familyAudit))
     this._stat.familyAudit.set(formatFamilyFailureSummary(integrity))

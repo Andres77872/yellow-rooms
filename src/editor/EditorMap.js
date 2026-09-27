@@ -63,11 +63,23 @@ export function isPristineChunk(d) {
 
 const UNDO_CAP = 64
 
+// World seed from the author's seed text, as the game derives it (hashStr),
+// except `#<uint32>` which names a numeric seed directly — how the editor
+// continues a loaded document whose original seed text is not stored.
+export function seedFromText(text) {
+  const match = /^#(\d+)$/.exec(String(text ?? '').trim())
+  return match ? Number(match[1]) >>> 0 : hashStr(String(text ?? ''))
+}
+
 export class EditorMap {
   constructor({ name = 'untitled', family = MAP_FAMILY_OFFICE, seed = 0 } = {}) {
     this.meta = { name, family, seed: seed >>> 0, worldGenVersion: WORLD_GEN_VERSION }
     this.chunks = new Map() // chunkKey3 -> ChunkData
     this.rooms = [] // {id, cy, x0, z0, x1, z1, role, salt, door}
+    // Authored structures (editor/templates.js): {id, template, label,
+    // baseCy, topCy, bounds, parts}. Their geometry lives in the chunks; the
+    // record is what lists, focuses, audits and removes them.
+    this.authored = []
     this.nextRoomId = 1
     this._dirty = new Set()
     this._undo = []
@@ -116,9 +128,11 @@ export class EditorMap {
   // --- undo/redo ------------------------------------------------------------
 
   // One op = one undo step. Chunks touched between beginOp and endOp are
-  // snapshotted once; the room list/meta are captured wholesale (they are
-  // tiny). Nesting is allowed — inner begin/end pairs fold into the outer op,
-  // so a drag stroke or a compound action lands as a single undo entry.
+  // snapshotted once; the room list and meta are captured wholesale (they are
+  // tiny) — a bake rewrites meta.seed/family, and undoing it must restore the
+  // world the remaining chunks came from. Nesting is allowed — inner
+  // begin/end pairs fold into the outer op, so a drag stroke or a compound
+  // action lands as a single undo entry.
   beginOp() {
     if (!this._op) {
       this._op = {
@@ -126,6 +140,8 @@ export class EditorMap {
         snapshots: new Map(),
         rooms: this.rooms.map((r) => ({ ...r, door: r.door ? { ...r.door } : null })),
         nextRoomId: this.nextRoomId,
+        meta: { ...this.meta },
+        authored: JSON.stringify(this.authored),
       }
     }
     this._op.depth++
@@ -136,7 +152,14 @@ export class EditorMap {
     if (!op) return
     if (--op.depth > 0) return
     this._op = null
-    if (op.snapshots.size || this._roomsChanged(op.rooms) || op.nextRoomId !== this.nextRoomId) {
+    if (
+      op.snapshots.size ||
+      this._roomsChanged(op.rooms) ||
+      op.nextRoomId !== this.nextRoomId ||
+      op.meta.seed !== this.meta.seed ||
+      op.meta.family !== this.meta.family ||
+      op.authored !== JSON.stringify(this.authored)
+    ) {
       this._undo.push(op)
       if (this._undo.length > UNDO_CAP) this._undo.shift()
       this._redo.length = 0
@@ -163,6 +186,8 @@ export class EditorMap {
       snapshots: new Map(),
       rooms: this.rooms.map((r) => ({ ...r, door: r.door ? { ...r.door } : null })),
       nextRoomId: this.nextRoomId,
+      meta: { ...this.meta },
+      authored: JSON.stringify(this.authored),
     }
     for (const [key, snap] of op.snapshots) {
       const current = this.chunks.get(key) ?? null
@@ -173,6 +198,9 @@ export class EditorMap {
     }
     this.rooms = op.rooms.map((r) => ({ ...r, door: r.door ? { ...r.door } : null }))
     this.nextRoomId = op.nextRoomId
+    // The document name is not part of the undo history.
+    if (op.meta) this.meta = { ...op.meta, name: this.meta.name }
+    if (op.authored !== undefined) this.authored = JSON.parse(op.authored)
     return inverse
   }
 
@@ -345,39 +373,93 @@ export class EditorMap {
   // Bake a procedurally generated box of chunks into the document. Chunks
   // become ordinary editable data; generated rooms are lifted into room
   // records (grouped by spaceId) so they can be regenerated or deleted.
-  bakeProcedural({ seedText = 'lobby', family = MAP_FAMILY_OFFICE, radius = 2, floors = [0] } = {}) {
-    const { family: resolved, config } = worldConfigForFamilyOrOffice(family)
-    const seed = hashStr(seedText)
-    this.meta.family = resolved
-    this.meta.seed = seed
-    this.mutate(() => {
-      for (const cy of floors) {
-        for (let cz = -radius; cz <= radius; cz++) {
-          for (let cx = -radius; cx <= radius; cx++) {
-            this._touch(cx, cy, cz, false)
-            const d = generateChunk(seed, cx, cy, cz, config)
-            this.chunks.set(chunkKey3(cx, cy, cz), d)
-            this._dirty.add(chunkKey3(cx, cy, cz))
-          }
+  bakeProcedural({
+    seedText = 'lobby',
+    family = MAP_FAMILY_OFFICE,
+    radius = 2,
+    floors = [0],
+    center = { cx: 0, cz: 0 },
+  } = {}) {
+    const coords = []
+    for (const cy of floors) {
+      for (let cz = center.cz - radius; cz <= center.cz + radius; cz++) {
+        for (let cx = center.cx - radius; cx <= center.cx + radius; cx++) {
+          coords.push({ cx, cy, cz })
         }
       }
-      this._liftBakedRooms(floors)
-    })
-    return { seed, config }
+    }
+    return this.bakeChunks({ seed: seedFromText(seedText), family, coords })
   }
 
-  // Group baked CELL_ROOM cells by (cy, spaceId) into room records.
+  // Replace the document chunks at `coords` with freshly generated ones as a
+  // single undoable operation. Tall structures span many floors: callers that
+  // bake a structure pass its complete participant volume so no slab half is
+  // left without its partner.
+  bakeChunks({ seed, family = this.meta.family, coords }) {
+    const { family: resolved, config } = worldConfigForFamilyOrOffice(family)
+    this.mutate(() => {
+      // Inside the op, so undo restores the world the old chunks came from.
+      this.meta.family = resolved
+      this.meta.seed = seed >>> 0
+      const replaced = new Set()
+      for (const { cx, cy, cz } of coords) {
+        const key = chunkKey3(cx, cy, cz)
+        if (replaced.has(key)) continue
+        replaced.add(key)
+        this._touch(cx, cy, cz, false)
+        this.chunks.set(key, generateChunk(this.meta.seed, cx, cy, cz, config))
+        this._dirty.add(key)
+      }
+      this._dropRoomsIn(replaced)
+      this._liftBakedRooms(new Set(coords.map((c) => c.cy)))
+    })
+    return { seed: this.meta.seed, config }
+  }
+
+  // Drop every chunk and room (one undoable step when called inside an op).
+  clearAll() {
+    for (const d of [...this.chunks.values()]) {
+      this._touch(d.cx, d.cy, d.cz, false)
+      this.chunks.delete(chunkKey3(d.cx, d.cy, d.cz))
+    }
+    this.rooms = []
+    this.authored = []
+  }
+
+  // Room records whose cells were just overwritten by a bake no longer
+  // describe the document; drop every room touching a replaced chunk.
+  _dropRoomsIn(replacedKeys) {
+    this.rooms = this.rooms.filter((r) => {
+      for (let cz = this.cellChunk(r.z0); cz <= this.cellChunk(r.z1); cz++) {
+        for (let cx = this.cellChunk(r.x0); cx <= this.cellChunk(r.x1); cx++) {
+          if (replacedKeys.has(chunkKey3(cx, r.cy, cz))) return false
+        }
+      }
+      return true
+    })
+  }
+
+  // Group baked CELL_ROOM cells by (cy, spaceId) into room records. Baked
+  // records are derived data: they are rebuilt from the rasters of every
+  // chunk on the touched floors, while user-authored rooms (baked: false)
+  // keep their records and their cells are never re-lifted as baked rooms.
   _liftBakedRooms(floors) {
+    const floorSet = floors instanceof Set ? floors : new Set(floors)
+    const authored = new Set(
+      this.rooms.filter((r) => !r.baked).map((r) => `${r.cy}:${r.id}`)
+    )
+    this.rooms = this.rooms.filter((r) => !r.baked || !floorSet.has(r.cy))
     const found = new Map() // `${cy}:${id}` -> record
     for (const d of this.chunks.values()) {
-      if (!floors.includes(d.cy)) continue
+      if (!floorSet.has(d.cy)) continue
       for (let lz = 0; lz < CHUNK; lz++) {
         for (let lx = 0; lx < CHUNK; lx++) {
           const i = cIdx(lx, lz)
           if (d.cellKind[i] !== CELL_ROOM || !d.spaceId[i]) continue
+          const key = `${d.cy}:${d.spaceId[i]}`
+          if (authored.has(key)) continue
           const gx = d.cx * CHUNK + lx
           const gz = d.cz * CHUNK + lz
-          const key = `${d.cy}:${d.spaceId[i]}`
           let r = found.get(key)
           if (!r) {
             r = {
@@ -414,6 +496,13 @@ export class EditorMap {
     const set = new Set()
     for (const d of this.chunks.values()) set.add(d.cy)
     return [...set].sort((a, b) => a - b)
+  }
+
+  // Chunk count per stored floor, ascending.
+  floorSummary() {
+    const counts = new Map()
+    for (const d of this.chunks.values()) counts.set(d.cy, (counts.get(d.cy) ?? 0) + 1)
+    return [...counts].sort((a, b) => a[0] - b[0]).map(([cy, chunks]) => ({ cy, chunks }))
   }
 
   // Drop chunks that carry no information (post-erase cleanup).

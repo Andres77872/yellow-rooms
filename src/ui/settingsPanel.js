@@ -36,7 +36,8 @@ const lookOpts = LOOK_ORDER
   .join('')
 const noiseOpts = NOISE_MODES.map((n) => `<option value="${n}">${n.toUpperCase()}</option>`).join('')
 
-// Simple view: the three knobs a player actually reaches for. Every other
+// Simple view: the knobs a player actually reaches for, plus the
+// photosensitivity toggle, which must never hide behind a click. Every other
 // prop lives in the collapsed ADVANCED section so both cards stay short —
 // nothing is removed, just one click deeper.
 export const SETTINGS_HTML = `
@@ -53,6 +54,9 @@ export const SETTINGS_HTML = `
   <div class="group">GRAPHICS</div>
   <label>VISUAL STYLE <select data-k="look">${lookOpts}</select></label>
   <label>QUALITY PRESET <select data-k="preset">${presetOpts}</select></label>
+  <div class="group">ACCESSIBILITY</div>
+  <label title="Keeps flickering lights under 3 flashes per second and a 10% brightness change">
+    REDUCE FLICKER (PHOTOSENSITIVITY) <input type="checkbox" data-k="flicker"></label>
   <button type="button" class="adv-toggle" data-k="advToggle" aria-expanded="false">
     ADVANCED SETTINGS <span class="caret" aria-hidden="true">▾</span>
   </button>
@@ -114,6 +118,7 @@ const WIRE = [
   ['noise', 'change', 'noise', (el) => el.value],
   ['out', 'change', 'outline', (el) => el.checked],
   ['map', 'change', 'minimap', (el) => el.checked],
+  ['flicker', 'change', 'reduceFlicker', (el) => el.checked],
 ]
 
 // One wired settings card. `onSetting(key, value)` reports a raw edit and
@@ -175,5 +180,6 @@ export class SettingsBlock {
     this.el.noise.value = s.get('noise')
     this.el.out.checked = s.get('outline')
     this.el.map.checked = s.get('minimap')
+    this.el.flicker.checked = s.get('reduceFlicker')
   }
 }

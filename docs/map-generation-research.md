@@ -1,11 +1,84 @@
 # Map-generation research and implementation direction
 
-Document status: this is the historical v7–v14 implementation record and
-research direction, verified against the world-gen v24 tree on 2026-07-21.
+Document status: the v25 research and implementation notes below describe the
+2026-09-26 family architecture rework. The v7–v14 sections are historical
+implementation records, previously checked against the v24 tree.
 Present-tense statements inside versioned sections describe those releases;
 later-status notes identify what subsequently shipped. See
 [World Generation Architecture](worldgen-architecture.md) for the current
 layout and contracts.
+
+## World-gen v25: architecture before dressing
+
+The review found that Hotel literally shared Office's corridor/BSP plan, Sewer
+repeated a single gallery with square chambers, Tower repeated one narrow
+footprint, and Lattice repeated identical platforms on a fixed pitch. Palettes
+and furnishing could disguise those repetitions but could not change routes,
+sightlines, thresholds, or the scale of empty space.
+
+Visual review also found that Tower and Lattice reverted to the Office BSP
+between their vertical bands, including some spawn areas. Their entire
+background plans now have separate grammars: large cores and broad perimeter
+galleries for Tower; utility blocks, service alleys and transfer plazas for
+Lattice. Canonical landmarks add the vertical crossings to those distinct bases.
+
+### Research translated into rules
+
+- [Georgia Tech's Atrium Hotel Grammar](https://shape.design.gatech.edu/Research/Projects/2018_Atrium/index.html)
+  separates hotel framework, spatial configuration and style, including lobby
+  and guestroom arrangements. Hotel now starts from guest wings and shared
+  public circulation before subdividing suites; it no longer uses Office BSP.
+- [GSA's workplace guidance](https://www.gsa.gov/governmentwide-initiatives/federal-highperformance-buildings/highperformance-building-clearinghouse/workplace-strategies/project-guidance/space-reconfiguration-renovation-and-construction)
+  describes a mix of open space, enclosed offices and shared rooms. Office now
+  reserves empty bullpens, dogleg galleries and waiting loops among irregular
+  rooms. Their emptiness and exaggerated repetition are this game's design
+  choices, not claims about real workplace design.
+- [Tideway's Falconbrook connection](https://tideway.london/news/site-news/2020/march/making-connections-at-falconbrook/)
+  provides a concrete infrastructure reference for separate collectors,
+  connection tunnels and chambers. Sewer now alternates elongated interceptor
+  galleries, perpendicular collector confluences and bypass rings around solid
+  bulkheads. These remain dry passages; no cosmetic water implies missing
+  swimming or hydraulic simulation.
+- [UCL's Space Syntax Laboratory](https://www.ucl.ac.uk/bartlett/architecture/research/space-syntax-laboratory)
+  studies spatial configuration and movement. The game interpretation is to
+  vary actual visibility and route structure: Tower splits courts with retained
+  upper galleries and overlooks; Lattice alternates narrow spans with broader
+  junction platforms. These specific forms and dimensions are authored rules.
+- The [Level 0 fiction](https://backrooms-wiki.wikidot.com/level-0) supplies a
+  liminal reference: familiar empty rooms, repetitive passages and occasional
+  structural abnormalities. We use that spatial contrast without copying its
+  text/assets or making the deterministic world shift behind the player.
+
+### Implementation and verification
+
+Reservations precede room allocation; canonical global descriptors own vertical
+structures. The resulting walls, columns, slab holes, bridges and rails are the
+same data consumed by rendering, collision, navigation, lighting, streaming and
+the world map. No new prop/model objects implement the architecture.
+
+`office-architecture.test.js` verifies connected empty silhouettes and exact
+chunk projection. `hotel-architecture.test.js` checks repeated corridor-fronting
+rooms, public halls and furnished multilayer reachability. Sewer tests cover
+collector routes and real bypass closures. Tower tests inspect court floors
+and every void-edge guard; Lattice tests cover variable spans/platforms and
+full-district reachability. `family-architecture.test.js` removes furniture and
+compares only physical walls/columns at identical coordinates across all five
+families, including landmark-free spawn chunks, so textures, labels and object
+catalogs cannot satisfy the test. Exit regression tests additionally check
+real generated floors and risers: the former generic Office-only query could
+place Sewer, Tower and Lattice objectives on holes or stair runs.
+
+Seed output changes intentionally: `WORLD_GEN_VERSION = 25`. The global,
+maximum-height and per-family representative/corpus pins must advance together.
+`npm test`, `npm run lint`, `npm run build`, `npm run audit:world`, and
+`npm run benchmark:map-families` reproduce the validation and performance data.
+
+Final verification on 2026-09-26 passed 1,358 tests across 110 files, lint and
+the production build. The release audit passed every family, including all
+deterministic corpus pins, the 10,000-seed region survey and the 32-seed wide
+survey. The headless benchmark drained every family's streaming queue; its
+timings are report-only and do not establish browser frame-rate guarantees.
+Browser review checked rendered family layouts as well as the debug maps.
 
 ## World-gen v14: room-dominant fabric and bounded landmark courts
 

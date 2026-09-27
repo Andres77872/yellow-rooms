@@ -61,6 +61,8 @@ export function captureState(engine) {
       fov: cam.fov,
     },
     time: engine._time,
+    // Bad-tube strobe depth/rate at `time` depend on it (reduceFlicker).
+    reduceFlicker: engine.settings.get('reduceFlicker') !== false,
     flashlight: !!engine.state.flashlightOn,
     look: d.look?.id ?? null,
     lookVersion: d.look?.version ?? null,
@@ -107,6 +109,11 @@ export function applyCapture(engine, desc, { freeze = true } = {}) {
     }
   }
   if (desc.look && engine.settings.get('look') !== desc.look) engine._applySetting('look', desc.look)
+  // The capture's flicker profile, applied at runtime only: a replay must not
+  // switch off a player's photosensitivity setting behind their back (the
+  // frame is frozen anyway; resumeFromCapture restores the stored choice).
+  // Captures that predate the field keep the current profile.
+  if (typeof desc.reduceFlicker === 'boolean') engine._setFlickerProfile(desc.reduceFlicker)
   const [x, z] = camera.pos
   engine.controller.teleport(x, z, camera.floor, camera.yaw)
   engine.controller.pitch = camera.pitch

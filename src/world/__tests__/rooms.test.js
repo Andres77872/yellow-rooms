@@ -120,6 +120,8 @@ describe('per-family room election', () => {
     return roles
   }
 
+  // 81 districts × 4 families; v26 Hotel/Tower/Lattice plan 4×4-chunk
+  // districts, so the corpus gets an explicit budget under full-suite load.
   it('fills every catalog quota whenever the district geometry can host it', () => {
     // The v23 backstop pass: election windows decide WHICH rooms volunteer,
     // never WHETHER the floor reaches its institutional mix. Under-fills left
@@ -153,7 +155,7 @@ describe('per-family room election', () => {
         ).toBeLessThan(0.05)
       }
     }
-  })
+  }, 60_000)
 
   it('office districts elect only office-catalog roles, and all of them', () => {
     const allowed = new Set(
@@ -227,10 +229,16 @@ describe('procedural room shapes', () => {
 
     const square = structuredClone(cfg)
     square.office.roomShapeChance = 0
-    const plain = buildOfficeDistrictPlan(4242, 1, -1, square)
-    // With the exchange disabled the same seed carves a different (all-BSP)
-    // field; the knob is live.
-    expect(plain.cellKind).not.toEqual(a.cellKind)
+    // Some districts have no eligible corner exchange after reservations.
+    // Across a corpus the knob must change actual partitions, not merely
+    // semantic room/circulation labels or a candidate's descriptive metadata.
+    const changed = [1, 7, 42, 4242].filter((seed) => {
+      const shaped = buildOfficeDistrictPlan(seed, 1, -1, cfg)
+      const plain = buildOfficeDistrictPlan(seed, 1, -1, square)
+      return plain.wallV.some((v, i) => v !== shaped.wallV[i]) ||
+        plain.wallH.some((v, i) => v !== shaped.wallH[i])
+    })
+    expect(changed.length).toBeGreaterThan(0)
   })
 })
 

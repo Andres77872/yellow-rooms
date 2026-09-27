@@ -191,9 +191,9 @@ function towerParticipantLink(structure, cx, cz) {
   ) ?? null
 }
 
-// Keep one authored access corridor and the complete stair halo solid inside
-// each participant. The remaining three-cell shaft band is the exposed void;
-// the middle slice replaces its centre line with the canonical deck.
+// Keep one access corridor and the complete stair halo solid in each tower.
+// The upper split court adds a transverse transfer gallery; the overlook
+// court projects a broad terrace from alternate ends on successive floors.
 function towerSafeFloorCells(structure, slice, cx, cz) {
   const safe = new Set()
   const link = towerParticipantLink(structure, cx, cz)
@@ -217,6 +217,25 @@ function towerSafeFloorCells(structure, slice, cx, cz) {
   for (let lz = haloZ0; lz <= haloZ1; lz++) {
     for (let lx = haloX0; lx <= haloX1; lx++) safe.add(localCellKey(lx, lz))
   }
+
+  const bounds = structure.globalBounds
+  const alongX = structure.bridgeAxis === 'x'
+  const longStart = alongX ? bounds.x0 : bounds.z0
+  const longEnd = alongX ? bounds.x1 : bounds.z1
+  const transferLine = Math.floor((longStart + longEnd) / 2)
+  for (let lz = z0; lz <= z1; lz++) {
+    for (let lx = x0; lx <= x1; lx++) {
+      const long = alongX ? cx * CHUNK + lx : cz * CHUNK + lz
+      const transfer = structure.architecture?.form === 'splitCourt' &&
+        slice.levelCy === structure.topCy &&
+        long >= transferLine && long <= transferLine + 1
+      const overlook = structure.architecture?.form === 'overlookCourt' &&
+        (slice.levelCy === structure.topCy
+          ? long >= longEnd - 3
+          : long <= longStart + 3)
+      if (transfer || overlook) safe.add(localCellKey(lx, lz))
+    }
+  }
   return safe
 }
 
@@ -226,6 +245,9 @@ function towerStructureSlice(structure, cx, cz, lowerCy) {
 
   const safe = towerSafeFloorCells(structure, slice, cx, cz)
   const canonicalDeckLine = structure.decks[0].globalBridgeLine
+  const bounds = structure.globalBounds
+  const shortStart = structure.bridgeAxis === 'x' ? bounds.z0 : bounds.x0
+  const shortEnd = structure.bridgeAxis === 'x' ? bounds.z1 : bounds.x1
   const chunkGX = cx * CHUNK
   const chunkGZ = cz * CHUNK
   const voidCells = []
@@ -238,7 +260,9 @@ function towerStructureSlice(structure, cx, cz, lowerCy) {
         globalShort === slice.globalBridgeLine
       if (
         !isDeck &&
-        Math.abs(globalShort - canonicalDeckLine) <= 1 &&
+        (structure.architecture?.form === 'nave' || !structure.architecture
+          ? Math.abs(globalShort - canonicalDeckLine) <= 1
+          : globalShort > shortStart && globalShort < shortEnd) &&
         !safe.has(localCellKey(lx, lz))
       ) {
         voidCells.push({ lx, lz })
@@ -249,27 +273,30 @@ function towerStructureSlice(structure, cx, cz, lowerCy) {
   return deepFreeze({ ...slice, voidCells })
 }
 
-function towerRoomOpenings(structure, slice, cx, cz) {
+// Each participant opens its own end wall onto the ring at both stair
+// corridors. Upper storeys also open both outer gallery walks there: rails
+// seal each walk from the court and its long wall is glazed, so the walk on
+// the far side of this participant's stair halo (a court's second long side,
+// or the nave's one-row side) otherwise reached the ring only through the
+// other participant's chunk, splitting this chunk-storey in two.
+function towerRoomOpenings(structure, slice, cx, cz, galleries = false) {
   const participantIndex = structure.participants.findIndex(
     (participant) => participant.cx === cx && participant.cz === cz
   )
   const openings = new Set()
   if (participantIndex < 0) return openings
 
+  const { x0, z0, x1, z1 } = slice.localBounds
   if (structure.bridgeAxis === 'x') {
-    const line = participantIndex === 0
-      ? slice.localBounds.x0
-      : slice.localBounds.x1 + 1
-    for (const link of structure.verticalLinks) {
-      openings.add(edgeKey('v', line, link.stair.landing.lz))
-    }
+    const line = participantIndex === 0 ? x0 : x1 + 1
+    const rows = structure.verticalLinks.map((link) => link.stair.landing.lz)
+    if (galleries) rows.push(z0, z1)
+    for (const lz of rows) openings.add(edgeKey('v', line, lz))
   } else {
-    const line = participantIndex === 0
-      ? slice.localBounds.z0
-      : slice.localBounds.z1 + 1
-    for (const link of structure.verticalLinks) {
-      openings.add(edgeKey('h', line, link.stair.landing.lx))
-    }
+    const line = participantIndex === 0 ? z0 : z1 + 1
+    const rows = structure.verticalLinks.map((link) => link.stair.landing.lx)
+    if (galleries) rows.push(x0, x1)
+    for (const lx of rows) openings.add(edgeKey('h', line, lx))
   }
   return openings
 }
@@ -285,25 +312,55 @@ function stampTowerRoomFloor(data, slice) {
   }
 }
 
-// Bottom-hall colonnade: two inset rows of columns on a fixed structural bay
-// along the long axis. The hall stops being a bare extruded box — it reads as
-// the load path of the tower above, gives the eye a scale reference, and adds
-// the occlusion rhythm the pillar-perception research values. Columns are
-// never adjacent (3-cell bay) and sit 2 cells clear of the footprint ends, so
-// the open hall stays one navigable component and every perimeter approach
-// keeps a clear mouth; the stair halo carve deletes any column it overlaps.
-function stampTowerColonnade(data, slice) {
+// Global bay coordinates preserve the column rhythm through the chunk seam.
+// The wide split court has sparse perimeter piers around its open assembly
+// floor; the long nave has closely repeated double colonnades.
+function stampTowerColonnade(data, structure, slice) {
   const { x0, z0, x1, z1 } = slice.localBounds
-  const alongX = x1 - x0 >= z1 - z0
-  const a0 = alongX ? x0 : z0
-  const a1 = alongX ? x1 : z1
+  const alongX = structure.bridgeAxis === 'x'
+  const bounds = structure.globalBounds
+  const longStart = alongX ? bounds.x0 : bounds.z0
+  const longEnd = alongX ? bounds.x1 : bounds.z1
+  const origin = alongX ? data.cx * CHUNK : data.cz * CHUNK
+  const a0 = Math.max(longStart + 2, origin)
+  const a1 = Math.min(longEnd - 2, origin + CHUNK - 1)
+  const bay = structure.architecture?.columnBay ?? 3
   const lines = alongX ? [z0 + 1, z1 - 1] : [x0 + 1, x1 - 1]
-  for (let along = a0 + 2; along <= a1 - 2; along += 3) {
+  for (let globalLong = a0; globalLong <= a1; globalLong++) {
+    if ((globalLong - longStart - 2) % bay !== 0) continue
+    const along = globalLong - origin
     for (const line of lines) {
       const lx = alongX ? along : line
       const lz = alongX ? line : along
       if (lx < 0 || lx >= CHUNK || lz < 0 || lz >= CHUNK) continue
       data.setCol(lx, lz, 1)
+    }
+  }
+}
+
+// The slice is the sole slab/void authority. Guard every retained edge of its
+// floor aperture, including the new terraces and transverse gallery. Neighbor
+// slices supply seam cells so a two-tower shaft never loses a rail at line 0.
+function stampTowerVoidGuards(data, structure, slice) {
+  if (data.cy === structure.baseCy) return
+  const voidKeys = new Set()
+  for (const { cx, cz } of structure.participants) {
+    const neighbor = towerStructureSlice(structure, cx, cz, slice.lowerCy)
+    for (const { lx, lz } of neighbor.voidCells) {
+      voidKeys.add(localCellKey(cx * CHUNK + lx, cz * CHUNK + lz))
+    }
+  }
+  for (let lz = 0; lz < CHUNK; lz++) {
+    for (let lx = 0; lx < CHUNK; lx++) {
+      const gx = data.cx * CHUNK + lx
+      const gz = data.cz * CHUNK + lz
+      const center = voidKeys.has(localCellKey(gx, gz))
+      if (center !== voidKeys.has(localCellKey(gx - 1, gz))) {
+        setV(data, lx, lz, 1, PASSAGE_WALL, WALL_RAIL)
+      }
+      if (center !== voidKeys.has(localCellKey(gx, gz - 1))) {
+        setH(data, lx, lz, 1, PASSAGE_WALL, WALL_RAIL)
+      }
     }
   }
 }
@@ -383,10 +440,11 @@ export function stampTowerStructure(data, structure) {
     structure,
     surface,
     data.cx,
-    data.cz
+    data.cz,
+    data.cy !== structure.baseCy
   )
   if (data.cy === structure.baseCy) {
-    stampTowerColonnade(data, surface)
+    stampTowerColonnade(data, structure, surface)
     stampTowerPerimeter(data, structure, surface, roomOpenings)
   } else {
     stampGallery(data, down, roomOpenings)
@@ -401,6 +459,7 @@ export function stampTowerStructure(data, structure) {
   // Reassert only the already-protected Tower perimeter/guard edges after the
   // stair primitive has written its complete canonical halves.
   stampTowerPerimeter(data, structure, surface, roomOpenings)
+  stampTowerVoidGuards(data, structure, surface)
   stampTowerDoorSocket(data, structure)
   data.lethalVoidUp = lethalVoidHalf(structure, data.structureUp)
   data.lethalVoidDown = lethalVoidHalf(structure, data.structureDown)

@@ -76,8 +76,19 @@ export function dressEdge(data, axis, line, cell, trim, props, signs) {
     else out.push({ px: along, py: y, pz: across, sx: sAlong, sy: sY, sz: sAcross, tint })
   }
 
+  // Faces over a slab opening (atrium/catalog voids, stair wells) carry no
+  // floor- or wall-mounted dressing: it would hang in mid-air over the drop.
+  const faceHole = (s) => {
+    const cx = vertical ? line + (s > 0 ? 0 : -1) : cell
+    const cz = vertical ? cell : line + (s > 0 ? 0 : -1)
+    return cx >= 0 && cx < CHUNK && cz >= 0 && cz < CHUNK && data.hasFloorHole(cx, cz)
+  }
+  const holeBefore = faceHole(-1)
+  const holeAfter = faceHole(1)
+
   if (wall !== 1) {
     if (passage !== PASSAGE_DOOR && passage !== PASSAGE_WIDE) return
+    if (holeBefore || holeAfter) return
     // Threshold strip: a flooring-material seam line under the opening.
     box(props, centre, THRESHOLD_H / 2, plane, CELL, THRESHOLD_H, THRESHOLD_DEPTH, PROP_TINT.threshold)
     // Exit sign on a deterministic subset of real doorways — a dark housing
@@ -92,7 +103,7 @@ export function dressEdge(data, axis, line, cell, trim, props, signs) {
     return
   }
 
-  if (feature !== WALL_RAIL) {
+  if (feature !== WALL_RAIL && !holeBefore && !holeAfter) {
     // Baseboard + crown: one box straddling the wall plane dresses both faces.
     box(trim, centre, BASEBOARD_H / 2, plane, CELL, BASEBOARD_H, THICK + 2 * BASEBOARD_PROUD)
     box(trim, centre, WALL_H - CROWN_H / 2, plane, CELL, CROWN_H, THICK + 2 * CROWN_PROUD)
@@ -103,6 +114,7 @@ export function dressEdge(data, axis, line, cell, trim, props, signs) {
     // ribs, feet, and an inlet pipe dropping to the floor.
     const y = RADIATOR_H / 2
     for (const s of [-1, 1]) {
+      if (s < 0 ? holeBefore : holeAfter) continue
       const faceOff = plane + s * (THICK / 2 + RADIATOR_T / 2)
       box(props, centre, y, faceOff, RADIATOR_W, RADIATOR_H, RADIATOR_T, PROP_TINT.radiator)
       for (let r = 0; r < RADIATOR_RIBS; r++) {

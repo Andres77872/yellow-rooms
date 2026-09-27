@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { CATALOG_KINDS, isCatalogStructure } from '../src/world/structures/catalog/engine.js'
 
 import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
@@ -382,7 +383,9 @@ function physicalSewerLinks(data, descriptor) {
 
 function reachableSewerModules(raster, rootIndex) {
   const allowed = new Set(raster.traversableModules)
-  const adjacency = Array.from({ length: allowed.size }, () => [])
+  // Index by module index (overlaid modules leave gaps in the traversable set).
+  const size = Math.max(allowed.size, ...raster.traversableModules.map((i) => i + 1), ...(raster.overlaidModules ?? []).map((i) => i + 1))
+  const adjacency = Array.from({ length: size }, () => [])
   for (const { a, b } of raster.links) {
     if (!adjacency[a] || !adjacency[b]) continue
     adjacency[a].push(b)
@@ -422,6 +425,56 @@ function sewerSeamEvidence(config) {
   }
 }
 
+// v26: a catalog volume overlays this chunk's module plan. Reachability is
+// judged on the real walk graph (walls, holes and piers respected): modules
+// on void/pier cells are declared overlaid, every other module must share the
+// chunk's walk component (links form a star inside each component).
+function catalogSewerRaster(data, descriptor) {
+  const walkable = (x, z) => {
+    const column = data.colAt(x, z)
+    return (column === 0 || column === COLUMN_FURNITURE) && !data.hasFloorHole(x, z)
+  }
+  const label = new Int16Array(CHUNK * CHUNK).fill(-1)
+  let count = 0
+  for (let z0 = 0; z0 < CHUNK; z0++) {
+    for (let x0 = 0; x0 < CHUNK; x0++) {
+      if (label[z0 * CHUNK + x0] !== -1 || !walkable(x0, z0)) continue
+      const stack = [[x0, z0]]
+      label[z0 * CHUNK + x0] = count
+      while (stack.length) {
+        const [x, z] = stack.pop()
+        for (const [nx, nz, wall] of [
+          [x - 1, z, data.vAt(x, z)], [x + 1, z, x === CHUNK - 1 ? 1 : data.vAt(x + 1, z)],
+          [x, z - 1, data.hAt(x, z)], [x, z + 1, z === CHUNK - 1 ? 1 : data.hAt(x, z + 1)],
+        ]) {
+          if (wall || nx < 0 || nz < 0 || nx >= CHUNK || nz >= CHUNK) continue
+          if (label[nz * CHUNK + nx] !== -1 || !walkable(nx, nz)) continue
+          label[nz * CHUNK + nx] = count
+          stack.push([nx, nz])
+        }
+      }
+      count++
+    }
+  }
+  const traversableModules = []
+  const overlaidModules = []
+  const firstInComponent = new Map()
+  const links = []
+  descriptor.modules.forEach((module, index) => {
+    if (!walkable(module.lx, module.lz)) {
+      overlaidModules.push(index)
+      return
+    }
+    traversableModules.push(index)
+    const component = label[module.lz * CHUNK + module.lx]
+    const first = firstInComponent.get(component)
+    if (first === undefined) firstInComponent.set(component, index)
+    else links.push({ a: Math.min(first, index), b: Math.max(first, index) })
+  })
+  links.sort(sewerEdgeOrder)
+  return { traversableModules, overlaidModules, links }
+}
+
 function makeSewerFixture(data, lower, upper, profile, seams) {
   // Only the canonical ChunkData field is consumed. Return wrappers or aliases
   // are intentionally invisible to release auditing.
@@ -430,16 +483,18 @@ function makeSewerFixture(data, lower, upper, profile, seams) {
   // guarantees chamber furniture never severs the walk graph (pinned by the
   // rooms.test sewer no-sever corpus), so only structural columns seal a
   // module against traversal.
-  const raster = {
-    traversableModules: descriptor.modules
-      .map((module, index) => ({ module, index }))
-      .filter(({ module }) => {
-        const column = data.colAt(module.lx, module.lz)
-        return column === 0 || column === COLUMN_FURNITURE
-      })
-      .map(({ index }) => index),
-    links: physicalSewerLinks(data, descriptor),
-  }
+  const raster = isCatalogStructure(data.structure)
+    ? catalogSewerRaster(data, descriptor)
+    : {
+        traversableModules: descriptor.modules
+          .map((module, index) => ({ module, index }))
+          .filter(({ module }) => {
+            const column = data.colAt(module.lx, module.lz)
+            return column === 0 || column === COLUMN_FURNITURE
+          })
+          .map(({ index }) => index),
+        links: physicalSewerLinks(data, descriptor),
+      }
   const observedRightTurnRate = observedSewerRightTurn(descriptor)
   return {
     descriptors: [descriptor],
@@ -516,6 +571,7 @@ function runForcedSewerCorpus() {
   const moduleCoverage = new Set()
   let deferredModules = 0
   let unreachableModules = 0
+  let overlaidModules = 0
   let insertedLoops = 0
   let loopBudget = 0
   let eligibleNonTreeLinks = 0
@@ -536,8 +592,13 @@ function runForcedSewerCorpus() {
     const rootIndex = descriptor.modules.findIndex((module) =>
       module.lx === descriptor.trunkRoot.lx && module.lz === descriptor.trunkRoot.lz
     )
-    const reachable = reachableSewerModules(structure.raster, rootIndex)
-    unreachableModules += descriptor.modules.length - reachable.size
+    const overlaidCount = structure.raster.overlaidModules?.length ?? 0
+    const root = overlaidCount && !structure.raster.traversableModules.includes(rootIndex)
+      ? structure.raster.traversableModules[0]
+      : rootIndex
+    const reachable = reachableSewerModules(structure.raster, root)
+    unreachableModules += descriptor.modules.length - overlaidCount - reachable.size
+    overlaidModules += overlaidCount
     insertedLoops += descriptor.loopEdges.length
     loopBudget += structure.profile.maxLoops
     eligibleNonTreeLinks += descriptor.eligibleNonTreeLinks
@@ -552,6 +613,7 @@ function runForcedSewerCorpus() {
     moduleCoverage: SEWER_MODULE_KINDS.filter((kind) => moduleCoverage.has(kind)),
     deferredModules,
     unreachableModules,
+    overlaidModules,
     loops: {
       inserted: insertedLoops,
       budget: loopBudget,
@@ -660,7 +722,7 @@ function findTowerAuditDescriptor(seed, config) {
     for (let cz = -4; cz <= 4; cz++) {
       for (let cx = -4; cx <= 4; cx++) {
         const descriptor = structureAt(seed, cx, cz, cy, config)
-        if (descriptor?.family === MAP_FAMILY_TOWER && descriptor.hasRoom === true) {
+        if (descriptor?.family === MAP_FAMILY_TOWER && descriptor.hasRoom === true && descriptor.kind === 'towerSkybridge') {
           return descriptor
         }
       }
@@ -1625,6 +1687,32 @@ if (hotelEvidence) {
     kind: 'officeMultilevel',
     fixtures: hotelEvidence.fixtures,
   })
+}
+// v26 structure catalog: one emission per enabled family's catalog kind,
+// with real descriptors from a fixed seed corpus (registration, contract
+// policy and the fail-closed descriptor analyzer all run on each fixture).
+function catalogFixtures(family) {
+  const config = worldConfigForFamily(family)
+  const fixtures = []
+  for (let n = 0; n < 3; n++) {
+    const seed = hashStr(`audit-catalog-${family}-${n}#1`)
+    const seen = new Set()
+    for (let cy = 0; cy <= 4 && seen.size < 4; cy++) {
+      for (let cz = -4; cz <= 4 && seen.size < 4; cz++) {
+        for (let cx = -4; cx <= 4 && seen.size < 4; cx++) {
+          const descriptor = structureAt(seed, cx, cz, cy, config)
+          if (!isCatalogStructure(descriptor) || seen.has(descriptor.id)) continue
+          seen.add(descriptor.id)
+          fixtures.push(towerFixture(descriptor, new Map()))
+        }
+      }
+    }
+  }
+  return fixtures
+}
+for (const family of [MAP_FAMILY_OFFICE, MAP_FAMILY_HOTEL, MAP_FAMILY_SEWER, MAP_FAMILY_TOWER, MAP_FAMILY_LATTICE]) {
+  if (!emittedKinds.some((emission) => emission.family === family)) continue
+  emittedKinds.push({ family, kind: CATALOG_KINDS[family], fixtures: catalogFixtures(family) })
 }
 const familyReport = auditFamilyCompleteness(
   enabledProfiles,

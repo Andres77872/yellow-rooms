@@ -14,11 +14,20 @@ import {
   analyzeLatticeDescriptor,
   compareLatticeEdges,
   latticeHorizontalCellKey,
+  LATTICE_PLATFORM_FORMS,
 } from './lattice.js'
 import { lethalVoidHalfFromSlice } from './lethalVoid.js'
 import { stampStructureVerticalLinks } from './stairStamp.js'
 
-const CHAMBER_RADIUS = 1
+export function latticeChamberBounds(anchor) {
+  const { radiusX, radiusZ } = LATTICE_PLATFORM_FORMS[anchor.platform ?? 'landing']
+  return {
+    x0: anchor.gx - radiusX,
+    x1: anchor.gx + radiusX,
+    z0: anchor.gz - radiusZ,
+    z1: anchor.gz + radiusZ,
+  }
+}
 
 // Every chunk in a district re-derives the same per-floor geometry and the
 // same chunk-column slices (a floor's `structureUp` and the floor above's
@@ -28,6 +37,7 @@ const CHAMBER_RADIUS = 1
 const FLOOR_GEOMETRY_CACHE = new WeakMap() // structure -> Map<levelCy, geometry>
 const SLICE_CACHE = new WeakMap() // structure -> Map<'cx,cz,lowerCy', slice>
 const LETHAL_VOID_CACHE = new WeakMap() // slice -> frozen lethal-void half
+const STAIR_GUARD_CACHE = new WeakMap() // structure -> Map<levelCy, Set<edgeKey>>
 
 const compareLocalCells = (left, right) =>
   left.lz - right.lz || left.lx - right.lx
@@ -80,13 +90,14 @@ function computeLatticeFloorGeometry(structure, levelCy) {
   const stairSafeCells = new Set()
   for (const anchor of structure.anchors) {
     if (anchor.levelCy !== levelCy) continue
-    for (let dz = -CHAMBER_RADIUS; dz <= CHAMBER_RADIUS; dz++) {
-      for (let dx = -CHAMBER_RADIUS; dx <= CHAMBER_RADIUS; dx++) {
+    const bounds = latticeChamberBounds(anchor)
+    for (let gz = bounds.z0; gz <= bounds.z1; gz++) {
+      for (let gx = bounds.x0; gx <= bounds.x1; gx++) {
         addGlobalCell(
           chamberCells,
           structure.globalBounds,
-          anchor.gx + dx,
-          anchor.gz + dz
+          gx,
+          gz
         )
       }
     }
@@ -297,26 +308,6 @@ function stampRetainedBoundaryRails(data, geometry) {
   }
 }
 
-// Stair-safe halo cells on one floor, keyed by global position. Both floors of
-// a link retain the same strip footprint plus a one-cell ring around it.
-function stairHaloCellKeys(structure, levelCy) {
-  const halo = new Set()
-  for (const link of structure.verticalLinks) {
-    if (levelCy !== link.lowerCy && levelCy !== link.lowerCy + 1) continue
-    const cells = [link.stair.landing, ...link.stair.run, link.stair.exit]
-    for (const cell of cells) {
-      const gx = link.cx * CHUNK + cell.lx
-      const gz = link.cz * CHUNK + cell.lz
-      for (let dz = -1; dz <= 1; dz++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          halo.add(latticeHorizontalCellKey(gx + dx, gz + dz))
-        }
-      }
-    }
-  }
-  return halo
-}
-
 // The cell on the far side of a chamber-perimeter edge from the anchor.
 function perimeterOutsideCell(anchor, edge) {
   if (edge.axis === 'v') {
@@ -325,39 +316,59 @@ function perimeterOutsideCell(anchor, edge) {
   return { gx: edge.gx, gz: edge.gz < anchor.gz ? edge.gz - 1 : edge.gz }
 }
 
-// A chamber opens toward (a) the nearest same-floor cell of each incident
-// catwalk and (b) EVERY perimeter edge whose outside cell belongs to a stair
-// halo. The halo rule is what keeps a stair pocket walkable from its chamber:
-// rails may cue the drop, but they may never seal the pocket into an island.
+// The stair's far wall at the lower ramp and back wall above its landing are
+// safety boundaries, even when a large platform's perimeter crosses them.
+// A halo is retained floor, not permission to walk through those boundaries.
+function latticeStairGuardEdges(structure, levelCy) {
+  const cached = STAIR_GUARD_CACHE.get(structure)?.get(levelCy)
+  if (cached) return cached
+  const guards = new Set()
+  for (const link of structure.verticalLinks) {
+    const lower = levelCy === link.lowerCy
+    if (!lower && levelCy !== link.lowerCy + 1) continue
+    const stair = link.stair
+    const alongX = stair.dir === 1 || stair.dir === 3
+    const gx = (cell) => link.cx * CHUNK + cell.lx
+    const gz = (cell) => link.cz * CHUNK + cell.lz
+    for (const cell of lower ? [stair.landing, ...stair.run] : stair.run) {
+      if (alongX) {
+        guards.add(`h:${gx(cell)},${gz(cell)}`)
+        guards.add(`h:${gx(cell)},${gz(cell) + 1}`)
+      } else {
+        guards.add(`v:${gx(cell)},${gz(cell)}`)
+        guards.add(`v:${gx(cell) + 1},${gz(cell)}`)
+      }
+    }
+    const [a, b] = lower ? [stair.run.at(-1), stair.exit] : [stair.landing, stair.run[0]]
+    guards.add(alongX
+      ? `v:${Math.max(gx(a), gx(b))},${gz(a)}`
+      : `h:${gx(a)},${Math.max(gz(a), gz(b))}`)
+  }
+  if (Object.isFrozen(structure)) {
+    let byLevel = STAIR_GUARD_CACHE.get(structure)
+    if (!byLevel) {
+      byLevel = new Map()
+      STAIR_GUARD_CACHE.set(structure, byLevel)
+    }
+    byLevel.set(levelCy, guards)
+  }
+  return guards
+}
+
+// Open the full width of each incident deck and stair halo at the platform
+// edge. A broad junction landing therefore joins narrow branches and the wide
+// arterial spine without turning its decorative cue rails into a barrier.
 export function latticeChamberApproaches(structure, anchor) {
   const approaches = new Set()
-  for (const edge of structure.edges) {
-    if (edge.a !== anchor.id && edge.b !== anchor.id) continue
-    const outside = edge.cells
-      .filter((cell) => cell.cy === anchor.levelCy)
-      .filter((cell) =>
-        Math.abs(cell.gx - anchor.gx) > CHAMBER_RADIUS ||
-        Math.abs(cell.gz - anchor.gz) > CHAMBER_RADIUS
-      )
-      .sort((left, right) =>
-        Math.abs(left.gx - anchor.gx) + Math.abs(left.gz - anchor.gz) -
-          Math.abs(right.gx - anchor.gx) - Math.abs(right.gz - anchor.gz)
-      )[0]
-    if (!outside) continue
-    if (outside.gx > anchor.gx) approaches.add(`v:${anchor.gx + 2},${anchor.gz}`)
-    else if (outside.gx < anchor.gx) approaches.add(`v:${anchor.gx - 1},${anchor.gz}`)
-    else if (outside.gz > anchor.gz) approaches.add(`h:${anchor.gx},${anchor.gz + 2}`)
-    else if (outside.gz < anchor.gz) approaches.add(`h:${anchor.gx},${anchor.gz - 1}`)
-  }
-
-  const halo = stairHaloCellKeys(structure, anchor.levelCy)
-  if (halo.size > 0) {
-    for (const side of latticeChamberPerimeter(anchor)) {
-      for (const edge of side) {
-        const outside = perimeterOutsideCell(anchor, edge)
-        if (halo.has(latticeHorizontalCellKey(outside.gx, outside.gz))) {
-          approaches.add(`${edge.axis}:${edge.gx},${edge.gz}`)
-        }
+  const geometry = latticeFloorGeometry(structure, anchor.levelCy)
+  const guards = latticeStairGuardEdges(structure, anchor.levelCy)
+  for (const side of latticeChamberPerimeter(anchor)) {
+    for (const edge of side) {
+      if (guards.has(`${edge.axis}:${edge.gx},${edge.gz}`)) continue
+      const outside = perimeterOutsideCell(anchor, edge)
+      const key = latticeHorizontalCellKey(outside.gx, outside.gz)
+      if (geometry.edgeCells.has(key) || geometry.stairSafeCells.has(key)) {
+        approaches.add(`${edge.axis}:${edge.gx},${edge.gz}`)
       }
     }
   }
@@ -365,18 +376,19 @@ export function latticeChamberApproaches(structure, anchor) {
 }
 
 export function latticeChamberPerimeter(anchor) {
+  const { x0, z0, x1, z1 } = latticeChamberBounds(anchor)
   return [
-    Array.from({ length: 3 }, (_, offset) => ({
-      axis: 'h', gx: anchor.gx - 1 + offset, gz: anchor.gz - 1,
+    Array.from({ length: x1 - x0 + 1 }, (_, offset) => ({
+      axis: 'h', gx: x0 + offset, gz: z0,
     })),
-    Array.from({ length: 3 }, (_, offset) => ({
-      axis: 'v', gx: anchor.gx + 2, gz: anchor.gz - 1 + offset,
+    Array.from({ length: z1 - z0 + 1 }, (_, offset) => ({
+      axis: 'v', gx: x1 + 1, gz: z0 + offset,
     })),
-    Array.from({ length: 3 }, (_, offset) => ({
-      axis: 'h', gx: anchor.gx - 1 + offset, gz: anchor.gz + 2,
+    Array.from({ length: x1 - x0 + 1 }, (_, offset) => ({
+      axis: 'h', gx: x0 + offset, gz: z1 + 1,
     })),
-    Array.from({ length: 3 }, (_, offset) => ({
-      axis: 'v', gx: anchor.gx - 1, gz: anchor.gz - 1 + offset,
+    Array.from({ length: z1 - z0 + 1 }, (_, offset) => ({
+      axis: 'v', gx: x0, gz: z0 + offset,
     })),
   ]
 }
@@ -387,14 +399,15 @@ export function latticeChamberPerimeter(anchor) {
 function stampChamberCueRails(data, structure) {
   const chunkGx = data.cx * CHUNK
   const chunkGz = data.cz * CHUNK
+  const guards = latticeStairGuardEdges(structure, data.cy)
   for (const anchor of structure.anchors) {
     if (anchor.levelCy !== data.cy) continue
     const approaches = latticeChamberApproaches(structure, anchor)
     const perimeter = latticeChamberPerimeter(anchor)
-    for (let offset = 0; offset < 3; offset++) {
-      for (const side of perimeter) {
-        const edge = side[offset]
-        if (approaches.has(`${edge.axis}:${edge.gx},${edge.gz}`)) continue
+    for (const side of perimeter) {
+      for (const edge of side) {
+        const key = `${edge.axis}:${edge.gx},${edge.gz}`
+        if (approaches.has(key) || guards.has(key)) continue
         if (edge.axis === 'v') {
           const cx = Math.floor(edge.gx / CHUNK)
           const cz = Math.floor(edge.gz / CHUNK)

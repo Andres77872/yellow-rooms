@@ -1,3 +1,5 @@
+import { CATALOG_KINDS, isCatalogKind } from './structures/catalog/engine.js'
+import { catalogDescriptorErrors } from './structures/catalog/audit.js'
 import {
   CHUNK,
   LAYER_H,
@@ -65,6 +67,7 @@ import {
 } from './structures/lattice.js'
 import {
   latticeChamberApproaches,
+  latticeChamberBounds,
   latticeChamberPerimeter,
   latticeEffectiveExposureM,
   latticeFloorGeometry,
@@ -1715,8 +1718,15 @@ function validateSewerRaster(structure, descriptorState, reasons) {
   const traversable = Array.isArray(raster?.traversableModules)
     ? raster.traversableModules
     : []
+  // v26: a catalog volume (drop shaft, stepwell…) may overlay module cells
+  // with its voids or piers. Those modules are declared `overlaidModules`;
+  // every other module must stay reachable (through the volume if needed).
+  const overlaid = Array.isArray(raster?.overlaidModules) ? raster.overlaidModules : []
   const allowed = new Set()
-  let valid = traversable.length === moduleCount
+  let valid = traversable.length + overlaid.length === moduleCount
+  for (const index of overlaid) {
+    if (!Number.isInteger(index) || index < 0 || index >= moduleCount || traversable.includes(index)) valid = false
+  }
   for (const index of traversable) {
     if (
       !Number.isInteger(index) ||
@@ -1758,10 +1768,10 @@ function validateSewerRaster(structure, descriptorState, reasons) {
   // Keep the strict analysis live so malformed endpoint arrays cannot be
   // accepted merely because a duplicate happened to preserve reachability.
   if (!links.canonical && linkKeys.size !== (raster?.links?.length ?? 0)) valid = false
-  if (
-    reachableIndexes(rasterAdjacency, descriptorState.rootIndex, allowed).size !==
-      moduleCount
-  ) {
+  const root = overlaid.length && !allowed.has(descriptorState.rootIndex)
+    ? traversable[0]
+    : descriptorState.rootIndex
+  if (reachableIndexes(rasterAdjacency, root, allowed).size !== allowed.size) {
     valid = false
   }
   if (!valid) addReason(reasons, SEWER_AUDIT_REASONS.unreachableModule)
@@ -1911,37 +1921,57 @@ function makeSewerKindAdapter() {
   })
 }
 
-// Hotel is an office-fabric family: its chunks own explicit mapFamily
-// identity, but the multilevel descriptors they stamp carry no family field
-// and therefore validate through the office adapter — the same default that
-// structureFamily applies at runtime (structures/contract.js). Registration
-// audits expect the office adapter namespace for these families rather than
-// a parallel hotel adapter set.
+// Hotel has its own floor-plan grammar but shares Office's multilevel
+// descriptor contract. Those descriptors carry no family field and therefore
+// validate through the office adapter — the same default that structureFamily
+// applies at runtime (structures/contract.js). Registration audits expect the
+// office adapter namespace for these families rather than parallel adapters.
 const OFFICE_FABRIC_FAMILIES = Object.freeze([
   MAP_FAMILY_OFFICE,
   MAP_FAMILY_HOTEL,
 ])
 
-const expectedAdapterFamily = (family) =>
-  OFFICE_FABRIC_FAMILIES.includes(family) ? MAP_FAMILY_OFFICE : family
+// Catalog volumes (v26) always carry their own family and kind — Hotel's
+// catalog validates through the hotel adapter, not Office's.
+const expectedAdapterFamily = (family, kind = null) =>
+  !isCatalogKind(kind) && OFFICE_FABRIC_FAMILIES.includes(family) ? MAP_FAMILY_OFFICE : family
+
+function makeCatalogKindAdapter(family) {
+  const kind = CATALOG_KINDS[family]
+  return Object.freeze({
+    family,
+    kind,
+    auditFixture(fixture) {
+      const reasons = auditStructureFixture(fixture, family, kind)
+      const descriptors = Array.isArray(fixture?.descriptors) ? fixture.descriptors : []
+      return [...new Set([
+        ...reasons,
+        ...descriptors.flatMap((d) => catalogDescriptorErrors(d).map((r) => `${family}:${r}`)),
+      ])]
+    },
+    auditDescriptor(descriptor) {
+      return catalogDescriptorErrors(descriptor).map((r) => `${family}:${r}`)
+    },
+  })
+}
 
 const FAMILY_ADAPTERS = Object.freeze({
   [MAP_FAMILY_OFFICE]: makeFamilyAdapter(
     MAP_FAMILY_OFFICE,
-    [STRUCTURE_KIND_OFFICE]
+    [STRUCTURE_KIND_OFFICE, CATALOG_KINDS[MAP_FAMILY_OFFICE]]
   ),
-  [MAP_FAMILY_SEWER]: makeFamilyAdapter(MAP_FAMILY_SEWER, [SEWER_KIND]),
+  [MAP_FAMILY_SEWER]: makeFamilyAdapter(MAP_FAMILY_SEWER, [SEWER_KIND, CATALOG_KINDS[MAP_FAMILY_SEWER]]),
   [MAP_FAMILY_TOWER]: makeFamilyAdapter(
     MAP_FAMILY_TOWER,
-    [STRUCTURE_KIND_TOWER]
+    [STRUCTURE_KIND_TOWER, CATALOG_KINDS[MAP_FAMILY_TOWER]]
   ),
   [MAP_FAMILY_LATTICE]: makeFamilyAdapter(
     MAP_FAMILY_LATTICE,
-    [STRUCTURE_KIND_LATTICE]
+    [STRUCTURE_KIND_LATTICE, CATALOG_KINDS[MAP_FAMILY_LATTICE]]
   ),
   [MAP_FAMILY_HOTEL]: makeFamilyAdapter(
     MAP_FAMILY_HOTEL,
-    [STRUCTURE_KIND_OFFICE]
+    [STRUCTURE_KIND_OFFICE, CATALOG_KINDS[MAP_FAMILY_HOTEL]]
   ),
 })
 
@@ -1953,6 +1983,10 @@ const KIND_ADAPTERS = Object.freeze({
   [SEWER_KIND]: makeSewerKindAdapter(),
   [STRUCTURE_KIND_TOWER]: makeTowerKindAdapter(),
   [STRUCTURE_KIND_LATTICE]: makeLatticeKindAdapter(),
+  ...Object.fromEntries(
+    [MAP_FAMILY_OFFICE, MAP_FAMILY_HOTEL, MAP_FAMILY_SEWER, MAP_FAMILY_TOWER, MAP_FAMILY_LATTICE]
+      .map((family) => [CATALOG_KINDS[family], makeCatalogKindAdapter(family)])
+  ),
 })
 
 // Family identity and descriptor-kind identity are deliberately separate
@@ -2753,7 +2787,7 @@ function rowReasons({
       const kindAdapter = adapters?.kinds?.[emission?.kind]
       if (
         !kindAdapter ||
-        kindAdapter.family !== expectedAdapterFamily(family) ||
+        kindAdapter.family !== expectedAdapterFamily(family, emission?.kind) ||
         (familyAdapter && !familyAdapter.kinds.includes(emission?.kind))
       ) {
         addReason(reasons, AUDIT_REASONS.missingKindAdapter)
@@ -2980,7 +3014,7 @@ function localLatticeEdgeState(data, axis, line, cell) {
       }
 }
 
-// Evaluate the 3x3 chamber window around every anchor this chunk hosts on its
+// Evaluate the declared platform around every anchor this chunk hosts on its
 // own floor. Windows are descriptor-aimed rather than scanned: on street level
 // an arbitrary all-open window would out-score the real chamber (12 seams, no
 // rails) and misreport its cue sources.
@@ -2990,24 +3024,31 @@ function bestPartialLatticeChamber(data, descriptor) {
     anchor.levelCy === data.cy &&
     Math.floor(anchor.gx / CHUNK) === data.cx &&
     Math.floor(anchor.gz / CHUNK) === data.cz
-  ).map((anchor) => ({
-    x: anchor.gx - data.cx * CHUNK - 1,
-    z: anchor.gz - data.cz * CHUNK - 1,
-  })).filter(({ x, z }) => x >= 0 && x <= CHUNK - 4 && z >= 0 && z <= CHUNK - 4)
-  for (const { x, z } of windows) {
+  ).map((anchor) => {
+    const bounds = latticeChamberBounds(anchor)
+    return {
+      x: bounds.x0 - data.cx * CHUNK,
+      z: bounds.z0 - data.cz * CHUNK,
+      width: bounds.x1 - bounds.x0 + 1,
+      depth: bounds.z1 - bounds.z0 + 1,
+    }
+  }).filter(({ x, z, width, depth }) =>
+    x >= 0 && x + width < CHUNK && z >= 0 && z + depth < CHUNK
+  )
+  for (const { x, z, width, depth } of windows) {
     {
       const sides = [
-        Array.from({ length: 3 }, (_, offset) => ['h', z, x + offset]),
-        Array.from({ length: 3 }, (_, offset) => ['v', x + 3, z + offset]),
-        Array.from({ length: 3 }, (_, offset) => ['h', z + 3, x + offset]),
-        Array.from({ length: 3 }, (_, offset) => ['v', x, z + offset]),
+        Array.from({ length: width }, (_, offset) => ['h', z, x + offset]),
+        Array.from({ length: depth }, (_, offset) => ['v', x + width, z + offset]),
+        Array.from({ length: width }, (_, offset) => ['h', z + depth, x + offset]),
+        Array.from({ length: depth }, (_, offset) => ['v', x, z + offset]),
       ]
       let rails = 0
       let seams = 0
       let plainSides = 0
       let owned = 0
-      for (let lz = z; lz < z + 3; lz++) {
-        for (let lx = x; lx < x + 3; lx++) {
+      for (let lz = z; lz < z + depth; lz++) {
+        for (let lx = x; lx < x + width; lx++) {
           if (data.spaceId[cIdx(lx, lz)] === descriptor.id) owned++
         }
       }
@@ -3218,12 +3259,19 @@ export function auditChunkFamilyRegistrations(
     // adapter namespace exactly.
     if (
       !structureAdapter ||
-      structureAdapter.family !== expectedAdapterFamily(family) ||
+      structureAdapter.family !== expectedAdapterFamily(family, structureKind) ||
       !structureFamilyAdapter?.kinds?.includes(structureKind) ||
       !structureAuditAdapter ||
-      structureAuditAdapter.family !== expectedAdapterFamily(family)
+      structureAuditAdapter.family !== expectedAdapterFamily(family, structureKind)
     ) {
       fail(family, structureKind, AUDIT_REASONS.missingKindAdapter)
+      continue
+    }
+
+    if (isCatalogKind(structureKind)) {
+      for (const reason of structureAuditAdapter.auditDescriptor(structureDescriptor)) {
+        fail(family, structureKind, reason)
+      }
       continue
     }
 

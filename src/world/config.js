@@ -19,14 +19,14 @@ import {
 export const SEWER_RELEASE_EVIDENCE = Object.freeze({
   family: MAP_FAMILY_SEWER,
   byteImpact: 'changed-output',
-  previousVersion: 23,
-  previousFamilyRepresentativeDigest: '30147892c1c8202df42606804d5a40515ed3f3bd3244dbd37cafd8ba7da71234',
-  previousFamilyCorpusDigest: '93f0845509f5d44d30716e308a4fba2fcd9fda7f81bddf5f3f85efec29d5a01b',
-  generatorVersion: 24,
-  globalGoldenDigest: 'baabac4a0fcab5b1bae318b97f19f6927b0b483fa9c31a0b39b5d776d06f434f',
-  maximumHeightGoldenDigest: '39e6d043440034ba47a2df88c57010c3c93d4dc7001264aa807614dd0d28b5cb',
-  familyRepresentativeDigest: 'd1f42fd10655dff3f00da6eea39ad999579ba056089c3dbfaef4a30c27166740',
-  familyCorpusDigest: '2707114f638386f6b355bdc768089d205028d50c4249ec1bc505cfc38e9832c5',
+  previousVersion: 26,
+  previousFamilyRepresentativeDigest: '0002400fc39ba93f85d02d84b55b81a8197182f11d0a7e1bc3ca761ef4dd5ad3',
+  previousFamilyCorpusDigest: 'b9bfec4700f1379b3c4cbe4e182184975edb4d76be3177340163b98a0a12f1bf',
+  generatorVersion: 27,
+  globalGoldenDigest: '79d532b28ad7d52c537a282596f02618fa48a5d62604d8ce7c5f7e75a503eeb1',
+  maximumHeightGoldenDigest: '06a6341e7a21f15f447fd4c6b0d215f2670f9883a327f26a9eb39b3292a1fe03',
+  familyRepresentativeDigest: '6e2e3bac0a2dded2243cc2044221172ec63cd5a9ff1681239428301bb64a6315',
+  familyCorpusDigest: '9c3f6e36daa2e30646087f70036e00b5d3ac6ae59ffb902f831c4b9cd4834aef',
   profileIdentity: 'sewer-forced-audit:loops-2:right-0.65:lamp-2-0.35',
   seedDerivation: 'hashStr("audit-sewer-N#1")',
   affectsMaximumHeight: false,
@@ -35,14 +35,14 @@ export const SEWER_RELEASE_EVIDENCE = Object.freeze({
 export const TOWER_RELEASE_EVIDENCE = Object.freeze({
   family: MAP_FAMILY_TOWER,
   byteImpact: 'changed-output',
-  previousVersion: 23,
-  previousFamilyRepresentativeDigest: 'a66afb4d7dc55f42e35b262cd50c6297ed621b58352e3f84c73c504ddc3533e3',
-  previousFamilyCorpusDigest: '34d1e8737670af9090b8882f0f469f3828f6365a9f5e797da94b30f3e5ef9fb8',
-  generatorVersion: 24,
-  globalGoldenDigest: 'baabac4a0fcab5b1bae318b97f19f6927b0b483fa9c31a0b39b5d776d06f434f',
-  maximumHeightGoldenDigest: '39e6d043440034ba47a2df88c57010c3c93d4dc7001264aa807614dd0d28b5cb',
-  familyRepresentativeDigest: 'b48c1802a97f139613eff007745b3270b13f5b4b5d98f0c96246c876155b6777',
-  familyCorpusDigest: '161ad0b30685d2818a35f9cb62caab2f838a4f0cbac3ac704b0888aa187b354f',
+  previousVersion: 26,
+  previousFamilyRepresentativeDigest: '89e187765888861a75117052c283fec0690166ff6f1a0da3a0bda3bf4330a6f8',
+  previousFamilyCorpusDigest: 'ea0bac62dc44834e94abe04f09a42df86b7528d76bfff023e02f097d73cfb5ca',
+  generatorVersion: 27,
+  globalGoldenDigest: '79d532b28ad7d52c537a282596f02618fa48a5d62604d8ce7c5f7e75a503eeb1',
+  maximumHeightGoldenDigest: '06a6341e7a21f15f447fd4c6b0d215f2670f9883a327f26a9eb39b3292a1fe03',
+  familyRepresentativeDigest: '669f3426b980c13b954bb845fe5a790c75f8b22bcc1c251307c0837186a22dbc',
+  familyCorpusDigest: '76115f7d329fdf91ef91d41a33ca6369bf8428dc07424f1d80b48fe32c9e3c17',
   profileIdentity: 'tower-forced-audit:levels-3:participants-2:skybridge-1',
   seedDerivation: 'fixed-root-seeds(0x5a17,0x7157,0xc0ffee)',
   affectsMaximumHeight: true,
@@ -51,14 +51,14 @@ export const TOWER_RELEASE_EVIDENCE = Object.freeze({
 export const LATTICE_RELEASE_EVIDENCE = Object.freeze({
   family: MAP_FAMILY_LATTICE,
   byteImpact: 'changed-output',
-  previousVersion: 23,
-  previousFamilyRepresentativeDigest: '1c75114c9a666e15c2d8963ab8762a0c394545d221ca67b46889201ad59e9604',
-  previousFamilyCorpusDigest: '9afa537be75ec0e0569214748d508c1be2a53545955949485c9664c8cf099dc3',
-  generatorVersion: 24,
-  globalGoldenDigest: 'baabac4a0fcab5b1bae318b97f19f6927b0b483fa9c31a0b39b5d776d06f434f',
-  maximumHeightGoldenDigest: '39e6d043440034ba47a2df88c57010c3c93d4dc7001264aa807614dd0d28b5cb',
-  familyRepresentativeDigest: '97e573a42a6b45c97478b74bff03ed22611ef5c68ce1355ed99ee160dbd59338',
-  familyCorpusDigest: '140b159026e964dbfa1028c59fd0456d2a696779e57a2c628d02f5fd30976ad3',
+  previousVersion: 26,
+  previousFamilyRepresentativeDigest: '9db4f80cf9673ce07a07803e19f1c02938e7f613b00330008a3209d2f9717acc',
+  previousFamilyCorpusDigest: '075fe413764dcbfb020bf7c694bc8e3c26508669916c8fb9d0afd197c5cb3370',
+  generatorVersion: 27,
+  globalGoldenDigest: '79d532b28ad7d52c537a282596f02618fa48a5d62604d8ce7c5f7e75a503eeb1',
+  maximumHeightGoldenDigest: '06a6341e7a21f15f447fd4c6b0d215f2670f9883a327f26a9eb39b3292a1fe03',
+  familyRepresentativeDigest: '225647f28578a06ccb689b723de46802c21e9f1551f14bfb9c92ed87720e2e1e',
+  familyCorpusDigest: '364edf0d0165c7fd3045263213dffb83e9389f73303a1e385b13187bc03539e5',
   profileIdentity: 'lattice-forced-audit:levels-5:district-4:anchors-8:cycles-0.12-0.25:exposure-5-20:cues-8',
   seedDerivation: 'hashStr("audit-lattice-N#1"), N=0..2',
   affectsMaximumHeight: true,
@@ -67,17 +67,42 @@ export const LATTICE_RELEASE_EVIDENCE = Object.freeze({
 export const HOTEL_RELEASE_EVIDENCE = Object.freeze({
   family: MAP_FAMILY_HOTEL,
   byteImpact: 'changed-output',
-  previousVersion: 23,
-  previousFamilyRepresentativeDigest: 'b17bd9eba5dc326ecdfee6a79c3a0601ae725abc51a7a6741ebdb7985a347a7a',
-  previousFamilyCorpusDigest: 'a33e448b9d0a640423afd71c5e6951892f40888a5212f0d7c364480e2fb82d74',
-  generatorVersion: 24,
-  globalGoldenDigest: 'baabac4a0fcab5b1bae318b97f19f6927b0b483fa9c31a0b39b5d776d06f434f',
-  maximumHeightGoldenDigest: '39e6d043440034ba47a2df88c57010c3c93d4dc7001264aa807614dd0d28b5cb',
-  familyRepresentativeDigest: '99916c6f5127f7f4d4df3819b3606028a76f2bb4d5bc5d9c8692ceebf1ac600a',
-  familyCorpusDigest: '49ed8800bea2aff9bee559ee9d68ae7d75493633519f3980bfe6ea13730d27eb',
+  previousVersion: 26,
+  previousFamilyRepresentativeDigest: '74a913544b7aa7bf642081c1ddbc3ccb69c1bc0fb6dda0e4db399923966496df',
+  previousFamilyCorpusDigest: '90f78f6075967a56c62efa1be929807f80fb20e10b525d62ef3e88f59b3b37bd',
+  generatorVersion: 27,
+  globalGoldenDigest: '79d532b28ad7d52c537a282596f02618fa48a5d62604d8ce7c5f7e75a503eeb1',
+  maximumHeightGoldenDigest: '06a6341e7a21f15f447fd4c6b0d215f2670f9883a327f26a9eb39b3292a1fe03',
+  familyRepresentativeDigest: '8a4ee645d544e44003095773bd35d0eb6f6657a2cefeac16527632b04393dfac',
+  familyCorpusDigest: '9a674f7124457c8e2b941b62c18e1dc393ffccce3f3ae94e15c63a6a243b5391',
   profileIdentity: 'hotel-forced-audit',
   seedDerivation: 'hashStr("audit-hotel-N#1")',
   affectsMaximumHeight: false,
+})
+
+// Structure catalog (v26, structures/catalog): per-family election of
+// procedural small / medium / large volumes. Office uses the default block in
+// DEFAULT_WORLD_CONFIG.catalog; worldConfigForFamily (mapFamily.js) projects
+// the family's block. `period` is the vertical band (storeys) a district
+// plans at once, `attempts` how many salted placements it tries per band,
+// `maxChunksPerFloor` the most structure chunks (landmark + catalog) one
+// storey of a 4×4 district may carry — always leaving stair-fallback room.
+const CATALOG_BASE = Object.freeze({
+  enabled: true,
+  districtChunks: 4,
+  period: 9,
+  attempts: 6,
+  maxChunksPerFloor: 7,
+  sizeWeights: Object.freeze({ small: 5, medium: 3, large: 2 }),
+  salt: 0x6361,
+})
+
+export const FAMILY_CATALOG_PROFILES = Object.freeze({
+  [MAP_FAMILY_OFFICE]: CATALOG_BASE,
+  [MAP_FAMILY_HOTEL]: Object.freeze({ ...CATALOG_BASE, period: 13, attempts: 7, sizeWeights: Object.freeze({ small: 4, medium: 4, large: 2 }), salt: 0x6862 }),
+  [MAP_FAMILY_SEWER]: Object.freeze({ ...CATALOG_BASE, period: 7, attempts: 5, maxChunksPerFloor: 6, sizeWeights: Object.freeze({ small: 5, medium: 3, large: 1 }), salt: 0x7377 }),
+  [MAP_FAMILY_TOWER]: Object.freeze({ ...CATALOG_BASE, period: 11, attempts: 12, maxChunksPerFloor: 8, sizeWeights: Object.freeze({ small: 4, medium: 3, large: 3 }), salt: 0x7477 }),
+  [MAP_FAMILY_LATTICE]: Object.freeze({ ...CATALOG_BASE, period: 8, attempts: 16, maxChunksPerFloor: 10, sizeWeights: Object.freeze({ small: 3, medium: 4, large: 3 }), salt: 0x6c61 }),
 })
 
 // Primary designer-facing tuning surface. Generators read these values through
@@ -108,10 +133,9 @@ export const DEFAULT_WORLD_CONFIG = {
         participants: 2,
         skybridgeLevelOffset: 1,
       },
-      // Lattice (v24): a bigger, denser multilayer catwalk district — 4x4
-      // chunks, five terraced floors, an 8x8 anchor grid at a uniform 7-cell
-      // pitch, and a higher cycle budget so the narrow deck network reads as
-      // a looping city block rather than a tree.
+      // Lattice: a 4x4-chunk, five-floor terraced catwalk district with an
+      // 8x8 anchor grid. v25 varies bay pitch/platforms within stair-safe
+      // bounds; the cycle budget gives the narrow deck network alternate routes.
       [MAP_FAMILY_LATTICE]: {
         enabled: true,
         districtChunks: 4,
@@ -338,6 +362,9 @@ export const DEFAULT_WORLD_CONFIG = {
   furniture: {
     enabled: true,
   },
+
+  // Structure catalog (v26) — see FAMILY_CATALOG_PROFILES above.
+  catalog: structuredClone(CATALOG_BASE),
 
   // Exit / spawn clearing radius (cells).
   exit: { clearRadius: 1 },

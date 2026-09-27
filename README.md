@@ -15,9 +15,22 @@ Useful verification commands:
 ```bash
 npm test
 npm run audit:world
+npm run review:structures
+npm run report:liminal
+npm run report:families
 npm run lint
 npm run build
 ```
+
+`review:structures` bakes complete multilevel structure volumes (each family's
+landmark plus one catalog volume per size class, sewer included) across seeds
+and applies the map editor's structure audit; see [Map Editor](docs/map-editor.md#multilevel-structures).
+`report:families` measures, from layout alone, how different the map families
+are (centroid effect sizes, confusion matrix, same-seed seam agreement).
+`report:liminal` measures every family and the editor's prototype map kinds
+with the liminal metrics (loops, dead ends, space-syntax integration,
+darkness and its clustering, sightlines, repetition); see
+[the research update](docs/liminal-horror-design.md#research-update-2026-09-26-liminality-horror-layout-and-new-map-kinds).
 
 The checked-in performance probes are report-only unless explicit
 `--budget-*` options are supplied:
@@ -92,23 +105,34 @@ The world is generated reproducibly from a text seed. The headless generation
 pipeline produces thin-wall `ChunkData`; rendering, collision, AI, minimap, and
 debug tools all consume that same topology.
 
-### Current architecture (world-gen version 24)
+### Current architecture (world-gen version 27)
 
 Office remains the default. All five shipped profiles are enabled and can be
 selected on the title screen or with `?family=<name>`:
 
-| Family | Current spatial identity |
-| --- | --- |
-| `office` | Portal-first districts, institutional rooms, bounded landmark halls, and 4–15-storey atria |
-| `sewer` | Dry, bounded utility networks with chambers and canonical manhole stairs |
-| `tower` | Three-floor, two-chunk towers with a skybridge and lethal exposed voids |
-| `lattice` | 4×4-chunk, five-floor terraced catwalk districts with an 8×8 anchor grid |
-| `hotel` | The office structural pipeline with residential room catalogs, furniture, lighting, and palette |
+| Family | Current spatial identity | Its procedural structures (small · medium · large) |
+| --- | --- | --- |
+| `office` | Irregular room districts, bullpens, dogleg galleries, waiting loops, bounded halls and tall atria | stair halls, glazed light wells, sunken bullpens · light courts, twin voids, plant mezzanines · bureau great halls, carceri atria |
+| `hotel` | Long double-loaded guest wings of small uniform rooms, transverse halls, reception halls and its own taller atria | open-well grand stairs, service cores, ballrooms · Portman atria, motel courts · grand and ribcage atria |
+| `sewer` | Dry interceptor galleries, collector confluences, bypass rings and manhole stairs | drop shafts, weir chambers, maintenance stairs · cisterns, surge chambers · pump octagons, pressure tanks, stepwells |
+| `tower` | Broad galleries around huge service cores with 3-wide district mouths, naves, courts and skybridges | service shafts, stair cores, drop galleries · carceri naves, split-level car parks · highwalk podia, panoptic wells, megastructure wells |
+| `lattice` | Service alleys, open utility yards and booths, five-floor catwalk districts | stair pylons, gantry crossings, terrace steps · escalator spines, hanging decks · rooftop networks, module hills, abysses |
 
-Version 24 expands and reconnects the lattice family. The current generator
-also has per-family room catalogs and palettes, catalog-driven furnishing,
-family acoustics, shared structure contracts, hard-void death/reset rules, and
-release evidence for every family. See
+Version 26 gives every family its own **skeleton**. Zone maps, district
+edges, door positions, stair shafts, lamp grids and room modules no longer
+coincide between families for a seed; before this, Office and Hotel shared
+every atrium and stair. Version 26 also adds a per-family **structure
+catalog** of 39 procedural small/medium/large multi-storey volumes. Every one
+has its own stairs on every slab, guarded voids, and storeys that each connect
+to the surrounding floor. Tower and Lattice gained generic stairs between
+their landmarks. `npm run report:families` measures how different the
+families' layouts are. Version 27 fixes Tower landmarks: every upper storey
+now opens both outer gallery walks onto the surrounding ring, so no
+chunk-storey is cut in two. Reusing an older seed intentionally gives a new
+map.
+The current generator also has per-family room catalogs and palettes,
+catalog-driven furnishing, family acoustics, shared structure contracts,
+hard-void death/reset rules, and release evidence for every family. See
 [World Generation Architecture](docs/worldgen-architecture.md) for the current
 module and runtime contract.
 
@@ -333,8 +357,19 @@ Run the standalone editor at `/editor` during Vite development or preview. A
 static host must rewrite `/editor` to `/editor.html`, or expose
 `/editor.html` directly. The editor can bake any map family, author finite
 thin-wall maps, preview shared chunk meshes, and import/export `.yrmap` files.
-See [Map Editor](docs/map-editor.md) for its exact document and file-format
-contracts.
+Its structures section loads canonical multilevel structures as complete
+volumes and reviews them storey by storey — plan overlays for the floor below,
+ceiling openings, stairs and lethal voids, a vertical section view, a 3D
+cutaway, a live audit with located findings, drift against the generator, and
+tool protection for structure-owned cells. It also authors new structures from
+templates (atria, switchback stairwells, split-level overlooks, twin voids,
+repetition-anomaly wings, compression-release suites), explores the infinite
+world of any family and seed as a debugger (structure atlas, inspector, debug
+fills, audits), runs simulations (walk distance, paths, lamp light,
+isovists, a liminal-metrics report, a lighting lab) and builds prototype map
+kinds (transit underpass, parking deck, dead mall, hospital ward, school at
+night). See [Map Editor](docs/map-editor.md) for its exact document and
+file-format contracts.
 
 ## Main generation modules
 

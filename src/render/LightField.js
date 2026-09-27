@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { LIGHT_MAX, LAMP_QUERY_R, EYE_H, layerY } from '../world/constants.js'
-import { lampFlicker, lampTint } from '../world/lampCharacter.js'
+import { FLICKER_SAFE, lampFlicker, lampTint } from '../world/lampCharacter.js'
 
 // Feeds the deferred lighting pass: each refresh it gathers the nearest lit
 // lamps to the player and writes their world positions into the source lamp
@@ -32,6 +32,10 @@ export class LightField {
     // candidates' `cy` tag does not survive the copy; the per-frame flicker
     // must hash the same (x, z, cy) as the tint and the emissive panel.
     this._cy = new Int32Array(LIGHT_MAX)
+    // Bad-tube strobe rate/depth (lampCharacter FLICKER_SAFE / FLICKER_FULL),
+    // set by Engine from the reduceFlicker setting. Must match the GPU twin's
+    // uBadStrobe (DeferredRenderer.setFlickerProfile).
+    this.flicker = FLICKER_SAFE
   }
 
   reset() {
@@ -96,9 +100,10 @@ export class LightField {
     const pos = this.u.uLampPos.value
     const raw = this.u.lampFlickerRaw
     const cy = this._cy
+    const profile = this.flicker
     for (let i = 0; i < n; i++) {
       const v = pos[i]
-      raw[i] = lampFlicker(v.x, v.z, cy[i], this._time)
+      raw[i] = lampFlicker(v.x, v.z, cy[i], this._time, profile)
     }
   }
 }

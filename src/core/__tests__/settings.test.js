@@ -105,6 +105,23 @@ describe('Settings', () => {
     expect(s.get('sensitivity')).toBe(SENS_DEFAULT)
   })
 
+  // Photosensitivity: the safe flicker profile is the default, so a fresh
+  // install, an old blob without the key and a corrupt value all land on it.
+  it('reduceFlicker defaults on and only an explicit false turns it off', () => {
+    stubStorage()
+    expect(DEFAULTS.reduceFlicker).toBe(true)
+    expect(new Settings().get('reduceFlicker')).toBe(true)
+    stubStorage({ volume: 0.4 }) // a blob from before the setting existed
+    expect(new Settings().get('reduceFlicker')).toBe(true)
+    stubStorage({ reduceFlicker: 'no' })
+    expect(new Settings().get('reduceFlicker')).toBe(true)
+    const store = stubStorage({ reduceFlicker: false })
+    const s = new Settings()
+    expect(s.get('reduceFlicker')).toBe(false)
+    expect(s.set('reduceFlicker', 0)).toBe(true) // wrong type -> the safe default
+    expect(saved(store).reduceFlicker).toBe(true)
+  })
+
   it('reset restores and persists the defaults', () => {
     const store = stubStorage({ invertY: true, invertX: true, volume: 0.1 })
     const s = new Settings()
