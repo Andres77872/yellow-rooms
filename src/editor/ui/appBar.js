@@ -1,0 +1,93 @@
+import { WORLD_GEN_VERSION } from '../../world/constants.js'
+import { runCommand, commandById, commandState, formatChord } from './keymap.js'
+import { h, iconButton, setDisabled, setPressed } from './dom.js'
+import { icon } from './icons.js'
+import { isMac } from './tooltip.js'
+
+// Top app bar: document name, Document / Explore switch, undo / redo, file
+// actions, version badge, command palette and help.
+
+export function buildAppBar(app) {
+  const run = (id) => runCommand(commandById(id), app)
+  const bar = h('header', { class: 'edt-appbar', role: 'banner' })
+
+  const brand = h('div', { class: 'edt-brand', tip: { title: 'THE YELLOW ROOMS · map editor', text: 'Author and debug maps: edit a document, or explore the generator’s infinite world read-only.' } },
+    h('span', { class: 'edt-brand-mark', 'aria-hidden': 'true', text: 'YR' }),
+    h('span', { class: 'edt-brand-text', text: 'editor' }))
+  bar.appendChild(brand)
+
+  const name = h('input', {
+    class: 'edt-input edt-docname', type: 'text', 'aria-label': 'Document name', spellcheck: 'false',
+    tip: { title: 'Document name', text: 'Used as the export file name (<name>.yrmap). Press Enter to apply.' },
+  })
+  name.addEventListener('change', () => {
+    app.map.meta.name = name.value.trim() || 'untitled'
+    app._scheduleAutosave?.()
+    app.panel.refresh()
+  })
+  name.addEventListener('keydown', (e) => { if (e.key === 'Enter') name.blur() })
+  bar.appendChild(name)
+
+  const mode = h('div', { class: 'edt-modeswitch', role: 'group', 'aria-label': 'Source' })
+  const docBtn = h('button', { class: 'edt-mode-btn', type: 'button', text: 'Document',
+    tip: { title: 'Document mode', text: 'Edit the finite document with the tools. The document autosaves in this browser. While exploring, E also returns here.' },
+    onClick: () => app.exitExplore() })
+  const expBtn = h('button', { class: 'edt-mode-btn', type: 'button', text: 'Explore', dataset: { cmd: 'mode.explore' },
+    onClick: () => app.enterExplore() })
+  mode.append(docBtn, expBtn)
+  bar.appendChild(mode)
+
+  bar.appendChild(h('span', { class: 'edt-sep', 'aria-hidden': 'true' }))
+  const undo = iconButton({ icon: 'undo', label: 'Undo', cmd: 'edit.undo', onClick: () => run('edit.undo') })
+  const redo = iconButton({ icon: 'redo', label: 'Redo', cmd: 'edit.redo', onClick: () => run('edit.redo') })
+  bar.append(undo, redo)
+  bar.appendChild(h('span', { class: 'edt-sep', 'aria-hidden': 'true' }))
+  bar.append(
+    iconButton({ icon: 'file', label: 'New', showLabel: true, cmd: 'file.new', onClick: () => run('file.new') }),
+    iconButton({ icon: 'import', label: 'Import', showLabel: true, cmd: 'file.import', onClick: () => run('file.import') }),
+    iconButton({ icon: 'export', label: 'Export', showLabel: true, cmd: 'file.export', onClick: () => run('file.export') }),
+  )
+
+  bar.appendChild(h('div', { class: 'edt-spacer' }))
+
+  const version = h('span', { class: 'edt-chip edt-version' })
+  bar.appendChild(version)
+
+  const search = h('button', { class: 'edt-search', type: 'button', dataset: { cmd: 'ui.palette' }, 'aria-label': 'Search actions (command palette)', onClick: () => run('ui.palette') },
+    icon('search'), h('span', { class: 'edt-search-text', text: 'Search actions…' }),
+    h('kbd', { text: formatChord('Mod+K', { mac: isMac() }) }))
+  bar.appendChild(search)
+  bar.appendChild(iconButton({ icon: 'help', label: 'Help and shortcuts', cmd: 'ui.help', onClick: () => run('ui.help') }))
+  const panelBtn = iconButton({ icon: 'panel', label: 'Toggle side panel', cmd: 'ui.inspector', onClick: () => run('ui.inspector') })
+  bar.appendChild(panelBtn)
+
+  const refresh = () => {
+    if (document.activeElement !== name) name.value = app.map.meta.name
+    const explore = app.mode === 'explore'
+    setPressed(docBtn, !explore)
+    setPressed(expBtn, explore)
+    // E returns to the document only while exploring; in Document mode it
+    // would open Explore, so the Document button shows no E chip then.
+    if (explore) docBtn.dataset.tipKeys = 'E'
+    else delete docBtn.dataset.tipKeys
+    name.disabled = explore
+    name.dataset.tip = explore
+      ? 'The document is hidden while exploring; switch back to Document to rename it.'
+      : 'Used as the export file name (<name>.yrmap). Press Enter to apply.'
+    // Same rule (and reason) as the Ctrl/⌘+Z / palette command.
+    for (const [btn, id] of [[undo, 'edit.undo'], [redo, 'edit.redo']]) {
+      const st = commandState(commandById(id), app)
+      setDisabled(btn, st.enabled ? null : st.reason)
+    }
+    const v = app.map.meta.worldGenVersion
+    const stale = app.map.chunks.size && v !== undefined && v !== WORLD_GEN_VERSION
+    version.textContent = `worldgen v${WORLD_GEN_VERSION}`
+    version.classList.toggle('edt-chip-warn', !!stale)
+    version.dataset.tipTitle = stale ? `Document made with worldgen v${v}` : 'World generator version'
+    version.dataset.tip = stale
+      ? `This document was generated by v${v} of the world generator; the current one is v${WORLD_GEN_VERSION}. Drift reports will differ almost everywhere until you regenerate it.`
+      : `The document and the generator both use worldgen v${WORLD_GEN_VERSION}, so drift reports are meaningful.`
+    setPressed(panelBtn, !app.ui?.inspectorHidden)
+  }
+  return { el: bar, refresh }
+}
