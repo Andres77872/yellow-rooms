@@ -147,20 +147,29 @@ and directly changes shipped lighting.
 ### What E4 measured
 
 [07 E4](07-experiments.md#4-e4--monte-carlo-reference-for-the-cell-graph-gi)
-has the full tables. In short, against a 512-path, 6-bounce reference with
-the grid's own emitter model and albedos:
+has the full tables. The comparison uses a 512-path, 6-bounce reference over
+real chunks, with the grid's own emitter model and albedos. There are four
+datasets (office ×2, hotel, sewer), and the reference noise floor is 5%.
 
-- The shipped ambient cube is **structurally single-bounce**. The ceiling
-  term is identically zero, because direct light from overhead fixtures
-  never reaches a downward-facing ceiling. The **up-facing** indirect
-  irradiance is therefore underestimated about 3× everywhere, which is what
-  lights the ceilings and upper walls in reality.
-- Side and down faces are within a modest bias and correlate reasonably with
-  the reference. More Jacobi iterations (8 vs 3) barely help: the diffusion
-  is not the error, the missing second bounce is.
-- A least-squares refit of the existing weights, with the same terms and
-  the same cost, improves the error substantially. See E4 for the per-family
-  numbers and fitted weights.
+- **The ceiling term is identically zero.** The model has no second bounce,
+  so up-facing indirect irradiance (what lights ceilings and upper walls) is
+  **66–73% too dark** in every family.
+- **The floor's direct irradiance is sampled at mid-height (1.6 m)**, not on
+  the floor. Under a fixture, the inverse-square window inflates it by up to
+  about 3.8×. This gives the down-face its 1.9–2.2 relative RMSE. The current
+  weights partly compensate, so the cube is 45–65% brighter than true
+  one-bounce light yet still 9–21% darker than multi-bounce light.
+- **More Jacobi iterations do nothing.** 8 instead of 3 changes relative RMSE
+  by less than 1%.
+- **Cheap models, cross-validated leave-one-dataset-out.** Sampling the floor
+  on the floor, adding a floor→ceiling bounce term (one multiply-add), and
+  refitting the six weights cuts per-cell relative RMSE by **53–57% in every
+  family**, including the held-out hotel and sewer:
+  - office 1.31 → 0.58;
+  - hotel 1.44 → 0.62;
+  - sewer 1.52 → 0.71.
+
+  Up-face correlation rises from 0.50–0.69 to 0.86–0.90.
 
 ### Design
 
@@ -172,19 +181,23 @@ the grid's own emitter model and albedos:
    - JSON output (bias, correlation, relative RMSE per face class, fitted
      weights);
    - `--budget-*` options like the other benchmarks.
-2. **Model fix, cheapest first.**
-   1. **Second-bounce ceiling term.** Feed the ceiling face with the floor's
-      bounced radiosity:
-      - `E_ceil += albedo.ceiling × ρ_floor × D_down_mean × k`, where `k` is
-        fitted.
-      - Equivalently, run one extra Jacobi pass in which ceilings see the
-        cell's floor radiosity.
-
-      This is O(cells) and fixes the dominant bias.
-   2. **Refit the ambient-cube weights** (0.5 / 0.25 / 0.1, 0.6 / 0.4) from
-      the report, as named constants in `gridSpec.js` with a comment linking
-      the report.
-   3. Keep 3 iterations unless the report shows otherwise.
+2. **Model fix** (E4's model C: same inputs, same O(cells) cost):
+   1. **Sample the floor's direct irradiance on the floor.** In
+      `_solveGI`, the floor emission term uses `_directCube` evaluated at the
+      slab (y ≈ `layerY(cy)` + 2 cm) instead of mid-height. That is one extra
+      pass over the cell's ≤ `LIST_MAX` list entries.
+   2. **Second bounce for up-facing surfaces.** The up face of the ambient
+      cube adds a weighted floor-radiosity term (`w·floor`), so the lit floor
+      finally lights the ceiling.
+   3. **Refit the ambient-cube weights** from the report, as named constants
+      in `gridSpec.js` with a comment linking the report. E4's fit is
+      side `0.642·near + 0.485·(ceil+floor) + 0.611·avgSide`,
+      up `0.412·floor + 0.642·avgSide`, down `0.709·floor + 1.386·avgSide`.
+      Treat these as a starting point; refit on the full corpus.
+   4. Keep 3 iterations; E4 shows more do not help.
+   5. **Apply a mean-preserving scale last,** so the fix changes *structure*
+      (where bounce light lands) separately from overall GI level. The level
+      stays an art-direction lever (`look.lampBounce` / GI sliders).
 3. **Guard test.** `world/__tests__/gi-reference.test.js` runs the report on
    one pinned office seed with a small path count (for example 32 paths,
    centre chunk, fixed RNG), which makes it deterministic. It asserts:
@@ -205,7 +218,9 @@ the grid's own emitter model and albedos:
 ### Acceptance
 
 - The report is committed with its numbers.
-- Up-face bias falls from about −65% to within ±15%.
+- On every held-out dataset:
+  - up-face bias is within ±25% (E4: −7% to −24%, down from −66% to −73%);
+  - overall relative RMSE is ≤ 0.75 (E4: 0.58–0.71, down from 1.26–1.52).
 - The guard test is green.
 - `benchmark:light-grid` shows no job-time regression beyond noise.
 
