@@ -17,7 +17,7 @@ can be reproduced.
 | --- | --- | --- |
 | E1 | Does the library install cleanly next to three r185, and what does it cost to ship? | Yes. `WebGLPathTracer` is about 61 kB gzip and three-mesh-bvh about 16 kB (three external). Two deprecation warnings on r185. |
 | E2 | Would the tracer's blue noise reduce the engine's screen-space noise? | **No** under the engine's 5×5 resolve. **Yes** for pattern structure: spectral peaks fall 55× vs IGN. |
-| E3 | Can real Yellow Rooms chunks be path traced, and at what cost? | Yes, headless and without a GPU. 3×3 chunks give 92k triangles and 148 lights, at 605 ms/sample on SwiftShader. Noise is still about 11% at 1024 spp (uniform light choice); light culling is essential. |
+| E3 | Can real Yellow Rooms chunks be path traced, and at what cost? | Yes, headless and without a GPU. 3×3 chunks give 92k triangles and 148 lights. The tracer is energy-consistent, but uniform light choice makes 148 panels about 2× noisier and 45% slower per sample than 9 culled ones; light culling is essential. |
 | E4 | How accurate is the shipped cell-graph GI against Monte Carlo ground truth? | Up-facing bounce is 66–73% too dark; floor radiosity is sampled at mid-height. A same-cost fix cuts held-out error by 53–57% across office, hotel and sewer. |
 
 ---
@@ -130,76 +130,120 @@ generated geometry, and what does it take?
 1. It imports the game's own `Chunk`, `createGBufferMaterials`,
    `createGeometries`, `worldConfigForFamily` and `hashStr` from `src/`, with
    three aliased to the repo's copy.
-2. It builds office chunks around spawn with seed text `review` (level 1),
+2. It builds 3×3 office chunks around spawn (seed text `review`, level 1),
    including the spawn clearing, exactly as `ChunkManager` does.
 3. It mirrors materials with `debug/PbrReference.js`'s mapping and
    **expands every `InstancedMesh`** into world-space geometry, folding
    `instanceColor` into vertex colour. Geometry is merged per material.
-4. Every lit panel becomes a downward `RectAreaLight` (1.7 × 1.0).
+4. Every lit panel becomes a downward `RectAreaLight` (1.7 × 1.0) placed
+   **1 cm below** the panel mesh, and the lit-panel material becomes a
+   non-emissive diffuser (see the setup note below).
 5. It runs `WebGLPathTracer` with tiles (1, 1), `bounces` 4 and
    `textureSize` 256².
 6. It reads back the linear HDR accumulation at checkpoints and computes
-   the relative RMSE of luminance against the final image.
+   the relative RMSE of luminance (RMSE ÷ image mean) against the final
+   image.
 
 Chromium ran with `--use-angle=swiftshader --enable-unsafe-swiftshader`. The
 driver reported `ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)))`,
 with `EXT_color_buffer_float` present, `MAX_TEXTURE_SIZE` 8192,
 `MAX_ARRAY_TEXTURE_LAYERS` 2048, and no `KHR_parallel_shader_compile`.
 
-![Path-traced office corridor at 16, 64, 256 and 1024 spp](img/e3-office-convergence.jpg)
+![Path-traced office corridor at 16, 64 and 256 spp](img/e3-office-convergence.jpg)
 
-*Run A. Office, seed `review`, 3×3 chunks around spawn, 320×180, 4 bounces,
+*Office, seed `review`, 3×3 chunks around spawn, 320×180, 4 bounces,
 148 rect lights. This is the game's own generated geometry and palette
 textures, path traced. It is uncalibrated: panel power is a guess and the
 grade is three's ACES, not the engine's look.*
 
-**Run A: the full 3×3 neighbourhood.**
+### Scene cost
+
+Identical for every run:
 
 | Stage | Result |
 | --- | --- |
-| Generate + mesh 9 chunks (game code) | 330 ms |
-| Expand 7,806 instances → 10 merged meshes | **92,168 triangles**, 194 ms |
+| Generate + mesh 9 chunks (game code) | 320–330 ms |
+| Expand 7,806 instances → 10 merged meshes | **92,168 triangles**, 140–190 ms |
 | Lit panels → `RectAreaLight`s | **148** |
-| `setScene` (flatten, SAH BVH, texture packing; synchronous) | 855 ms |
-| Shader compile + first sample (no parallel-compile extension) | 371 ms |
-| Time per full sample, 320×180 | **605 ms** (SwiftShader) |
-| 1024 spp total | 619 s |
-| Reference mean luminance / non-black pixels | 0.0913 / 99.9% |
+| `setScene` (flatten, SAH BVH, texture packing; synchronous) | 0.8–0.9 s |
+| Shader compile + first submitted sample (no parallel-compile extension) | 0.3–0.4 s |
 
-Convergence. The measured relative RMSE is against the 1024 spp image. The
-snapshots are prefixes of the same accumulation, so the corrected value
-divides by `√(1 − n/1024)`.
+### Controls
 
-| spp | Measured relRMSE | Corrected (true error at n) |
-| ---: | ---: | ---: |
-| 16 | 0.924 | 0.93 |
-| 64 | 0.419 | 0.43 |
-| 256 | 0.181 | 0.21 |
-| 1024 | — | **≈ 0.11** (per-sample σ ≈ 3.3–3.7) |
+All at 160×90, 4 bounces, same view:
 
-**Reading.**
+| Run | Lights | spp | Image mean luminance | Steady-state time per sample | Per-sample noise σ |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| all | 148 | 1024 | **0.0405** | 430–460 ms | ≈ 7.8 |
+| near (≤ 15 m from camera) | 9 | 1024 | **0.0375** | 300–310 ms | ≈ 3.7 |
+| far (> 15 m) | 139 | 256 | **0.0029** | — | — |
+| all, MIS off (lights only via BSDF hits) | 148 | 256 | 0.0394 (84% of pixels non-black) | ≈ 260 ms | very high |
 
-1. **Feasibility is proven end to end.** The game's `Chunk` +
-   `PbrReference`-style mapping + instance expansion is all a reference view
-   needs; no engine change is required. Two r185 deprecation warnings appear
-   ([E1](#1-e1--packaging-compatibility-and-bundle-cost)). Otherwise the only
-   console noise was a favicon 404.
-2. **Instance expansion is the dominant scene cost.** One 3×3 office
+How to read the table:
+
+- **Per-sample noise σ.** It comes from checkpoint relative RMSE against
+  the 1024 spp image, corrected for the snapshots being prefixes of the same
+  accumulation: `σ = rmse ÷ √(1/n − 1/N)`.
+  - all: 1.895 / 0.984 / 0.423 at n = 16 / 64 / 256.
+  - near: 0.971 / 0.456 / 0.192.
+- **Time per sample.** Measured *between synchronising readbacks*.
+  `gl.finish()` does not block in Chrome, so per-call timings would only
+  measure command submission.
+
+### Reading
+
+1. **Feasibility is proven end to end.** The game's `Chunk`, a
+   `PbrReference`-style mapping and instance expansion are all a reference
+   view needs; no engine change is required. Two r185 deprecation warnings
+   appear ([E1](#1-e1--packaging-compatibility-and-bundle-cost)). Otherwise
+   the only console noise was a favicon 404.
+2. **The tracer is energy-consistent.**
+   - Near + far = 0.0375 + 0.0029 = 0.0404, versus 0.0405 for all lights.
+   - The MIS-off estimate (0.0394) agrees within its own large noise.
+3. **Light count drives noise and cost, as the code predicts.** Uniform
+   light selection plus an O(lights) forward-hit loop
+   ([02 §5](02-webgl-backend.md#5-lights-next-event-estimation-and-mis))
+   mean that 148 panels have about 2.1× the per-sample noise of the 9 nearby
+   ones and cost about 45% more per sample.
+   - To reach 5% per-pixel error, all 148 lights would need about 24,000
+     spp, and the 9 near lights about 5,500 spp.
+   - Culling to 15 m therefore gets there about 6× faster, at the price of
+     the far lamps' 7% of the image energy.
+   - Culling by the grid's own visible light lists instead of a radius would
+     keep most of that energy. That is why [P1](06-proposals.md#p1--path-traced-reference-mode-f2--editor)
+     makes culling mandatory and a denoiser (OIDN, WebGPU) desirable.
+4. **Instance expansion is the dominant scene cost.** One 3×3 office
    neighbourhood goes from a few dozen instanced draws to 92k flattened
    triangles. The WebGPU backend's two-level BVH removes this step
    ([03 §2](03-webgpu-backend.md#2-bvh-and-scene-data)).
-3. **Noise is the practical limit, and light count drives it.** Even at
-   1024 spp, per-pixel error is about 11%. Reaching 5% would need about
-   4,600 spp. The cause is the tracer's **uniform light selection** over 148
-   panels ([02 §5](02-webgl-backend.md#5-lights-next-event-estimation-and-mis)):
-   most NEE samples go to panels that are far away or behind walls. Run B
-   below measures the effect of culling. A reference view should cull lights
-   (P1), and a clean still needs a denoiser (OIDN, WebGPU only).
-4. **SwiftShader numbers are CPU numbers.** A desktop GPU should run this
-   shader one to two orders of magnitude faster (an estimate; no GPU was
-   available to measure it). Treat the 605 ms/sample as an upper
-   bound that shows the headless route is viable for batch or CI-style
-   evidence, not as a player-facing cost.
+5. **SwiftShader numbers are CPU numbers.** 160×90 is about 14k pixels.
+   About 0.45 s per sample there means roughly 1.8 s per sample at 320×180
+   on this CPU. A desktop GPU should be one to two orders of magnitude faster
+   (an estimate; no GPU was available to measure it). The headless route is
+   viable for batch or CI-style evidence, not as a player-facing cost.
+
+![Light culling at equal sample counts](img/e3-light-culling.jpg)
+
+*320×180, 64 and 256 spp. Left pair: all 148 panels. Right pair: only the 9
+within 15 m. At equal samples the culled image is visibly cleaner. The far
+corridor darkens because its lamps are gone.*
+
+### Setup note: a trap found while running E3
+
+The first version of the spike placed each `RectAreaLight` **on** the
+lit-panel mesh's plane (`WALL_H − 0.02`, `world/mesh.js:665`), and kept that
+mesh emissive. Two things then went wrong:
+
+- The panel light was double-counted.
+- NEE shadow rays and BSDF light hits became floating-point ties against the
+  coplanar mesh.
+
+The result was **non-additive**: a 9-light subset rendered 11% *brighter*
+than the full 148-light scene, and the far lamps alone came out implausibly
+bright. Moving the light 1 cm below the mesh and making the mesh a
+non-emissive diffuser restored additivity (the controls above). The lesson
+is recorded as a P1 requirement. The first version's timings were also
+wrong, because they relied on `gl.finish()`. Both are corrected here.
 
 ---
 

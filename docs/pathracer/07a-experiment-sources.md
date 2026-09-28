@@ -28,7 +28,10 @@ node noise-experiment.mjs && node noise-edge.mjs
 # E3 headless path trace (Chromium with SwiftShader; any Chromium works, the
 #    GPU one is much faster)
 /path/to/yellow-rooms/node_modules/.bin/vite --config page/vite.config.mjs &
-node run-spike.mjs "spp=1024&ring=1&w=320&h=180&bounces=4&cp=16,64,256" shotA.png
+node run-spike.mjs "spp=1024&ring=1&w=160&h=90&bounces=4&cp=16,64,256" shotD-all.png
+node run-spike.mjs "spp=1024&ring=1&w=160&h=90&bounces=4&cp=16,64,256&lampR=15" shotD-near.png
+node run-spike.mjs "spp=256&ring=1&w=160&h=90&bounces=4&cp=16,64&lampR=-15" shotD-far.png
+node run-spike.mjs "spp=256&ring=1&w=160&h=90&bounces=4&cp=16,64&mis=0" shotD-nomis.png
 
 # E4 GI reference, then the analysis
 for a in "office review" "office atlas" "hotel review" "sewer review"; do node gi-reference.mjs $a 512 6 2; done
@@ -290,7 +293,13 @@ function mirror(src) {
   const u = src.uniforms ?? {}
   const color = (u.uColor?.value ?? white).clone()
   let m
-  if ((u.uMatID?.value ?? 0) === 1) {
+  if (src === materials.panel && q.get('panels') !== 'emissive') {
+    // Lit panels: the RectAreaLight below each one is the emitter. An
+    // emissive panel mesh on the same plane would double-count the light
+    // and occlude the NEE shadow rays (coplanar ties), so it is a dark
+    // diffuser here; area lights are invisible to camera rays anyway.
+    m = new THREE.MeshStandardMaterial({ color: 0x202020, roughness: 0.4 })
+  } else if ((u.uMatID?.value ?? 0) === 1) {
     m = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: color, emissiveIntensity: PANEL_GLOW })
   } else {
     m = new THREE.MeshStandardMaterial({
@@ -360,9 +369,15 @@ log.push(['mirror+expand', `${instances} instances -> ${geomBuckets.size} merged
 
 // --- 3. every lit panel becomes a downward RectAreaLight --------------------
 let lamps = 0
+const lampR = +(q.get('lampR') ?? Infinity)
 for (const c of chunks) for (const p of c.lamps) {
+  // optional light culling: only panels within lampR of the camera
+  // lampR > 0: keep panels within lampR; lampR < 0: keep panels beyond |lampR|
+  const dl = Math.hypot(p.x - SPAWN_WORLD, p.z - SPAWN_WORLD)
+  if (lampR >= 0 ? dl > lampR : dl <= -lampR) continue
   const l = new THREE.RectAreaLight(0xfff1d6, lampPower * LIGHT_INTENSITY, 1.7, 1.0)
-  l.position.set(p.x, WALL_H - 0.02, p.z)
+  // 1 cm below the recessed panel mesh (WALL_H - 0.02, world/mesh.js)
+  l.position.set(p.x, WALL_H - 0.03, p.z)
   l.lookAt(p.x, 0, p.z)
   scene.add(l)
   lamps++
@@ -382,6 +397,7 @@ pt.renderDelay = 0
 pt.fadeDuration = 0
 pt.minSamples = 0
 pt.bounces = +(q.get('bounces') ?? 4)
+if (q.get('mis') === '0') pt.multipleImportanceSampling = false
 pt.textureSize.set(256, 256)
 t0 = t()
 pt.setScene(scene, camera)
@@ -419,15 +435,17 @@ window.__run = async () => {
     pt.renderSample(); gl.finish()
     const n = pt.samples
     if (checkpoints.includes(n) && !snaps[n]) {
-      snaps[n] = lum(readHDR())
+      snaps[n] = lum(readHDR()) // blocks until every queued sample is done
       window.__shots[n] = renderer.domElement.toDataURL('image/png')
+      const now = t()
+      log.push([`synced @ ${n} spp`, ((now - t0) / 1000).toFixed(1) + ' s since loop start'])
     }
     if (t() - lastLog > 10000) { console.log('spp', n, ((t() - t0) / 1000).toFixed(0) + ' s'); lastLog = t() }
     await tick()
   }
+  const ref = lum(readHDR()) // drains the queue: only now is the work done
   const per = (t() - t0) / Math.max(1, pt.samples - s0)
-  log.push(['per full sample (SwiftShader, CPU)', per.toFixed(1) + ' ms', `${pt.samples} spp`, `total ${((t() - t0) / 1000).toFixed(1)} s`])
-  const ref = lum(readHDR())
+  log.push(['per full sample incl. drain (SwiftShader, CPU)', per.toFixed(1) + ' ms', `${pt.samples} spp`, `total ${((t() - t0) / 1000).toFixed(1)} s`])
   window.__shots[pt.samples] = renderer.domElement.toDataURL('image/png')
   let mean = 0, nz = 0
   for (const v of ref) { mean += v; if (v > 1e-4) nz++ }
@@ -977,6 +995,7 @@ const imgs = items.map((s) => {
 })
 const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' })
 const page = await browser.newPage()
+if (out.endsWith('.jpg')) await page.evaluate(() => { window.__fmt = 'image/jpeg' })
 const data = await page.evaluate(async (imgs) => {
   const loaded = await Promise.all(imgs.map((m) => new Promise((res) => {
     const im = new Image(); im.onload = () => res({ im, label: m.label }); im.src = m.url
@@ -992,10 +1011,9 @@ const data = await page.evaluate(async (imgs) => {
     g.drawImage(im, x, bar)
     g.fillStyle = '#eee'; g.font = '12px monospace'; g.fillText(label, x + 4, 13)
   })
-  return c.toDataURL('image/png')
+  return c.toDataURL(window.__fmt ?? 'image/png', 0.9)
 }, imgs)
 writeFileSync(out, Buffer.from(data.split(',')[1], 'base64'))
 await browser.close()
 console.log('wrote', out)
 ```
-

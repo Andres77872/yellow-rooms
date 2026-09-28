@@ -102,15 +102,18 @@ light size and furniture form factors.
    same module in Playwright plus SwiftShader to emit HDR and PNG files from
    a capture file. [07 E3](07-experiments.md#3-e3--path-tracing-real-yellow-rooms-chunks)
    proves this works without a GPU. A 3×3 office neighbourhood (92k
-   triangles, 148 panels) ran at 605 ms per sample at 320×180 on
-   SwiftShader, so 256 spp takes about 2.5 min and 1024 spp about 10 min.
+   triangles, 148 panels) ran at about 0.45 s per sample at 160×90 on
+   SwiftShader, which is about 1.8 s at 320×180. That is minutes for a
+   256 spp evidence image, and much faster on a real GPU.
    Playwright is **not** a project dependency today; keep it optional (for
    example `npx`), as the spike did.
 7. **Light culling is mandatory.** The tracer picks NEE lights uniformly, so
    pass only the panels that matter: within `LIGHT_RANGE` plus a margin of
    the viewed region, or, better, the union of the visible cells' grid light
    lists. [07 E3](07-experiments.md#3-e3--path-tracing-real-yellow-rooms-chunks)
-   run B measures the noise and bias trade.
+   measures the trade: culling 148 → 9 panels halves per-sample noise and
+   saves about 30% per sample, at the price of the dropped lamps' energy (7%
+   there).
 
 ### Phasing
 
