@@ -17,8 +17,8 @@ can be reproduced.
 | --- | --- | --- |
 | E1 | Does the library install cleanly next to three r185, and what does it cost to ship? | Yes. `WebGLPathTracer` is about 61 kB gzip and three-mesh-bvh about 16 kB (three external). Two deprecation warnings on r185. |
 | E2 | Would the tracer's blue noise reduce the engine's screen-space noise? | **No** under the engine's 5×5 resolve. **Yes** for pattern structure: spectral peaks fall 55× vs IGN. |
-| E3 | Can real Yellow Rooms chunks be path traced, and at what cost? | Yes, headless and without a GPU. See the numbers below. |
-| E4 | How accurate is the shipped cell-graph GI against Monte Carlo ground truth? | Biased in specific, fixable ways. See the numbers below. |
+| E3 | Can real Yellow Rooms chunks be path traced, and at what cost? | Yes, headless and without a GPU. 3×3 chunks give 92k triangles and 148 lights, at 605 ms/sample on SwiftShader. Noise is still about 11% at 1024 spp (uniform light choice); light culling is essential. |
+| E4 | How accurate is the shipped cell-graph GI against Monte Carlo ground truth? | Up-facing bounce is 66–73% too dark; floor radiosity is sampled at mid-height. A same-cost fix cuts held-out error by 53–57% across office, hotel and sewer. |
 
 ---
 
@@ -141,7 +141,65 @@ generated geometry, and what does it take?
 6. It reads back the linear HDR accumulation at checkpoints and computes
    the relative RMSE of luminance against the final image.
 
-**Results.** Pending: this section is completed from the run logs.
+Chromium ran with `--use-angle=swiftshader --enable-unsafe-swiftshader`. The
+driver reported `ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)))`,
+with `EXT_color_buffer_float` present, `MAX_TEXTURE_SIZE` 8192,
+`MAX_ARRAY_TEXTURE_LAYERS` 2048, and no `KHR_parallel_shader_compile`.
+
+![Path-traced office corridor at 16, 64, 256 and 1024 spp](img/e3-office-convergence.jpg)
+
+*Run A. Office, seed `review`, 3×3 chunks around spawn, 320×180, 4 bounces,
+148 rect lights. This is the game's own generated geometry and palette
+textures, path traced. It is uncalibrated: panel power is a guess and the
+grade is three's ACES, not the engine's look.*
+
+**Run A: the full 3×3 neighbourhood.**
+
+| Stage | Result |
+| --- | --- |
+| Generate + mesh 9 chunks (game code) | 330 ms |
+| Expand 7,806 instances → 10 merged meshes | **92,168 triangles**, 194 ms |
+| Lit panels → `RectAreaLight`s | **148** |
+| `setScene` (flatten, SAH BVH, texture packing; synchronous) | 855 ms |
+| Shader compile + first sample (no parallel-compile extension) | 371 ms |
+| Time per full sample, 320×180 | **605 ms** (SwiftShader) |
+| 1024 spp total | 619 s |
+| Reference mean luminance / non-black pixels | 0.0913 / 99.9% |
+
+Convergence. The measured relative RMSE is against the 1024 spp image. The
+snapshots are prefixes of the same accumulation, so the corrected value
+divides by `√(1 − n/1024)`.
+
+| spp | Measured relRMSE | Corrected (true error at n) |
+| ---: | ---: | ---: |
+| 16 | 0.924 | 0.93 |
+| 64 | 0.419 | 0.43 |
+| 256 | 0.181 | 0.21 |
+| 1024 | — | **≈ 0.11** (per-sample σ ≈ 3.3–3.7) |
+
+**Reading.**
+
+1. **Feasibility is proven end to end.** The game's `Chunk` +
+   `PbrReference`-style mapping + instance expansion is all a reference view
+   needs; no engine change is required. Two r185 deprecation warnings appear
+   ([E1](#1-e1--packaging-compatibility-and-bundle-cost)). Otherwise the only
+   console noise was a favicon 404.
+2. **Instance expansion is the dominant scene cost.** One 3×3 office
+   neighbourhood goes from a few dozen instanced draws to 92k flattened
+   triangles. The WebGPU backend's two-level BVH removes this step
+   ([03 §2](03-webgpu-backend.md#2-bvh-and-scene-data)).
+3. **Noise is the practical limit, and light count drives it.** Even at
+   1024 spp, per-pixel error is about 11%. Reaching 5% would need about
+   4,600 spp. The cause is the tracer's **uniform light selection** over 148
+   panels ([02 §5](02-webgl-backend.md#5-lights-next-event-estimation-and-mis)):
+   most NEE samples go to panels that are far away or behind walls. Run B
+   below measures the effect of culling. A reference view should cull lights
+   (P1), and a clean still needs a denoiser (OIDN, WebGPU only).
+4. **SwiftShader numbers are CPU numbers.** A desktop GPU should run this
+   shader one to two orders of magnitude faster (an estimate; no GPU was
+   available to measure it). Treat the 605 ms/sample as an upper
+   bound that shows the headless route is viable for batch or CI-style
+   evidence, not as a player-facing cost.
 
 ---
 
