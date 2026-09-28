@@ -35,17 +35,18 @@ techniques.**
 
 ## Key measured findings
 
-![A real Yellow Rooms office neighbourhood path traced with three-gpu-pathtracer at 16, 64, 256 and 1024 spp](img/e3-office-convergence.jpg)
+![A real Yellow Rooms office neighbourhood path traced with three-gpu-pathtracer at 16, 64 and 256 spp](img/e3-office-convergence.jpg)
 
 *The game's own generated office chunks (seed `review`), path traced
 headlessly by `WebGLPathTracer` 0.0.24 ([E3](07-experiments.md#3-e3--path-tracing-real-yellow-rooms-chunks)).
-Uncalibrated: this shows feasibility and noise, not the engine's look.*
+Uncalibrated: this shows feasibility and noise, not the engine's look.
+Panel faces are dark because area lights are invisible to camera rays.*
 
 | # | Finding | Evidence |
 | --- | --- | --- |
 | 1 | The WebGL tracer installs cleanly next to three 0.185.0. It costs **61 kB gzip**, plus 16 kB for three-mesh-bvh. It warns about two r185 deprecations. | [E1](07-experiments.md#1-e1--packaging-compatibility-and-bundle-cost) |
 | 2 | Blue noise does **not** lower noise after the engine's 5×5 resolve: 4×4 interleaved 0.0179 vs blue noise 0.0196 RMS. It does remove structure: spectral peak/mean is **157 vs 8,702 for IGN**. Use it only where noise is unfiltered. | [E2](07-experiments.md#2-e2--blue-noise-versus-the-engines-screen-noise) |
-| 3 | Real office chunks, built by the game's own generator and mesher, path trace headlessly with **no GPU** (SwiftShader). A 3×3 neighbourhood expands to **92k triangles and 148 panel lights**. The tracer is energy-consistent: near + far lights add up within 0.3%. Because it picks lights uniformly, 148 panels are **about 2× noisier and 45% slower per sample** than the 9 nearby ones. Light culling (and ideally a denoiser) is a prerequisite for a useful reference view. | [E3](07-experiments.md#3-e3--path-tracing-real-yellow-rooms-chunks) |
+| 3 | Real office chunks, built by the game's own generator and mesher, path trace headlessly with **no GPU** (SwiftShader). A 3×3 neighbourhood expands to **92k triangles and 148 panel lights**. The tracer is energy-consistent: near + far lights add up within 0.3%. Because it picks lights uniformly, 148 panels are **about 2× noisier and 40–45% slower per sample** than the 9 nearby ones. Light culling (and ideally a denoiser) is a prerequisite for a useful reference view. | [E3](07-experiments.md#3-e3--path-tracing-real-yellow-rooms-chunks) |
 | 4 | The shipped cell-graph GI is **single-bounce by construction**. Its ceiling term is identically 0, so **up-facing indirect light is 66–73% too dark** in office, hotel and sewer. The floor's radiosity is sampled at mid-height instead of on the floor, which inflates it up to about 3.8× under fixtures. More Jacobi iterations change nothing (< 1%). Sampling the floor on the floor, adding a floor→ceiling bounce term and refitting the weights (same cost) **cuts per-cell error by 53–57%** on held-out datasets, for example office relative RMSE 1.31 → 0.58. | [E4](07-experiments.md#4-e4--monte-carlo-reference-for-the-cell-graph-gi) |
 
 ## Recommendations, ranked

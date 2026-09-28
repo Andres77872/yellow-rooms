@@ -17,7 +17,7 @@ can be reproduced.
 | --- | --- | --- |
 | E1 | Does the library install cleanly next to three r185, and what does it cost to ship? | Yes. `WebGLPathTracer` is about 61 kB gzip and three-mesh-bvh about 16 kB (three external). Two deprecation warnings on r185. |
 | E2 | Would the tracer's blue noise reduce the engine's screen-space noise? | **No** under the engine's 5×5 resolve. **Yes** for pattern structure: spectral peaks fall 55× vs IGN. |
-| E3 | Can real Yellow Rooms chunks be path traced, and at what cost? | Yes, headless and without a GPU. 3×3 chunks give 92k triangles and 148 lights. The tracer is energy-consistent, but uniform light choice makes 148 panels about 2× noisier and 45% slower per sample than 9 culled ones; light culling is essential. |
+| E3 | Can real Yellow Rooms chunks be path traced, and at what cost? | Yes, headless and without a GPU. 3×3 chunks give 92k triangles and 148 lights. The tracer is energy-consistent, but uniform light choice makes 148 panels about 2× noisier and 40–45% slower per sample than 9 culled ones; light culling is essential. |
 | E4 | How accurate is the shipped cell-graph GI against Monte Carlo ground truth? | Up-facing bounce is 66–73% too dark; floor radiosity is sampled at mid-height. A same-cost fix cuts held-out error by 53–57% across office, hotel and sewer. |
 
 ---
@@ -154,7 +154,8 @@ with `EXT_color_buffer_float` present, `MAX_TEXTURE_SIZE` 8192,
 *Office, seed `review`, 3×3 chunks around spawn, 320×180, 4 bounces,
 148 rect lights. This is the game's own generated geometry and palette
 textures, path traced. It is uncalibrated: panel power is a guess and the
-grade is three's ACES, not the engine's look.*
+grade is three's ACES, not the engine's look. Panel faces render dark
+because the tracer never shows area lights to camera rays.*
 
 ### Scene cost
 
@@ -189,6 +190,10 @@ How to read the table:
 - **Time per sample.** Measured *between synchronising readbacks*.
   `gl.finish()` does not block in Chrome, so per-call timings would only
   measure command submission.
+- **Repeated at 320×180** (256 spp, same view) for the images below, with
+  the same ratios:
+  - all 148: mean 0.0401, σ ≈ 7.6, **1.91 s/sample**;
+  - near 9: mean 0.0370, σ ≈ 3.5, **1.36 s/sample**.
 
 ### Reading
 
@@ -204,7 +209,7 @@ How to read the table:
    light selection plus an O(lights) forward-hit loop
    ([02 §5](02-webgl-backend.md#5-lights-next-event-estimation-and-mis))
    mean that 148 panels have about 2.1× the per-sample noise of the 9 nearby
-   ones and cost about 45% more per sample.
+   ones and cost 40–45% more per sample.
    - To reach 5% per-pixel error, all 148 lights would need about 24,000
      spp, and the 9 near lights about 5,500 spp.
    - Culling to 15 m therefore gets there about 6× faster, at the price of
@@ -216,9 +221,9 @@ How to read the table:
    neighbourhood goes from a few dozen instanced draws to 92k flattened
    triangles. The WebGPU backend's two-level BVH removes this step
    ([03 §2](03-webgpu-backend.md#2-bvh-and-scene-data)).
-5. **SwiftShader numbers are CPU numbers.** 160×90 is about 14k pixels.
-   About 0.45 s per sample there means roughly 1.8 s per sample at 320×180
-   on this CPU. A desktop GPU should be one to two orders of magnitude faster
+5. **SwiftShader numbers are CPU numbers.** 0.45 s per sample at 160×90
+   became 1.91 s at 320×180 on this CPU, close to linear in pixels. A desktop
+   GPU should be one to two orders of magnitude faster
    (an estimate; no GPU was available to measure it). The headless route is
    viable for batch or CI-style evidence, not as a player-facing cost.
 
