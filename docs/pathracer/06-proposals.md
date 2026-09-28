@@ -67,6 +67,16 @@ light size and furniture form factors.
    - **Flashlight.** A `PhysicalSpotLight` at `FLASH_HAND_OFFSET`, with the
      cone from `uFlashCosInner`/`uFlashCosOuter` (or the P2 profile) and
      `radius` equal to the PCSS light size.
+   - **Emitter placement trap (found in E3).** The lit-panel mesh sits at
+     `WALL_H − 0.02` (`world/mesh.js:665`). An area light placed on that
+     plane is **coplanar with an emissive mesh**. That double-counts the
+     panel's light and makes shadow-ray and light-hit occlusion a
+     floating-point tie. The proxy builder must:
+     - put the light slightly *below* the mesh;
+     - turn the lit-panel material into a non-emissive diffuser (the tracer
+       never shows area lights to camera rays, so the panel face stays dark
+       in the reference);
+     - note that choice in the evidence JSON.
    - **Radiometry notes.**
      - The engine windows every fixture at `LIGHT_RANGE`
        (`physicalAttenuation`); the tracer does not. Add a debug uniform that
