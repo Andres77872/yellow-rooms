@@ -1,4 +1,12 @@
-import { NOISE_MODES, SENS_DEFAULT, SENS_MAX, SENS_MIN, dynamicResEnabled } from '../core/Settings.js'
+import {
+  FRAME_LIMITS,
+  NOISE_MODES,
+  PATH_TRACER_MODES,
+  SENS_DEFAULT,
+  SENS_MAX,
+  SENS_MIN,
+  dynamicResEnabled,
+} from '../core/Settings.js'
 import { LOOK_ORDER, LOOK_PROFILES } from '../render/lookProfile.js'
 import {
   PRESET_CHOICES,
@@ -35,6 +43,17 @@ const lookOpts = LOOK_ORDER
   .map((id) => `<option value="${id}">${LOOK_PROFILES[id].label.toUpperCase()}</option>`)
   .join('')
 const noiseOpts = NOISE_MODES.map((n) => `<option value="${n}">${n.toUpperCase()}</option>`).join('')
+// Numbers are stored as numbers; the select reports strings (see WIRE).
+const frameLimitLabel = (v) => (v === 'off' ? 'OFF' : v === 'half' ? '½ REFRESH' : `${v} FPS`)
+const frameLimitOpts = FRAME_LIMITS.map((v) => `<option value="${v}">${frameLimitLabel(v)}</option>`).join('')
+const FRAME_LIMIT_HINT =
+  'Caps how often the game draws while you play. Lower = less GPU load, heat and power; ' +
+  'the image itself is unchanged. ½ REFRESH stays evenly paced on any display; ' +
+  'a fixed rate is smoothest when it divides your refresh rate.'
+const PATH_TRACER_LABELS = { off: 'OFF', viewer: 'VIEWER (P)', realtime: 'REALTIME (P: A/B)' }
+const pathTracerOpts = PATH_TRACER_MODES
+  .map((m) => `<option value="${m}">${PATH_TRACER_LABELS[m]}</option>`)
+  .join('')
 
 // Simple view: the knobs a player actually reaches for, plus the
 // photosensitivity toggle, which must never hide behind a click. Every other
@@ -54,6 +73,7 @@ export const SETTINGS_HTML = `
   <div class="group">GRAPHICS</div>
   <label>VISUAL STYLE <select data-k="look">${lookOpts}</select></label>
   <label>QUALITY PRESET <select data-k="preset">${presetOpts}</select></label>
+  <label title="${FRAME_LIMIT_HINT}">FRAME RATE LIMIT <select data-k="fps">${frameLimitOpts}</select></label>
   <div class="group">ACCESSIBILITY</div>
   <label title="Keeps flickering lights under 3 flashes per second and a 10% brightness change">
     REDUCE FLICKER (PHOTOSENSITIVITY) <input type="checkbox" data-k="flicker"></label>
@@ -84,6 +104,8 @@ export const SETTINGS_HTML = `
     <label>NOISE <select data-k="noise">${noiseOpts}</select></label>
     <label>INK OUTLINE <input type="checkbox" data-k="out"></label>
     <label>MINIMAP <input type="checkbox" data-k="map"></label>
+    <div class="group">EXPERIMENTAL</div>
+    <label data-k="pathTracerRow">WEBGPU PATH TRACER <select data-k="pathTracer">${pathTracerOpts}</select></label>
     <button type="button" class="ghost adv-reset" data-k="reset">RESET DEFAULTS</button>
   </div>`
 
@@ -101,6 +123,7 @@ const WIRE = [
   ['invX', 'change', 'invertX', (el) => el.checked],
   ['look', 'change', 'look', (el) => el.value],
   ['preset', 'change', 'preset', (el) => el.value],
+  ['fps', 'change', 'frameLimit', (el) => (Number.isNaN(Number(el.value)) ? el.value : Number(el.value))],
   // Commit on release: every render-scale step reallocates the complete
   // deferred target set, so dragging only previews the label (see below).
   ['rscale', 'change', 'renderScale', (el) => parseFloat(el.value)],
@@ -119,7 +142,13 @@ const WIRE = [
   ['out', 'change', 'outline', (el) => el.checked],
   ['map', 'change', 'minimap', (el) => el.checked],
   ['flicker', 'change', 'reduceFlicker', (el) => el.checked],
+  ['pathTracer', 'change', 'pathTracer', (el) => el.value],
 ]
+
+const PATH_TRACER_HINT =
+  'Experimental (three-gpu-pathtracer, WebGPU). VIEWER: P freezes the game on a path-traced view ' +
+  'that converges while you hold still. REALTIME: path-traced lighting replaces the raster lighting ' +
+  'while you play (noisy in motion, heavy on the GPU); P flips back to raster for comparison.'
 
 // One wired settings card. `onSetting(key, value)` reports a raw edit and
 // `onReset()` the RESET DEFAULTS button; the host re-calls refresh() with the
@@ -145,7 +174,7 @@ export class SettingsBlock {
 
   // Pull every control back from the store. Also the way anything that changes
   // a setting outside this panel (the M key, RESET DEFAULTS) re-syncs widgets.
-  refresh(s, { autoPreset = null } = {}) {
+  refresh(s, { autoPreset = null, pathTracer = null } = {}) {
     const mult = s.get('sensitivity') / SENS_DEFAULT
     this.el.sens.value = mult
     this.el.sensVal.value = `×${mult.toFixed(2)}`
@@ -157,6 +186,7 @@ export class SettingsBlock {
     this.el.preset.value = s.get('preset')
     const auto = this.el.preset.querySelector?.('option[value="auto"]')
     if (auto) auto.textContent = autoPreset ? `AUTO (${autoPreset.toUpperCase()})` : 'AUTO'
+    this.el.fps.value = String(s.get('frameLimit'))
     this.el.rscale.value = s.get('renderScale')
     this.el.rscaleVal.value = `${Math.round(s.get('renderScale') * 100)}%`
     this.el.worldDetail.value = s.get('worldDetail')
@@ -181,5 +211,12 @@ export class SettingsBlock {
     this.el.out.checked = s.get('outline')
     this.el.map.checked = s.get('minimap')
     this.el.flicker.checked = s.get('reduceFlicker')
+    // Same rule as DYNAMIC RESOLUTION: the control shows what can run.
+    // Without WebGPU (or on touch) it reads OFF and is locked, and says why;
+    // the stored choice is kept for a browser that has it.
+    const tracerOk = pathTracer?.ok !== false
+    this.el.pathTracer.value = tracerOk ? s.get('pathTracer') : 'off'
+    this.el.pathTracer.disabled = !tracerOk
+    this.el.pathTracerRow.title = tracerOk ? PATH_TRACER_HINT : `Unavailable: ${pathTracer.reason}`
   }
 }

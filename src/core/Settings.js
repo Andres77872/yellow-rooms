@@ -21,6 +21,18 @@ export const SENS_MAX = SENS_DEFAULT * 3
 // clean), 'always' keeps the constant floor of the classic look, 'off' kills it.
 export const NOISE_MODES = ['off', 'danger', 'always']
 
+// EXPERIMENTAL path tracer (render/pathtrace, three-gpu-pathtracer on
+// WebGPU): 'viewer' lets P open a frozen, converging path-traced view of the
+// frame; 'realtime' replaces the deferred lighting with path-traced lighting
+// while the game runs (P flips back to raster for an A/B).
+export const PATH_TRACER_MODES = ['off', 'viewer', 'realtime']
+
+// Frame-rate limit for live play (Engine._frameLimitDue): 'off' draws on
+// every display refresh, 'half' on every second one (evenly paced on any
+// refresh rate), a number caps the average rate. Not a graphics key: no
+// preset changes it, and it never changes what a frame looks like.
+export const FRAME_LIMITS = ['off', 'half', 30, 60, 90, 120, 144]
+
 export const DEFAULTS = {
   sensitivity: SENS_DEFAULT,
   invertY: false,
@@ -46,6 +58,12 @@ export const DEFAULTS = {
   // flicker under the WCAG 2.3.1 flash limits (world/lampCharacter.js). ON by
   // default — the full ~9 Hz strobe is an opt-in, never a surprise.
   reduceFlicker: true,
+  // EXPERIMENTAL, OFF by default (PATH_TRACER_MODES). Not a graphics key: no
+  // preset turns it on, and while off nothing WebGPU is ever loaded.
+  pathTracer: 'off',
+  // Uncapped by default (FRAME_LIMITS): a high-refresh display otherwise
+  // gets exactly the frame rate it had before the setting existed.
+  frameLimit: 'off',
   // Graphics: the preset plus the advanced keys it pins (core/graphics.js).
   // Fresh installs are 'auto' (classified per device at boot); the advanced
   // defaults are the pre-classification fallback EXPANDED, so the advanced
@@ -77,6 +95,8 @@ const COERCE = {
   outline: bool,
   minimap: bool,
   reduceFlicker: bool,
+  pathTracer: oneOf(PATH_TRACER_MODES),
+  frameLimit: oneOf(FRAME_LIMITS),
   preset: oneOf(PRESET_CHOICES),
   renderScale: num(0.5, 1),
   worldDetail: oneOf(WORLD_DETAIL_ORDER),
@@ -129,6 +149,9 @@ export class Settings {
         // picking it again saves a v2 blob that is never migrated again.
         if (this.data.preset === AUTO_FALLBACK_PRESET) this.data.preset = 'auto'
       }
+      // The first experimental build stored a boolean (webgpuPathTracer):
+      // an opt-in becomes the viewer it switched on.
+      if (!('pathTracer' in stored) && stored.webgpuPathTracer === true) this.data.pathTracer = 'viewer'
     }
     // Fresh = nothing stored yet: the engine may classify the device and
     // choose the 'auto' preset's concrete tiers.

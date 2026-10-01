@@ -188,6 +188,10 @@ describe('resolveGraphics', () => {
     expect(q.flash.taps).toBe(24)
     expect(q.flash.size).toBe(1024)
     expect(q.vol.steps).toBe(VOL_STEPS_MAX)
+    // Traced shafts reach the whole march, on ultra's every-2nd-step cadence
+    // (every step measured at most 2/255 apart for up to 0.8 ms, chapter 15).
+    expect(q.vol.traceDist).toBeGreaterThan(VOL_TIERS.ultra.traceDist)
+    expect(q.vol.traceEvery).toBe(VOL_TIERS.ultra.traceEvery)
     // Cinematic AO is the ultra tier: the renderer has no full-resolution
     // occlusion resolve, so no dead flag may claim one.
     expect(q.ao).toEqual({ ...AO_TIERS.ultra, tier: 'ultra' })

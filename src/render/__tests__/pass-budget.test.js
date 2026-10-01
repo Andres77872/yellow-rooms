@@ -94,6 +94,31 @@ describe('lighting pass budgets (every variant)', () => {
     }
   })
 
+  it('reads the GI stencil once per pixel (diffuse and specular share it)', () => {
+    // PBR evaluates both directions from one stencil; toon has no specular
+    // GI and calls the one-direction wrapper (the #else branch, textually
+    // present in every variant).
+    const shared = new RegExp(
+      '#ifdef SHADING_PBR\\s*(?://[^\\n]*\\n\\s*)?' +
+        'gridIndirect2\\(Pl, Nb, reflect\\(-sV, Nw\\), gcy, stencil, indirect, indirectSpec\\);\\s*' +
+        '#else\\s*indirect = gridIndirect\\(Pl, Nb, gcy, stencil\\);\\s*#endif'
+    )
+    for (const key of variants) {
+      const src = lightingFrag(key)
+      expect(src, JSON.stringify(key)).toMatch(shared)
+      expect(callSites(src, 'gridIndirect'), JSON.stringify(key)).toBe(1)
+    }
+  })
+
+  it('skips the torch map taps where the PBR BRDF zeroes the torch anyway', () => {
+    const pbr = lightingFrag({ pbr: true, physicalAtt: true, occV2: true, furn: true, flashFilter: 2, bent: true })
+    expect(pbr).toMatch(/bool fLit = uLightDebug > 0 \|\| dot\(N, Lf\) > 0\.0;/)
+    expect(pbr).toMatch(/uFlashShadowOn > 0\.5 && fLit\) fvis = flashShadow\(/)
+    // Toon wraps light past the terminator: its taps always run.
+    const toon = lightingFrag({ pbr: false, physicalAtt: false, occV2: false, furn: false, flashFilter: 1, bent: false })
+    expect(toon).toMatch(/bool fLit = true;/)
+  })
+
   it('never takes derivatives (undefined after the early returns in GLSL ES 3.00)', () => {
     for (const key of variants) {
       const src = lightingFrag(key)
@@ -133,5 +158,16 @@ describe('other passes', () => {
     expect(callSites(volFrag(), 'gridTrace')).toBe(1)
     expect(callSites(volFrag({ haze: true }), 'gridTrace')).toBe(1)
     expect(callSites(CONTACT_FRAG, 'gridTrace')).toBe(0)
+  })
+
+  it('the shaft march gates a wall trace on the cheap lamp weight first', () => {
+    for (const src of [volFrag(), volFrag({ haze: true })]) {
+      const gate = src.indexOf('bool worth = gl.flicker * lampAtt(dl, uLampRange) >')
+      const guarded = src.indexOf('if (worth && k < uTraceLights')
+      const trace = src.search(/\bgridTrace\s*\(\s*Sw/)
+      expect(gate).toBeGreaterThan(0)
+      expect(guarded).toBeGreaterThan(gate)
+      expect(trace).toBeGreaterThan(guarded)
+    }
   })
 })

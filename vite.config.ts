@@ -21,6 +21,8 @@ function editorRoute(): Plugin {
   }
 }
 
+const isThreeWebGPU = (id: string) => /[\\/]node_modules[\\/]three[\\/]build[\\/]three\.(webgpu|tsl)\.js$/.test(id)
+
 // https://vite.dev/config/
 // Vanilla JS + Three.js app — no framework plugin needed.
 export default defineConfig({
@@ -39,8 +41,24 @@ export default defineConfig({
         // dependency bump. A dedicated vendor chunk keeps it browser-cached
         // across game/editor deploys instead of re-downloading it with every
         // world-gen change folded into the same file.
+        //
+        // three's WebGPU/TSL builds are reachable only through the
+        // experimental path tracer's dynamic import (render/pathtrace), so
+        // they stay OUT of this boot-loaded vendor chunk, in lazy chunks of
+        // their own (the tracer + three-mesh-bvh in a second one), each under
+        // the size limit above. Groups capture their dependencies, so the
+        // vendor group must rank first: it claims the shared three.core.js
+        // before the WebGPU build (which imports it) can drag it along.
         codeSplitting: {
-          groups: [{ name: 'three', test: /[\\/]node_modules[\\/]three[\\/]/ }],
+          groups: [
+            {
+              name: 'three',
+              test: (id: string) => /[\\/]node_modules[\\/]three[\\/]/.test(id) && !isThreeWebGPU(id),
+              priority: 3,
+            },
+            { name: 'three-webgpu', test: isThreeWebGPU, priority: 2 },
+            { name: 'pathtracer', test: /[\\/]node_modules[\\/](three-gpu-pathtracer|three-mesh-bvh)[\\/]/, priority: 1 },
+          ],
         },
       },
     },

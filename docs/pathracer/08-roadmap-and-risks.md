@@ -17,12 +17,23 @@ new *runtime* dependency.
 Stages 1–3 are independent of each other and can be done in any order.
 Stage 1 is first because it is measured, cheap, and fixes a shipped bias.
 
+> **Update (2026-09-28, after 0.0.25).** The upstream dependency of stage 5
+> is met: the WebGPU tracer is on npm. Stages 4 and 5 were merged. The
+> reference *viewer* now runs on `WebGPUPathTracer@0.0.25` as an
+> experimental option, off by default, and the WebGL tracer is never used.
+> Stage 4's exit criterion ("no module in the boot graph") holds for the
+> tracer, three/webgpu and three-mesh-bvh. The boot bundle grows 6.2 kB
+> gzip, mostly three core classes that the lazy chunks share
+> ([09 §7](09-webgpu-integration.md#7-bundle-cost)). Stage 4's comparison
+> tooling and evidence JSON remain open.
+
 ## 2. Risks
 
 | Risk | Likelihood | Impact | Mitigation |
 | --- | --- | --- | --- |
 | **Upstream deprecation.** `WebGLPathTracer` is deprecated on `main` and "will be removed" | Certain | P1 stage 4 needs a backend swap later | Pin `0.0.24` exactly; keep every tracer call inside one module; stage 5 plans the swap |
-| **WebGPU tracer unreleased**, API still moving (e.g. the `maxTransparentBounces` doc/code mismatch) | High | Delays stage 5 | Treat `main` as a preview; do not depend on it from the game |
+| **WebGPU tracer API still moving** (released as 0.0.25 on 2026-09-28; e.g. the `maxTransparentBounces` doc/code mismatch, `dispose()` throwing before `setScene`) | High | Breakage on a bump | Pinned `0.0.25` exactly; every tracer call is inside `render/pathtrace/PathTraceView.js`; the feature is experimental and off by default |
+| **Wavefront throughput** (one path segment per `renderSample()`, 250k slots by default) | Certain | 1 call per frame gave ≈ 2 spp/s at 1.8 MP | `frameBudget` at the pool cap plus adaptive calls per frame: ≈ 19–22 spp/s ([09 §5](09-webgpu-integration.md#5-throughput-the-wavefront-step-problem)) |
 | **Deprecation noise on r185** (`THREE.Clock`, `maxLeafTris`) turns into breakage on r186+ | Medium | Reference view stops compiling after a three bump | The reference view is dev-only; a three bump runs it once as part of the upgrade checklist |
 | **Huge shader compile on ANGLE/D3D** | High on Windows | Multi-second hitch when opening the reference | Async compile (built in since 0.0.23); never on boot; progress UI |
 | **Proxy-scene fidelity.** Custom G-buffer shading (detail maps, part colours, family textures, emissive signs) does not map 1:1 onto `MeshStandardMaterial` | Certain | Reference differs for reasons that are not transport | Share one `mirrorMaterial` with `PbrReference`; compare only Semi-realistic/Neutral; name every known difference in the evidence JSON |
@@ -39,7 +50,10 @@ These were considered and rejected for this game (reasons in
 [05](05-feature-fit.md)):
 
 - Real-time path tracing, low-spp + denoise, ReSTIR, or any per-frame
-  tracer use in gameplay.
+  tracer use in gameplay, **as a default or supported renderer**. An
+  experimental, opt-in REALTIME mode now exists
+  ([10](10-realtime-integration.md)). It confirms the reasons for this
+  non-goal: noise and lag in motion, streaming hitches, and GPU cost.
 - Runtime lightmap or probe bakes per streamed chunk.
 - Replacing the grid DDA / `LightGrid.raycast` with BVH ray queries for AI,
   audio or the torch.

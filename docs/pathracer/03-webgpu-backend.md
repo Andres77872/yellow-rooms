@@ -6,6 +6,12 @@ The WebGPU backend landed on `main` through PR #713 (merge `897f9dd`,
 `THREE.WebGPURenderer` and TSL, so the game's current `WebGLRenderer` cannot
 drive it.
 
+> **Update, same day:** the backend is now on npm as `0.0.25`, and Yellow
+> Rooms uses it through a second `WebGPURenderer` as an experimental,
+> off-by-default path-traced view: situation 1 below. Measured throughput
+> and the `frameBudget` / calls-per-frame issue are in
+> [09 §5](09-webgpu-integration.md#5-throughput-the-wavefront-step-problem).
+
 This chapter matters to Yellow Rooms in two situations:
 
 - as a tool that runs in its **own** WebGPU context (editor, bake, reference);

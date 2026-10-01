@@ -5,6 +5,10 @@ import { SETTINGS_HTML, SettingsBlock } from './settingsPanel.js'
 import { CONTROL_CHIPS, HUD_HTML } from './hud.js'
 import { TITLE_HTML, familyNote, stepMenuIndex } from './titleMenu.js'
 
+// The transition / loading card fades off the new level's first frames
+// (theme.js panel-out) before it is hidden.
+const LEAVE_MS = 600
+
 // Menu + HUD shell. Presentation lives in four sibling modules — theme.js
 // (design tokens + all CSS), hud.js (HUD markup + the control legend),
 // settingsPanel.js (the simple + advanced settings block), titleMenu.js (the
@@ -24,6 +28,8 @@ export class UI {
     this.onResetSettings = null
     this.onHudHide = null // engine: phase exits clear its _awaitingRelock flag
     this._hudCache = {} // last-written HUD values; skips redundant DOM writes
+    this._phase = null // the phase whose panel is showing (_showOnly)
+    this._leaveT = null // pending hide of the fading transition card
 
     const style = document.createElement('style')
     style.textContent = UI_CSS
@@ -63,12 +69,13 @@ export class UI {
         </div>
       </div>
 
-      <div class="panel hidden" id="p-trans">
+      <div class="panel hidden" id="p-trans" role="status" aria-live="polite">
         <div class="card">
           <div class="jp-accent" aria-hidden="true">「現実剥離」</div>
           <div class="kicker glitch">NO-CLIP DETECTED</div>
           <h1 id="trans-level">LEVEL 1</h1>
-          <div class="keys">descending deeper…</div>
+          <div class="tube" aria-hidden="true"><span class="run"><i></i></span></div>
+          <div class="keys" id="trans-sub">descending deeper…</div>
         </div>
       </div>
 
@@ -86,6 +93,7 @@ export class UI {
   }
 
   dispose() {
+    clearTimeout(this._leaveT)
     this.root.remove()
     this.style.remove()
     this.onStart = this.onResume = this.onRestart = this.onQuit = null
@@ -117,6 +125,7 @@ export class UI {
       deadRun: $('#dead-run'),
       trans: $('#p-trans'),
       transLevel: $('#trans-level'),
+      transSub: $('#trans-sub'),
       rotate: $('#p-rotate'),
       seedInput: $('#seed-input'),
       familySelect: $('#family-select'),
@@ -192,7 +201,9 @@ export class UI {
   // Pull every control back from the store. Also the way anything that changes a
   // setting outside the panels (the M key, RESET DEFAULTS) re-syncs the widgets.
   refreshSettings() {
-    for (const b of this.settingsBlocks) b.refresh(this.settings, { autoPreset: this.autoPreset })
+    for (const b of this.settingsBlocks) {
+      b.refresh(this.settings, { autoPreset: this.autoPreset, pathTracer: this.pathTracerSupport })
+    }
     // Photosensitivity: the title wordmark's failing-tube flicker (theme.js)
     // stops with the in-world strobe.
     this.root.classList.toggle('reduce-flicker', this.settings.get('reduceFlicker') !== false)
@@ -201,6 +212,12 @@ export class UI {
   // The concrete preset 'auto' resolved to on this device (shown as AUTO (X)).
   setAutoPreset(name) {
     this.autoPreset = name
+    this.refreshSettings()
+  }
+
+  // Whether the experimental WebGPU path tracer can run here ({ ok, reason }).
+  setPathTracerSupport(report) {
+    this.pathTracerSupport = report
     this.refreshSettings()
   }
 
@@ -248,10 +265,16 @@ export class UI {
   }
 
   _showOnly(phase) {
+    // Into play from the transition / loading card: the card fades over the
+    // new level's first frames (still uploading and linking) instead of
+    // cutting to them. Any other change hides it at once.
+    const leaving = phase === Phase.PLAYING && this._phase === Phase.TRANSITION
+    this._phase = phase
     this.el.title.classList.toggle('hidden', phase !== Phase.TITLE)
     this.el.pause.classList.toggle('hidden', phase !== Phase.PAUSED)
     this.el.dead.classList.toggle('hidden', phase !== Phase.DEAD)
-    this.el.trans.classList.toggle('hidden', phase !== Phase.TRANSITION)
+    this.el.trans.classList.toggle('hidden', phase !== Phase.TRANSITION && !leaving)
+    this._setTransLeaving(leaving)
     this.el.hud.classList.toggle('hidden', phase !== Phase.PLAYING)
     // The relock hint only makes sense over live gameplay (pointer unlocked,
     // phase PLAYING, hint visible). Any other phase exit drops it, and the
@@ -260,8 +283,12 @@ export class UI {
       this.setRelockVisible(false)
       this.onHudHide?.()
     }
-    // Move focus to the panel's primary action so Enter works without a mouse
-    // (and drop it when the HUD takes over, else Space would re-click a button).
+    this._focusPrimary(phase)
+  }
+
+  // Move focus to the panel's primary action so Enter works without a mouse
+  // (and drop it when the HUD takes over, else Space would re-click a button).
+  _focusPrimary(phase) {
     const primary =
       phase === Phase.TITLE
         ? this.el.btnStart
@@ -272,6 +299,26 @@ export class UI {
             : null
     if (primary) primary.focus({ preventScroll: true })
     else if (document.activeElement?.closest?.('#ui')) document.activeElement.blur()
+  }
+
+  _setTransLeaving(on) {
+    clearTimeout(this._leaveT)
+    this._leaveT = null
+    this.el.trans.classList.toggle('leaving', on)
+    if (!on) return
+    this._leaveT = setTimeout(() => {
+      this._leaveT = null
+      this.el.trans.classList.remove('leaving')
+      this.el.trans.classList.add('hidden')
+    }, LEAVE_MS)
+  }
+
+  // Held while the boot screen (index.html, ui/bootLoader.js) covers the
+  // page: the whole UI stays out of layout, so the title's arrival animations
+  // start when the screen lifts instead of finishing unseen behind it.
+  setBooting(on) {
+    this.root.classList.toggle('booting', on)
+    if (!on && this._phase) this._focusPrimary(this._phase)
   }
 
   // Portrait blocker sits above the phase panels and is driven by orientation,
@@ -310,8 +357,20 @@ export class UI {
     this.el.deadRun.textContent = this._runSummary(state)
     this._showOnly(Phase.DEAD)
   }
-  showTransition(level) {
+  showTransition(level, sub = 'descending deeper…') {
+    this.el.trans.classList.remove('cut')
+    this._showTransitionCard(level, sub)
+  }
+  // The same card as a loading screen for a level about to be built on the
+  // main thread: it cuts in (the no-clip) rather than fading, because the
+  // build starts as soon as it has been presented.
+  showLoading(level, sub) {
+    this.el.trans.classList.add('cut')
+    this._showTransitionCard(level, sub)
+  }
+  _showTransitionCard(level, sub) {
     this.el.transLevel.textContent = `LEVEL ${level}`
+    if (this.el.transSub) this.el.transSub.textContent = sub
     this._showOnly(Phase.TRANSITION)
   }
 

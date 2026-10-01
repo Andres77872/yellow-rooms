@@ -24,6 +24,16 @@ it is versioned by `GRID_SCHEMA_VERSION` and captures, not by world bytes.
 
 ## P1 — Path-traced reference mode (F2 / editor)
 
+> **Status (2026-09-28, after 0.0.25).** The viewer part of this proposal
+> shipped on the **WebGPU** backend, skipping the WebGL design below. It is
+> an experimental setting, off by default. P while playing opens a
+> path-traced view of the current frame from nearby resident chunks, with
+> culled rect-light panels and the torch. Instancing is kept (no expansion),
+> and it uses a lazy chunk and its own WebGPU context. See
+> [09](09-webgpu-integration.md). Still to do from this design: engine/split/
+> difference views, matched-emitter IES mode, region ratios and the
+> evidence JSON.
+
 **Goal.** Given a capture or the F2 light room, produce a converged,
 physically based reference of the same view. Compare it with the deferred
 renderer's HDR output **before the grade**, so that every hand-tuned lighting

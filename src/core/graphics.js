@@ -172,9 +172,12 @@ export const VOL_TIERS = Object.freeze({
 })
 
 // Cinematic (manual only): ultra tiers plus the costs no realtime tier pays.
+// The shafts keep ultra's trace on every 2nd step (engine-improvement
+// chapter 15): tracing every step cost up to 0.8 ms at 3440x1440 for at
+// most 2/255 in the final image. Traced shafts still reach the whole march.
 const CINEMATIC = Object.freeze({
   flash: { taps: 24, blockerTaps: 16 },
-  vol: { steps: 48, traceEvery: 1, traceDist: 1000 },
+  vol: { steps: 48, traceDist: 1000 },
 })
 
 // Preset -> the individual advanced settings it pins. Selecting a preset

@@ -6,6 +6,12 @@ same day. The npm release examined is `three-gpu-pathtracer@0.0.24`, published
 2026-02-21. Line references like `src/core/WebGLPathTracer.js:105` point into
 that checkout. `README@0.0.24` means the README shipped in the npm tarball.
 
+> **Update, same day:** npm `0.0.25` (published 2026-09-28 12:24 UTC) ships
+> `src/webgpu` and exports `three-gpu-pathtracer/webgpu`. Its peers are three
+> `>=0.185.0`, three-mesh-bvh `>=0.9.15` and xatlas-web `^0.1.0`. The
+> "Published on npm: No" cell below describes 0.0.24. See
+> [09](09-webgpu-integration.md).
+
 ## 1. One-paragraph summary
 
 three-gpu-pathtracer is Garrett Johnson's MIT-licensed progressive path tracer

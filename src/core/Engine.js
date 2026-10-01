@@ -77,7 +77,9 @@ import { DebugOverlay } from './DebugOverlay.js'
 import { applyCapture, captureState } from '../debug/capture.js'
 import { isEditableFocused } from './input.js'
 import { LazyDebugMode } from './LazyDebugMode.js'
+import { LazyPathTraceView } from '../render/pathtrace/LazyPathTraceView.js'
 import { UI } from '../ui/overlays.js'
+import { afterPaint } from '../ui/bootLoader.js'
 import { TouchControls } from '../ui/TouchControls.js'
 import { Minimap } from '../ui/Minimap.js'
 import { ExploredMap } from '../world/ExploredMap.js'
@@ -104,6 +106,16 @@ const SPAWN = SPAWN_WORLD
 // wasteful at 60–144 Hz while no gameplay is advancing. RAF itself stays live
 // for immediate Start/Resume input; only canvas submissions are capped.
 const IDLE_RENDER_INTERVAL_MS = 1000 / 30
+// A pause screen stops drawing once this long has passed since it opened,
+// or since anything it shows last changed (a setting, a resize, a lighting
+// build landing): the world behind the dimmed, blurred card is frozen, and
+// only the tube hum and the grain would still move.
+const PAUSE_SETTLE_MS = 3000
+// A frame-limit deadline counts as reached this early (at most 4 ms, a
+// quarter of the interval): rAF callbacks land with jitter, and a render
+// that waited for the next callback would lose a whole refresh.
+const FRAME_LIMIT_SLACK = 0.25
+const FRAME_LIMIT_SLACK_MAX_MS = 4
 // The GPU timer reports a frame a few frames after it was submitted: after the
 // backing size changes, this many results still belong to the old size.
 const BENCH_SKIP_AFTER_RESIZE = 4
@@ -112,6 +124,9 @@ const BENCH_SKIP_AFTER_RESIZE = 4
 // screen skips one due render so a clean interval exists at all.
 const DISPLAY_RATE_SAMPLES = 30
 const DISPLAY_PROBE_STREAK = 3
+// Loading-card subtitles for the UI-driven level entries (_loadRun).
+const LOAD_ENTER = 'entering the rooms…'
+const LOAD_AGAIN = 'reassembling the rooms…'
 
 export class Engine {
   constructor(app) {
@@ -243,17 +258,17 @@ export class Engine {
 
     // Kick the furniture GLB fetch; resident chunks swap box batches for the
     // Blender models when it resolves (each load failure keeps the fallback).
-    loadFurnitureModels(this.furnitureModels).then((lib) => {
+    const furniture = loadFurnitureModels(this.furnitureModels).then((lib) => {
       if (this._disposed) disposeFurnitureModels(lib)
       else if (lib.loaded) {
         this.cm.upgradeFurnitureModels(lib)
-        this._precompile()
+        return this._precompile()
       }
     })
 
     // Same upgrade path for the entities: capsule silhouettes until the
     // Blender enemy GLBs arrive, then swap geometry + material in place.
-    loadEnemyModels(this.enemyModels).then((lib) => {
+    const enemies = loadEnemyModels(this.enemyModels).then((lib) => {
       if (this._disposed) disposeEnemyModels(lib)
       else if (lib.loaded) {
         upgradeEnemyModels(
@@ -262,8 +277,15 @@ export class Engine {
           this.materials.entityModel,
           this.materials.entityModelSkinned
         )
-        this._precompile()
+        return this._precompile()
       }
+    })
+    // Boot milestones for the loading screen (main.js): both model libraries
+    // settled (loaded or failed, their programs linked), and the first
+    // deferred frame drawn (_animate).
+    this._assetsSettled = Promise.allSettled([furniture, enemies])
+    this._firstFrame = new Promise((resolve) => {
+      this._onFirstFrame = resolve
     })
 
     this.debug = new DebugOverlay(renderer)
@@ -302,6 +324,11 @@ export class Engine {
     }
 
     this.minimap = new Minimap(this.ui.el.minimap)
+    // Experimental WebGPU path tracer (setting pathTracer: off by default,
+    // viewer or realtime). An inert shell until a mode is picked and needed:
+    // the tracer, three/webgpu and three-mesh-bvh stay out of the boot bundle.
+    this.pathTrace = new LazyPathTraceView(this)
+    this.ui.setPathTracerSupport?.(this.pathTrace.availability)
     // Every consumer of a setting exists by now, so push the stored values in
     // one pass instead of scattering `settings.get` calls through construction.
     // The panel was populated before the preset expanded over stale stored
@@ -505,10 +532,21 @@ export class Engine {
     const r = this.renderer
     if (this._disposed || typeof r.compileAsync !== 'function') return
     try {
-      r.compileAsync(this.scene, this.camera).catch(() => {})
+      return r.compileAsync(this.scene, this.camera).catch(() => {})
     } catch {
       /* compile on first use */
     }
+  }
+
+  // Resolves once the first deferred frame has been drawn.
+  whenFirstFrame() {
+    return this._firstFrame
+  }
+
+  // Resolves once both model libraries have loaded (or failed) and the
+  // programs their first draws need have linked.
+  whenAssetsSettled() {
+    return this._assetsSettled
   }
 
   // Deterministic capture/replay (debug/capture.js): describe the current
@@ -562,13 +600,13 @@ export class Engine {
   }
 
   _wireUI() {
-    this.ui.onStart = (seed, family) => this.startRun(seed, family)
+    this.ui.onStart = (seed, family) => this._loadRun(1, LOAD_ENTER, () => this.startRun(seed, family))
     this.ui.onResume = () => this.resume()
     this.ui.onRestart = () => {
       if (this.state.phase === Phase.DEAD && this.state.deathReason === 'void') {
-        return this.retryCurrentLevel()
+        return this._loadRun(this.state.level, LOAD_AGAIN, () => this.retryCurrentLevel())
       }
-      return this.startRun(this.state.seedText)
+      return this._loadRun(1, LOAD_AGAIN, () => this.startRun(this.state.seedText))
     }
     this.ui.onQuit = () => this.quitToTitle()
     this.ui.onSetting = (k, v) => this._applySetting(k, v)
@@ -648,6 +686,12 @@ export class Engine {
     }
     else if (k === 'minimap') this.minimap.setVisible(v)
     else if (k === 'reduceFlicker') this._setFlickerProfile(v)
+    else if (k === 'pathTracer') this.pathTrace?.setMode(v)
+    else if (k === 'frameLimit') {
+      this._frameLimit = v
+      this._nextFrameAt = null
+      this._drs?.configure({ targetFps: this._drsTargetFps() })
+    }
     else if (k === 'preset') {
       // A named preset pins every advanced graphics key; 'custom' pins nothing
       // (the stored advanced values already ARE the truth); 'auto' pins the
@@ -683,6 +727,45 @@ export class Engine {
     this.deferred.applyQuality(q)
     this.cm.setRenderDetailProfile(q.worldDetail)
     this._invalidateIdleRender()
+  }
+
+  // The menu entries into a level (ENTER, TRY AGAIN, RESTART). The level
+  // build is synchronous (_setupLevel's prewarm, 1-2 s for ~300 chunks), and
+  // run straight from the click it froze the pressed button with no sign of
+  // life. Claim what needs the click's user activation now (fullscreen, the
+  // audio unlock, pointer lock), cut to the loading card, and build once that
+  // card has been presented; it fades out over the new level's first frames.
+  _loadRun(level, sub, build) {
+    if (this._loading || this._disposed) return
+    if (this.touch) enterImmersive()
+    this.audio.start()
+    if (!this.touch) this.controller.lock()
+    this._loading = true
+    this.ui.showLoading?.(level, sub)
+    afterPaint(() => {
+      this._loading = false
+      if (this._disposed) return
+      try {
+        build()
+      } catch (err) {
+        console.error('[yellow-rooms] level build failed:', err)
+        this._restorePhaseUI()
+        return
+      }
+      // Nobody is at the controls if the page lost focus during the build
+      // (the blur/visibility pause had no live run to stop then).
+      const away = globalThis.document?.hidden || (!this.touch && globalThis.document?.hasFocus?.() === false)
+      if (this.state.phase === Phase.PLAYING && away) this.pause()
+    })
+  }
+
+  // A failed _loadRun build leaves the phase it started from: put its panel back.
+  _restorePhaseUI() {
+    const p = this.state.phase
+    if (p === Phase.TITLE) this.ui.showTitle()
+    else if (p === Phase.DEAD) this.ui.showDeath(this.state.deathReason, this.state)
+    else if (p === Phase.PAUSED) this.ui.showPause(this.state)
+    if (!this.touch) this.controller.unlock()
   }
 
   start() {
@@ -726,16 +809,20 @@ export class Engine {
       /* ignore */
     }
     this._setupLevel()
-    // Fullscreen + audio unlock must both start synchronously inside this tap.
+    // Fullscreen + audio unlock must both start synchronously inside this tap
+    // (a menu entry already claimed both in its click, _loadRun).
     if (this.touch) enterImmersive()
     this.audio.start()
     this.state.phase = Phase.PLAYING
     this.ui.showHud()
-    if (!this.touch) this.controller.lock()
+    // A lock granted to the menu click is kept: a second request would race it.
+    if (!this.touch && !this.controller.isLocked) this.controller.lock()
     this._checkOrientation()
   }
 
   resume() {
+    // RESTART from the pause menu is building the run behind its loading card.
+    if (this._loading) return
     if (this.touch) enterImmersive()
     // The first frames after an unpause are not representative.
     this._resetDynamicResolution()
@@ -905,7 +992,7 @@ export class Engine {
     this.audio.start()
     state.phase = Phase.PLAYING
     this.ui.showHud()
-    if (!this.touch) this.controller.lock()
+    if (!this.touch && !this.controller.isLocked) this.controller.lock()
     this._checkOrientation()
     return true
   }
@@ -1263,9 +1350,23 @@ export class Engine {
     // which a 30 Hz cap or a 50 Hz panel stretches. The GPU timer measures
     // GPU load directly, so gpu mode keeps the 60 fps budget the benchmark
     // chose presets against, and a low estimate can never lengthen it.
-    this._drs.configure({ ...params, displayHz: this._drsGpu ? undefined : this._displayHz })
+    this._drs.configure({
+      ...params,
+      displayHz: this._drsGpu ? undefined : this._displayHz,
+      targetFps: this._drsTargetFps(),
+    })
     this._drs.reset(performance.now(), { toCeiling: !resize })
     this._pinnedFor = 0
+  }
+
+  // The DRS target under a frame limit: a capped frame may use the whole
+  // capped interval, and raf mode would otherwise read the cap's long
+  // intervals as an overloaded GPU and walk the scale to the floor. Limits
+  // at or above 60 fps keep the 60 fps budget the presets were chosen for.
+  _drsTargetFps() {
+    const lim = this._frameLimit
+    const fps = lim === 'half' ? (this._displayHz ?? 60) / 2 : typeof lim === 'number' ? lim : Infinity
+    return Math.min(60, fps)
   }
 
   // Level load and unpause (the DynamicResolution contract): drop the
@@ -1303,8 +1404,11 @@ export class Engine {
     if (Math.abs(hz - (this._displayHz ?? 60)) <= 2) return
     this._displayHz = hz
     if (this._drs && !this._drsGpu) {
-      this._drs.configure({ displayHz: hz })
+      this._drs.configure({ displayHz: hz, targetFps: this._drsTargetFps() })
       this._pinnedFor = 0
+    } else if (this._drs && this._frameLimit === 'half') {
+      // The ½ REFRESH target is a fraction of the rate just measured.
+      this._drs.configure({ targetFps: this._drsTargetFps() })
     }
   }
 
@@ -1319,7 +1423,7 @@ export class Engine {
     const next = drs.sample(ms, {
       now,
       gpu,
-      paused: this.state.phase !== Phase.PLAYING || !!this.captureFrozen,
+      paused: this.state.phase !== Phase.PLAYING || !!this.captureFrozen || !!this.pathTrace?.active,
       hitch: this._hitch,
       tension: this._tension ?? 0,
       intervalMs,
@@ -1339,7 +1443,8 @@ export class Engine {
     // viewport, and a smaller one can earn the preset back); rAF intervals
     // cannot tell a slow GPU from a capped display, so a raf-mode drop lasts
     // this session only.
-    const frozen = !!this.captureFrozen || !!(this.debugMode.active && this.debugMode.freeze)
+    const frozen = !!this.captureFrozen || !!(this.debugMode.active && this.debugMode.freeze) ||
+      !!this.pathTrace?.active
     const starved = this.state.phase === Phase.PLAYING && !frozen && drs.starved
     this._pinnedFor = starved ? (this._pinnedFor ?? 0) + intervalMs : 0
     const g = this.gpu
@@ -1372,6 +1477,7 @@ export class Engine {
     this.renderer.setSize(innerWidth, innerHeight)
     this.deferred.setSize()
     this.debugMode.resize(innerWidth, innerHeight)
+    this.pathTrace?.resize(innerWidth, innerHeight)
     this.minimap.resize()
     this._invalidateIdleRender()
   }
@@ -1384,19 +1490,30 @@ export class Engine {
   // 90/120/144 Hz panels all converge on 30 canvas frames. Phase transitions,
   // resized buffers, changed settings, and active diagnostics draw immediately.
   // Missed intervals (background tabs) are skipped rather than replayed.
-  _shouldRender(now, phase) {
+  // A settled PAUSED screen holds its last frame (PAUSE_SETTLE_MS); live
+  // phases follow the frame limit (_frameLimitDue).
+  _shouldRender(now, phase, frameTime = now) {
     const idle = phase === Phase.TITLE || phase === Phase.PAUSED
     if (!idle || this.debugMode.active || this.debug.visible) {
       this._idleRenderPhase = null
       this._idleRenderInvalidated = false
-      return true
+      // F2 debug mode keeps every frame (its tools time and step them).
+      return idle || this.debugMode.active ? true : this._frameLimitDue(frameTime)
     }
 
     if (this._idleRenderInvalidated || this._idleRenderPhase !== phase) {
       this._idleRenderPhase = phase
       this._idleRenderInvalidated = false
       this._nextIdleRenderAt = now + IDLE_RENDER_INTERVAL_MS
+      this._idleHoldAt = now + PAUSE_SETTLE_MS
       return true
+    }
+
+    if (phase === Phase.PAUSED) {
+      // A lighting build still compiling will swap in: keep drawing until it
+      // has, and for the settle time after, so exposure re-adapts on screen.
+      if (this.deferred?.lightingPending) this._idleHoldAt = now + PAUSE_SETTLE_MS
+      else if (now >= this._idleHoldAt) return false
     }
 
     if (now < this._nextIdleRenderAt) return false
@@ -1410,7 +1527,29 @@ export class Engine {
     return true
   }
 
-  _animate() {
+  // Settings 'frameLimit' for PLAYING / DEAD / TRANSITION. The simulation
+  // still ticks on every rAF callback; only the deferred submission waits.
+  // 'half' draws on every second callback, evenly paced on any refresh rate.
+  // A number draws on a deadline that advances by exactly its interval, so
+  // the average rate is the limit (uneven on a refresh rate it does not
+  // divide); a deadline missed by a whole interval restarts from now rather
+  // than bursting to catch up.
+  _frameLimitDue(now) {
+    const lim = this._frameLimit
+    if (lim === 'half') return (this._halfFrame = !this._halfFrame)
+    if (typeof lim !== 'number' || !(lim > 0)) return true
+    const interval = 1000 / lim
+    const next = this._nextFrameAt ?? -Infinity
+    if (now < next - Math.min(FRAME_LIMIT_SLACK_MAX_MS, interval * FRAME_LIMIT_SLACK)) return false
+    const after = next + interval
+    this._nextFrameAt = after > now ? after : now + interval
+    return true
+  }
+
+  // `frameTime` is rAF's own timestamp (the frame's vsync-aligned start);
+  // only the frame limit reads it, since performance.now() here wobbles
+  // with whatever ran before the callback.
+  _animate(frameTime) {
     if (this._disposed) return
     if (this._running) this._raf = requestAnimationFrame(this._animate)
     const now = performance.now()
@@ -1422,7 +1561,10 @@ export class Engine {
     const p = this.state.phase
 
     this.debugMode.update(dt)
-    const frozen = (this.debugMode.active && this.debugMode.freeze) || this.captureFrozen
+    // The experimental path-traced view holds the world still from the key
+    // press on (it can take seconds to start); mouse look keeps working.
+    const tracing = !!this.pathTrace?.active
+    const frozen = (this.debugMode.active && this.debugMode.freeze) || this.captureFrozen || tracing
 
     if (frozen) {
       this._updateCameraMatrices() // keep the player camera valid while paused
@@ -1456,10 +1598,24 @@ export class Engine {
       this._updateCameraMatrices()
     }
 
+    // Once live, the path tracer draws on its own WebGPU canvas every frame
+    // and the deferred frame is not submitted at all (the GPU is the
+    // tracer's). Leaving PLAYING closes it first.
+    if (this.pathTrace) {
+      this.pathTrace.update(p)
+      if (this.pathTrace.render(now)) {
+        // The first deferred frame back shares the GPU with a tracer that
+        // just ran flat out: dynamic resolution must not read it as load.
+        this._lastRenderAt = now
+        this._hitch = true
+        return
+      }
+    }
+
     // Keep RAF-time simulation/title animation current, but omit the expensive
     // deferred submission between idle deadlines. renderer.info deliberately
     // retains the previous completed frame on skipped callbacks.
-    const render = this._shouldRender(now, p)
+    const render = this._shouldRender(now, p, Number.isFinite(frameTime) ? frameTime : now)
     this._trackDisplayRate(rafMs, p, render)
     if (!render) return
 
@@ -1473,6 +1629,13 @@ export class Engine {
     } finally {
       this.debugMode.postRender()
     }
+    if (this._onFirstFrame) {
+      this._onFirstFrame()
+      this._onFirstFrame = null
+    }
+    // Realtime path tracing (experimental): the frame above already blended
+    // the newest traced lighting; now trace this camera for the next ones.
+    this.pathTrace?.afterRender(now, p)
     this._sampleDynamicResolution(now, (now - (this._lastRenderAt ?? now)) || 16.7)
     this._lastRenderAt = now
     this.debug.update(dt, { chunks: this.cm.loadedCount })
@@ -1491,6 +1654,7 @@ export class Engine {
     }
     this._eventBindings.length = 0
     this.debugMode.dispose()
+    this.pathTrace?.dispose()
     this.debug.dispose()
     this.controller.dispose?.()
     this.touchControls?.dispose?.()

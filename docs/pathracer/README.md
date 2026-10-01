@@ -5,6 +5,22 @@ at `main` `8de7270`, where the WebGPU backend (PR #713) merged that day, and
 npm `0.0.24`. Target: this repository's three r185 WebGL2 deferred renderer
 and `WORLD_GEN_VERSION` 27.
 
+> **Update, same day.** `three-gpu-pathtracer@0.0.25` was published to npm
+> after this research. It is the first release with the WebGPU backend,
+> and it requires three `>=0.185.0` and three-mesh-bvh `>=0.9.15`. The
+> project now depends on it (pinned). Settings → ADVANCED → EXPERIMENTAL →
+> WEBGPU PATH TRACER (**OFF by default**) offers two modes:
+>
+> - **VIEWER:** P freezes the game on a converging path-traced view. See
+>   [09 — WebGPU integration](09-webgpu-integration.md).
+> - **REALTIME:** path-traced lighting replaces the raster lighting inside
+>   the running game's own render, and P flips back to raster for an A/B.
+>   See [10 — Realtime integration](10-realtime-integration.md), including
+>   where in the pipeline it goes and what it costs.
+>
+> Statements below that say the WebGPU backend "is not on npm" describe
+> 0.0.24.
+
 ## The question
 
 Can any of three-gpu-pathtracer's technology or features be brought into
@@ -55,7 +71,7 @@ Panel faces are dark because area lights are invisible to camera rays.*
 | --- | --- | --- | --- |
 | 1 | [P1b GI reference report + fix](06-proposals.md#p1b--gi-reference-report-and-ambient-cube-refit) | Dev tool → shipped lighting fix | Measured bias, deterministic, Node-only, cheap |
 | 2 | [P2 Photometric flashlight beam](06-proposals.md#p2--photometric-flashlight-beam-profile) | Shader port | The torch is the player's main instrument; costs one fetch |
-| 3 | [P1 Path-traced reference view](06-proposals.md#p1--path-traced-reference-mode-f2--editor) | Lazy dev tool | Calibrates every lighting constant against ground truth |
+| 3 | [P1 Path-traced reference view](06-proposals.md#p1--path-traced-reference-mode-f2--editor) | Lazy dev tool | Calibrates every lighting constant against ground truth. **Viewer shipped on WebGPU, experimental and off by default ([09](09-webgpu-integration.md)); the A/B report is still to do** |
 | 4 | [P3 EON diffuse](06-proposals.md#p3--eon-diffuse-for-rough-surfaces) | Shader port | Carpets and ceiling tiles at grazing angles; free G-buffer channel |
 | 5 | [P4 FSR1 upscale](06-proposals.md#p4--fsr1-easu--rcas-upscale-for-renderscale--1) | Post port | Sharper image exactly where DRS drops resolution |
 | 6 | [P5 Targeted blue noise](06-proposals.md#p5--blue-noise-where-it-actually-helps) | Small port | Cosmetic; removes the IGN pattern from unfiltered dither |
@@ -78,6 +94,8 @@ gameplay. See the [non-goals](08-roadmap-and-risks.md#3-non-goals).
 | [07 — Experiments](07-experiments.md) | E1–E4 methods and results |
 | [07a — Experiment sources](07a-experiment-sources.md) | Verbatim scripts so every number can be reproduced |
 | [08 — Roadmap and risks](08-roadmap-and-risks.md) | Staged plan, risk register, non-goals, open questions |
+| [09 — WebGPU integration](09-webgpu-integration.md) | 0.0.25 migration, the experimental path-traced view, gating, bundle cost, real-GPU measurements, limitations |
+| [10 — Realtime integration](10-realtime-integration.md) | Options researched, where the tracer goes in the deferred pipeline, the readback bridge and its latency, denoising, streaming, real-GPU costs, limitations |
 
 ## Provenance and conventions
 
@@ -90,5 +108,6 @@ gameplay. See the [non-goals](08-roadmap-and-risks.md#3-non-goals).
 - **Timings.** Experiment timings come from a GPU-less container (SwiftShader
   and Node). They show feasibility and relative cost, not player frame
   time.
-- **No functional change.** This folder changes no game code.
+- **No world change.** Chapters 01–08 changed no game code. Chapter 09's
+  integration is render-side, opt-in and off by default.
   `WORLD_GEN_VERSION`, world pins and captures are unaffected.

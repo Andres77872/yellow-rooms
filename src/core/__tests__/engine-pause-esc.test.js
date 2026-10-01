@@ -462,3 +462,132 @@ describe('desktop pause Esc flow', () => {
     expect(engine.ui.showHud).not.toHaveBeenCalled()
   })
 })
+
+// Menu entries into a level (ENTER / TRY AGAIN / RESTART) put the loading card
+// up and build once it has been presented, instead of freezing the clicked
+// button for the whole synchronous prewarm. The click itself still claims the
+// audio unlock and pointer lock, which need its user activation.
+describe('loading card before a level build', () => {
+  let frames
+  const flushFrames = () => {
+    while (frames.length) frames.shift()()
+  }
+  const loadingEngine = () => {
+    const engine = createEngine()
+    engine.ui.showLoading = vi.fn()
+    return engine
+  }
+
+  beforeEach(() => {
+    frames = []
+    vi.stubGlobal('requestAnimationFrame', (cb) => frames.push(cb))
+    vi.stubGlobal('document', { activeElement: null, hidden: false, hasFocus: () => true })
+  })
+
+  it('claims the gesture in the click and builds after the card is presented', () => {
+    const engine = loadingEngine()
+    const startRun = vi.spyOn(engine, 'startRun')
+
+    engine.ui.onStart('abc', 'sewer')
+
+    expect(engine.audio.start).toHaveBeenCalled()
+    expect(engine.controller.lock).toHaveBeenCalledTimes(1)
+    expect(engine.ui.showLoading).toHaveBeenCalledWith(1, expect.any(String))
+    expect(startRun).not.toHaveBeenCalled()
+    expect(engine.cm.prewarm).not.toHaveBeenCalled()
+    expect(engine.state.phase).toBe(Phase.TITLE)
+
+    flushFrames()
+
+    expect(startRun).toHaveBeenCalledWith('abc', 'sewer')
+    expect(engine.cm.prewarm).toHaveBeenCalledOnce()
+    expect(engine.state.phase).toBe(Phase.PLAYING)
+    expect(engine.ui.showHud).toHaveBeenCalled()
+  })
+
+  it('builds once however often the button is pressed while loading', () => {
+    const engine = loadingEngine()
+    const startRun = vi.spyOn(engine, 'startRun')
+
+    engine.ui.onStart('abc', 'office')
+    engine.ui.onStart('abc', 'office')
+    flushFrames()
+
+    expect(startRun).toHaveBeenCalledOnce()
+    expect(engine.ui.showLoading).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the pointer lock the click was granted instead of racing a second request', () => {
+    const engine = loadingEngine()
+
+    engine.ui.onStart('abc', 'office')
+    engine.controller.isLocked = true // the async grant landed under the card
+    flushFrames()
+
+    expect(engine.state.phase).toBe(Phase.PLAYING)
+    expect(engine.controller.lock).toHaveBeenCalledTimes(1)
+  })
+
+  it('cannot be resumed by Escape while a pause-menu RESTART is building', () => {
+    const engine = pausedEngine()
+    engine.ui.showLoading = vi.fn()
+    engine._pauseT = performance.now() - 1000
+    const startRun = vi.spyOn(engine, 'startRun')
+
+    engine.ui.onRestart()
+    fire('keyup', { code: 'Escape' })
+
+    expect(engine.state.phase).toBe(Phase.PAUSED)
+    expect(engine.ui.showHud).not.toHaveBeenCalled()
+    expect(engine.ui.showLoading).toHaveBeenCalledWith(1, expect.any(String))
+
+    flushFrames()
+
+    expect(startRun).toHaveBeenCalledOnce()
+    expect(engine.state.phase).toBe(Phase.PLAYING)
+  })
+
+  it('retries a void death at its own level behind the card', () => {
+    const engine = loadingEngine()
+    engine.state.phase = Phase.PLAYING
+    engine.state.level = 4
+    engine.die('void')
+    const retry = vi.spyOn(engine, 'retryCurrentLevel')
+
+    engine.ui.onRestart()
+    expect(engine.ui.showLoading).toHaveBeenCalledWith(4, expect.any(String))
+    expect(retry).not.toHaveBeenCalled()
+
+    flushFrames()
+    expect(retry).toHaveBeenCalledOnce()
+    expect(engine.state.phase).toBe(Phase.PLAYING)
+  })
+
+  it('pauses a run that finished building after the page lost focus', () => {
+    const engine = loadingEngine()
+    engine.ui.onStart('abc', 'office')
+    document.hasFocus = () => false
+
+    flushFrames()
+
+    expect(engine.state.phase).toBe(Phase.PAUSED)
+    expect(engine.ui.showPause).toHaveBeenCalled()
+  })
+
+  it('puts the menu back when the build fails', () => {
+    const engine = loadingEngine()
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(engine, 'startRun').mockImplementation(() => {
+      throw new Error('synthetic build failure')
+    })
+
+    engine.ui.onStart('abc', 'office')
+    flushFrames()
+    error.mockRestore()
+
+    expect(engine.state.phase).toBe(Phase.TITLE)
+    expect(engine.ui.showTitle).toHaveBeenCalled()
+    expect(engine.controller.unlock).toHaveBeenCalled()
+    expect(engine._loading).toBe(false)
+  })
+})

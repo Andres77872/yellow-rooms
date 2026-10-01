@@ -896,7 +896,15 @@ export function lightingFrag({
       #ifdef FLASH_ANALYTIC
         fvis = torchVis;
       #else
-        if (cone > 0.0 && uFlashShadowOn > 0.5) fvis = flashShadow(P, geomNormalV(P, N), Lf);
+        #ifdef SHADING_PBR
+          // The BRDF zeroes both terms (and aLit) for a surface facing away
+          // from the torch, so its PCSS taps change nothing; the debug views
+          // still read the visibility everywhere.
+          bool fLit = uLightDebug > 0 || dot(N, Lf) > 0.0;
+        #else
+          bool fLit = true; // wrap lighting reaches past the terminator
+        #endif
+        if (cone > 0.0 && uFlashShadowOn > 0.5 && fLit) fvis = flashShadow(P, geomNormalV(P, N), Lf);
       #endif
       fvisDbg = fvis;
       #ifdef SHADING_PBR
@@ -941,9 +949,11 @@ export function lightingFrag({
     #endif
     if (gridPixel && uGI > 0.0) {
       bool stencil = uGIStencil > 0.5;
-      indirect = gridIndirect(Pl, Nb, gcy, stencil);
       #ifdef SHADING_PBR
-        indirectSpec = gridIndirect(Pl, reflect(-sV, Nw), gcy, stencil);
+        // Diffuse and specular share one stencil and one set of GI fetches.
+        gridIndirect2(Pl, Nb, reflect(-sV, Nw), gcy, stencil, indirect, indirectSpec);
+      #else
+        indirect = gridIndirect(Pl, Nb, gcy, stencil);
       #endif
     }
 

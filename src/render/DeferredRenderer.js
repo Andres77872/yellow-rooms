@@ -230,6 +230,10 @@ export class DeferredRenderer {
     // every pass instead of re-inverted) and lamp positions in view space.
     this._projInv = new THREE.Matrix4()
     this._clearScratch = new THREE.Color()
+    // Experimental realtime path tracer (render/pathtrace/pathTraceBlend.js):
+    // null unless the player opted in. Runs between lighting and the
+    // exposure meter, so every later pass sees the path-traced lighting.
+    this.pathTraceHook = null
     this._lampFrustum = new THREE.Frustum()
     this._lampSphere = new THREE.Sphere()
     this._lampViewScratch = new THREE.Vector3()
@@ -577,6 +581,12 @@ export class DeferredRenderer {
   whenLightingReady() {
     if (!this._pendingLightMat || this._disposed) return Promise.resolve()
     return new Promise((resolve) => this._lightWaiters.push(resolve))
+  }
+
+  // A requested lighting build is still compiling (a held pause screen keeps
+  // drawing until it swaps in).
+  get lightingPending() {
+    return !!this._pendingLightMat && !this._disposed
   }
 
   // Volumetric haze (ultra) is a separate shaft build. Both builds are kept
@@ -1471,6 +1481,12 @@ export class DeferredRenderer {
     if (this.look) this._applySignalLook()
   }
 
+  // `hook.render(deferred)` blends into litRT after the lighting pass; null
+  // detaches it (the raster lighting stands alone again).
+  setPathTraceHook(hook) {
+    this.pathTraceHook = hook ?? null
+  }
+
   setMotionBlur(on) {
     this.motionBlurEnabled = !!on
   }
@@ -2139,6 +2155,7 @@ export class DeferredRenderer {
       )
     }
     this._pass('lighting', () => this._renderLighting())
+    if (this.pathTraceHook) this._pass('pathTrace', () => this.pathTraceHook.render(this))
     if (this.gradeUniforms.autoExposure.value > 0.5) this._pass('exposure', () => this._renderExposure(dt))
     this._runOr(
       this.volEnabled && (lampsLoaded || flashOn), 'volumetric', this._renderVolumetrics,

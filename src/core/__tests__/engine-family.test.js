@@ -821,3 +821,82 @@ describe('low-activity render cadence', () => {
     expect(cancel).toHaveBeenCalledWith(41)
   })
 })
+
+describe('experimental WebGPU path tracer wiring', () => {
+  it('boots with the option off and routes the setting to the lazy view', () => {
+    const engine = createEngine()
+    expect(engine.settings.get('pathTracer')).toBe('off')
+    expect(engine.pathTrace.mode).toBe('off')
+    const setMode = vi.spyOn(engine.pathTrace, 'setMode')
+    engine._runSetting('pathTracer', 'realtime')
+    expect(setMode).toHaveBeenCalledWith('realtime')
+    engine.dispose()
+  })
+
+  it('drives realtime tracing after each deferred frame, with the phase', () => {
+    vi.stubGlobal('requestAnimationFrame', vi.fn())
+    let now = 5_000
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const engine = createEngine()
+    engine.state.phase = Phase.PLAYING
+    engine._tick = vi.fn()
+    const order = []
+    engine.deferred.render.mockImplementation(() => order.push('render'))
+    const view = {
+      active: false,
+      update: vi.fn(),
+      render: vi.fn(() => false),
+      afterRender: vi.fn((t, phase) => order.push(['after', t, phase])),
+      dispose: vi.fn(),
+    }
+    engine.pathTrace = view
+    engine._animate()
+    expect(order).toEqual(['render', ['after', now, Phase.PLAYING]])
+    // Realtime never freezes the world.
+    expect(engine._tick).toHaveBeenCalledTimes(1)
+    engine.dispose()
+    clock.mockRestore()
+  })
+
+  it('freezes the world while active and skips the deferred frame once live', () => {
+    vi.stubGlobal('requestAnimationFrame', vi.fn())
+    let now = 3_000
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const engine = createEngine()
+    engine.state.phase = Phase.PLAYING
+    engine._tick = vi.fn()
+    const view = { active: false, live: false, update: vi.fn(), render: vi.fn(() => view.live), afterRender: vi.fn(), dispose: vi.fn() }
+    engine.pathTrace = view
+
+    engine._animate()
+    expect(engine._tick).toHaveBeenCalledTimes(1)
+    expect(engine.deferred.render).toHaveBeenCalledTimes(1)
+
+    // Starting (module/WebGPU loading): frozen, the frozen frame still draws.
+    view.active = true
+    now += 16
+    engine._animate()
+    expect(engine._tick).toHaveBeenCalledTimes(1)
+    expect(engine.deferred.render).toHaveBeenCalledTimes(2)
+
+    // Live: the tracer owns the screen.
+    view.live = true
+    now += 16
+    engine._animate()
+    expect(view.update).toHaveBeenLastCalledWith(Phase.PLAYING)
+    expect(view.render).toHaveBeenLastCalledWith(now)
+    expect(engine._tick).toHaveBeenCalledTimes(1)
+    expect(engine.deferred.render).toHaveBeenCalledTimes(2)
+
+    // Back to the game.
+    view.active = view.live = false
+    now += 16
+    engine._animate()
+    expect(engine._tick).toHaveBeenCalledTimes(2)
+    expect(engine.deferred.render).toHaveBeenCalledTimes(3)
+
+    engine.dispose()
+    expect(view.dispose).toHaveBeenCalledOnce()
+    clock.mockRestore()
+  })
+})
