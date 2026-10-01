@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { ChunkData } from '../ChunkData.js'
 import { collectInteriorDressing, PROP_TINT, SIGN_TINT } from '../objects/dressing/index.js'
+import { mergeCollinearBoxes } from '../objects/wallShell.js'
 import {
   CELL,
   CHUNK,
@@ -63,12 +64,19 @@ describe('collectInteriorDressing', () => {
     }
   })
 
-  it('dresses every full-height wall with a baseboard and a crown', () => {
+  it('dresses every full-height wall with a continuous baseboard and crown', () => {
     const { trim } = collectInteriorDressing(walledChunk())
-    const boards = trim.filter((b) => b.sy === BASEBOARD_H)
-    const crowns = trim.filter((b) => b.sy === CROWN_H)
-    expect(boards).toHaveLength(CHUNK)
-    expect(crowns).toHaveLength(CHUNK)
+    // Run-merged: one member per profile spanning the whole wall, wrapped
+    // past both seam vertices by its corner pieces.
+    const merged = mergeCollinearBoxes(trim)
+    const boards = merged.filter((b) => b.sy === BASEBOARD_H)
+    const crowns = merged.filter((b) => b.sy === CROWN_H)
+    expect(boards).toHaveLength(1)
+    expect(crowns).toHaveLength(1)
+    for (const b of [...boards, ...crowns]) {
+      expect(b.pz - b.sz / 2).toBeLessThanOrEqual(0)
+      expect(b.pz + b.sz / 2).toBeGreaterThanOrEqual(CHUNK * CELL)
+    }
     for (const b of boards) expect(b.py - b.sy / 2).toBe(0) // sits on the floor
     for (const b of crowns) expect(b.py + b.sy / 2).toBeCloseTo(WALL_H, 10) // meets the ceiling
     // All centred on the wall plane, slightly proud of both faces.

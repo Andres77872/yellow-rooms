@@ -16,6 +16,7 @@ import {
   LAYER_H,
   MONUMENTAL_COL_HALF,
   SLAB_T,
+  WALL_BEVEL,
   THICK,
   WALL_H,
   WINDOW_HEAD_Y,
@@ -90,40 +91,36 @@ function materials() {
   }
 }
 
+// Geometric (winding) normal of triangle i, unnormalised: |n| = 2 x area.
+function faceNormal(p, i, out) {
+  const a = new THREE.Vector3().fromBufferAttribute(p, i)
+  const b = new THREE.Vector3().fromBufferAttribute(p, i + 1)
+  const c = new THREE.Vector3().fromBufferAttribute(p, i + 2)
+  return out.subVectors(b, a).cross(c.sub(a))
+}
+
+// Area of the faces turned toward normalY (+1 up, -1 down), projected onto
+// the horizontal plane: a slab underside covers its solid cells exactly once,
+// whether a stretch of it is flat or rounds up into a hole's nosing.
 function horizontalArea(geometry, normalY) {
   const p = geometry.attributes.position
-  const n = geometry.attributes.normal
+  const n = new THREE.Vector3()
   let area = 0
-  const a = new THREE.Vector3()
-  const b = new THREE.Vector3()
-  const c = new THREE.Vector3()
-  const ab = new THREE.Vector3()
-  const ac = new THREE.Vector3()
   for (let i = 0; i < p.count; i += 3) {
-    if (Math.sign(n.getY(i)) !== Math.sign(normalY)) continue
-    a.fromBufferAttribute(p, i)
-    b.fromBufferAttribute(p, i + 1)
-    c.fromBufferAttribute(p, i + 2)
-    area += ab.subVectors(b, a).cross(ac.subVectors(c, a)).length() * 0.5
+    faceNormal(p, i, n)
+    if (n.y * normalY > 1e-9) area += Math.abs(n.y) * 0.5
   }
   return area
 }
 
+// Area of the exactly vertical faces: the hole skirts above their nosings.
 function fasciaArea(geometry) {
   const p = geometry.attributes.position
-  const n = geometry.attributes.normal
+  const n = new THREE.Vector3()
   let area = 0
-  const a = new THREE.Vector3()
-  const b = new THREE.Vector3()
-  const c = new THREE.Vector3()
-  const ab = new THREE.Vector3()
-  const ac = new THREE.Vector3()
   for (let i = 0; i < p.count; i += 3) {
-    if (Math.abs(n.getY(i)) > 1e-6) continue
-    a.fromBufferAttribute(p, i)
-    b.fromBufferAttribute(p, i + 1)
-    c.fromBufferAttribute(p, i + 2)
-    area += ab.subVectors(b, a).cross(ac.subVectors(c, a)).length() * 0.5
+    faceNormal(p, i, n)
+    if (Math.abs(n.y) <= 1e-6 * n.length()) area += n.length() * 0.5
   }
   return area
 }
@@ -192,7 +189,8 @@ describe('3D chunk mesh / slab ownership', () => {
     let disposed = 0
     ceiling.geometry.addEventListener('dispose', () => disposed++)
 
-    const instances = mesh.group.children.find((child) => child.isInstancedMesh)
+    const instances = mesh.parts.stairs
+    expect(instances.geometry).toBe(geom.stairUnit)
     const matrix = new THREE.Matrix4()
     const position = new THREE.Vector3()
     const quaternion = new THREE.Quaternion()
@@ -269,7 +267,7 @@ describe('3D chunk mesh / slab ownership', () => {
           if (!holes.has(`${gx + dx},${gz + dz}`)) boundaryEdges++
         }
       }
-      expect(actualFascia).toBeCloseTo(boundaryEdges * CELL * SLAB_T, 4)
+      expect(actualFascia).toBeCloseTo(boundaryEdges * CELL * (SLAB_T - WALL_BEVEL), 4)
 
       for (const mesh of [...lowerMeshes, ...upperMeshes]) mesh.dispose()
     }
@@ -324,20 +322,25 @@ describe('3D chunk mesh / slab ownership', () => {
       }
       return null
     }
+    // Wall pieces are run-merged (objects/wallShell.js): collect the heights
+    // of the THICK-deep boxes on the edge's plane that span the whole edge.
     const instancesAt = (edge) => {
-      const wantedX = edge.axis === 'v' ? edge.line * CELL : (edge.cell + 0.5) * CELL
-      const wantedZ = edge.axis === 'v' ? (edge.cell + 0.5) * CELL : edge.line * CELL
+      const vertical = edge.axis === 'v'
+      const plane = edge.line * CELL
+      const a0 = edge.cell * CELL
+      const a1 = (edge.cell + 1) * CELL
       const matrix = new THREE.Matrix4()
       const position = new THREE.Vector3(), quaternion = new THREE.Quaternion(), scale = new THREE.Vector3()
       const hits = []
       for (let i = 0; i < walls.count; i++) {
         walls.getMatrixAt(i, matrix)
         matrix.decompose(position, quaternion, scale)
-        if (Math.abs(position.x - wantedX) < 1e-6 && Math.abs(position.z - wantedZ) < 1e-6) {
-          const thin = edge.axis === 'v' ? scale.x : scale.z
-          const along = edge.axis === 'v' ? scale.z : scale.x
-          if (Math.abs(thin - THICK) < 1e-6 && Math.abs(along - CELL) < 1e-6) hits.push(scale.y)
-        }
+        const across = vertical ? position.x : position.z
+        const thin = vertical ? scale.x : scale.z
+        const centre = vertical ? position.z : position.x
+        const half = (vertical ? scale.z : scale.x) / 2
+        if (Math.abs(across - plane) > 1e-6 || Math.abs(thin - THICK) > 1e-6) continue
+        if (centre - half <= a0 + 1e-6 && centre + half >= a1 - 1e-6) hits.push(scale.y)
       }
       return hits.sort((a, b) => a - b)
     }

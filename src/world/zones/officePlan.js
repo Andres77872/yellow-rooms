@@ -16,7 +16,7 @@ import {
   PASSAGE_WIDE,
 } from '../mapTypes.js'
 import { selectZone } from './regions.js'
-import { chunkStairs, stairStrip, STAIR_DX, STAIR_DZ } from '../structures/slab.js'
+import { chunkStairs, stairHaloRect, STAIR_DX, STAIR_DZ } from '../structures/slab.js'
 import { chunkMultilevelRooms } from '../structures/multilevel.js'
 import { structureAt } from '../structures/contract.js'
 import { isCatalogStructure } from '../structures/catalog/engine.js'
@@ -298,13 +298,7 @@ function collectStairLobbies(plan, seed, config, context) {
       for (const kind of ['up', 'down']) {
         const contract = contracts[kind]
         if (!contract.hasStair) continue
-        const strip = stairStrip(contract)
-        const xs = strip.map((cell) => cell.lx)
-        const zs = strip.map((cell) => cell.lz)
-        const x0 = Math.max(0, Math.min(...xs) - 1)
-        const z0 = Math.max(0, Math.min(...zs) - 1)
-        const x1 = Math.min(CHUNK - 1, Math.max(...xs) + 1)
-        const z1 = Math.min(CHUNK - 1, Math.max(...zs) + 1)
+        const { x0, z0, x1, z1 } = stairHaloRect(contract)
         const cells = []
         for (let lz = z0; lz <= z1; lz++) {
           for (let lx = x0; lx <= x1; lx++) {
@@ -1217,16 +1211,40 @@ function setCandidatePassage(plan, candidate, passage) {
   }
 }
 
+// Does a perpendicular wall meet the candidate's line at the vertex it shares
+// with its neighbour at `offset` (a party wall between two rooms)?
+function partitionAtSharedVertex(plan, candidate, offset) {
+  const v = offset > 0 ? candidate.cell + 1 : candidate.cell
+  if (v <= 0 || v >= plan.size) return false
+  const { line } = candidate
+  if (candidate.axis === 'v') {
+    return (line > 0 && plan.hAt(line - 1, v) === 1) || (line < plan.size && plan.hAt(line, v) === 1)
+  }
+  return (line > 0 && plan.vAt(v, line - 1) === 1) || (line < plan.size && plan.vAt(v, line) === 1)
+}
+
+// An opening beside an existing one merges with it into a single WIDE mouth —
+// unless a party wall meets the line between them and both stay framed: then
+// they are two rooms' own doors side by side (a hotel corridor), and merging
+// would leave the party wall ending as a bare blade in a two-cell gap. Each
+// door must keep a wall of its own line beside it (the neighbour loses the
+// one this carve opens), so a third door in a row still merges.
 function carveConnection(plan, a, b, candidate) {
   const support = supportingWalls(plan, candidate)
-  const low = neighbouringPassage(plan, candidate, -1)
-  const high = neighbouringPassage(plan, candidate, 1)
+  const paired = (offset) =>
+    support > 0 &&
+    neighbouringPassage(plan, candidate, offset) === PASSAGE_DOOR &&
+    partitionAtSharedVertex(plan, candidate, offset) &&
+    supportingWalls(plan, { ...candidate, cell: candidate.cell + offset }) === 2
+  const merges = (offset) => {
+    const neighbour = neighbouringPassage(plan, candidate, offset)
+    return (neighbour === PASSAGE_DOOR || neighbour === PASSAGE_WIDE) && !paired(offset)
+  }
   let kind = support > 0 ? PASSAGE_DOOR : PASSAGE_WIDE
-  if (low === PASSAGE_DOOR || low === PASSAGE_WIDE || high === PASSAGE_DOOR || high === PASSAGE_WIDE) {
+  if (merges(-1) || merges(1)) {
     kind = PASSAGE_WIDE
     for (const offset of [-1, 1]) {
-      const neighbour = neighbouringPassage(plan, candidate, offset)
-      if (neighbour === PASSAGE_DOOR) {
+      if (merges(offset) && neighbouringPassage(plan, candidate, offset) === PASSAGE_DOOR) {
         setCandidatePassage(plan, { ...candidate, cell: candidate.cell + offset }, PASSAGE_WIDE)
       }
     }

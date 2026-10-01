@@ -12,15 +12,15 @@ import { DeferredRenderer } from '../DeferredRenderer.js'
 import {
   ALPHA_CONTINUED,
   ALPHA_FRESH,
-  FILTER_DECAY,
   FILTER_ITERATIONS,
+  FILTER_SAMPLE_STEPS,
   PathTraceBlend,
   SNAPSHOT_SLOTS,
   filterIterations,
   traceSize,
 } from '../pathtrace/pathTraceBlend.js'
 import { REBUILD_DISTANCE, needsRebuild, worldKey } from '../pathtrace/realtimePolicy.js'
-import { ProxySceneBuilder, REALTIME_SKIPPED_PARTS, mergeChunk } from '../pathtrace/proxyScene.js'
+import { MAX_JOB_SAMPLES, MIN_JOB_SAMPLES, PathTraceRealtime } from '../pathtrace/PathTraceRealtime.js'
 import { LazyPathTraceView, PATH_TRACE_KEY } from '../pathtrace/LazyPathTraceView.js'
 import { createGBufferMaterials } from '../gbufferMaterials.js'
 import { createGeometries } from '../geometries.js'
@@ -32,8 +32,9 @@ import { Phase } from '../../core/GameState.js'
 
 // The experimental REALTIME path tracer (docs/pathracer/10): the WebGL
 // blend that DeferredRenderer runs after its lighting pass, the streaming
-// policy, the merged chunk proxies, and the facade's realtime mode. The
-// WebGPU tracer itself needs a GPU and is verified in the browser (doc §6).
+// policy, the page-side driver of the tracer worker, and the facade's
+// realtime mode. The worker protocol is in pathtrace-worker.test.js; the
+// WebGPU tracer itself needs a GPU and is verified in the browser (doc §7).
 
 function fakeRenderer(width = 320, height = 180) {
   const size = { width, height, pixelRatio: 1 }
@@ -65,11 +66,12 @@ describe('trace resolution and filter schedule', () => {
     expect(traceSize(320, 180)).toEqual({ width: 160, height: 90 })
   })
 
-  it('filters a fresh frame fully and fades the filter as a still view converges', () => {
-    expect(filterIterations(0)).toBe(FILTER_ITERATIONS)
-    expect(filterIterations(FILTER_DECAY)).toBe(FILTER_ITERATIONS - 1)
-    expect(filterIterations(FILTER_DECAY * FILTER_ITERATIONS)).toBe(0)
-    expect(filterIterations(1000)).toBe(0)
+  it('filters a few-sample frame fully and sheds the filter as samples accumulate', () => {
+    expect(filterIterations(1)).toBe(FILTER_ITERATIONS)
+    expect(filterIterations(FILTER_SAMPLE_STEPS[0] - 1)).toBe(FILTER_ITERATIONS)
+    expect(filterIterations(FILTER_SAMPLE_STEPS[0])).toBe(FILTER_ITERATIONS - 1)
+    expect(filterIterations(512)).toBe(0)
+    expect(filterIterations(5000)).toBe(0)
   })
 })
 
@@ -116,6 +118,21 @@ describe('PathTraceBlend', () => {
     expect(blend.slots[a].state).toBe('free')
     expect(blend.accumUniforms.uAlpha.value).toBe(ALPHA_CONTINUED)
     expect(blend.stats.accepted).toBe(2)
+  })
+
+  it('snapshots at trace size and filters by the frame\'s sample count', () => {
+    blend.reserve()
+    blend.render(deferred)
+    expect(blend.snapUniforms.uTraceSize.value.toArray()).toEqual([160, 90])
+    const data = new Float32Array(160 * 90 * 4)
+    blend.accept(blend.takeCaptured().slot, data, 160, 90, { samples: 600 })
+    blend.render(deferred)
+    expect(blend.stats.filterIterations).toBe(0)
+    blend.reserve()
+    blend.render(deferred)
+    blend.accept(blend.takeCaptured().slot, data, 160, 90, { samples: 2 })
+    blend.render(deferred)
+    expect(blend.stats.filterIterations).toBe(FILTER_ITERATIONS)
   })
 
   it('refuses a readback from another trace size or an unknown slot', () => {
@@ -218,79 +235,170 @@ describe('streaming policy', () => {
   })
 })
 
-describe('merged chunk proxies (realtime)', () => {
+// A stand-in for the tracer worker: records what the page posts.
+class FakeWorker {
+  constructor({ fail = null } = {}) {
+    this.sent = []
+    this.terminated = false
+    this.fail = fail
+  }
+  postMessage(msg) {
+    this.sent.push(msg)
+    if (msg.type === 'init') {
+      queueMicrotask(() =>
+        this.reply(this.fail ? { type: 'error', message: this.fail } : { type: 'ready', info: { vendor: 'test' }, backend: 'megakernel' })
+      )
+    }
+  }
+  reply(msg) {
+    this.onmessage?.({ data: msg })
+  }
+  of(type) {
+    return this.sent.filter((m) => m.type === type)
+  }
+  terminate() {
+    this.terminated = true
+  }
+}
+
+describe('PathTraceRealtime (page side of the worker)', () => {
   const materials = createGBufferMaterials({ capabilities: { getMaxAnisotropy: () => 4 } })
   const geom = createGeometries()
   const { config } = worldConfigForFamily('office')
   const clear = [{ cx: 0, cy: 0, cz: 0, lx: HUB_CELL, lz: HUB_CELL, r: 1 }]
   const chunk = new Chunk(0, 0, 0, hashStr('review#1'), materials, geom, null, config, clear, null)
-  const camera = new THREE.PerspectiveCamera(72, 16 / 9, 0.1, 180)
-  camera.position.set(SPAWN_WORLD, EYE_H, SPAWN_WORLD)
-  camera.updateMatrixWorld()
 
-  it('bakes instances into world space and folds instance colour into vertex colour', () => {
-    const mats = new Map()
-    const materialFor = (src) => {
-      if (!mats.has(src)) mats.set(src, new THREE.MeshStandardMaterial({ vertexColors: true }))
-      return mats.get(src)
+  function setup({ fail = null } = {}) {
+    const deferred = makeDeferred()
+    const camera = deferred.camera
+    camera.position.set(SPAWN_WORLD, EYE_H, SPAWN_WORLD)
+    camera.updateMatrixWorld(true)
+    const engine = {
+      deferred,
+      camera,
+      cm: { chunks: new Map([['0,0,0', chunk]]) },
+      state: { seed: 1, level: 1, mapFamily: 'office', flashlightOn: false },
+      controller: { floor: 0 },
+      materials,
+      _drsTargetFps: () => 60,
     }
-    const { meshes, triangles, instances } = mergeChunk(chunk.group, materialFor)
-    expect(instances).toBeGreaterThan(100)
-    expect(meshes.length).toBe(mats.size)
-    let tris = 0
-    for (const m of meshes) {
-      const g = m.geometry
-      tris += g.index.count / 3
-      for (const key of ['position', 'normal', 'uv', 'color', 'tangent']) expect(g.attributes[key]).toBeDefined()
-      g.computeBoundingBox()
-      // World space: inside the chunk's footprint (plus trim overhang).
-      expect(g.boundingBox.min.x).toBeGreaterThan(-1)
-      expect(g.boundingBox.max.x).toBeLessThan(43)
-    }
-    expect(tris).toBe(triangles)
-    // The lit panels' tint survives as vertex colour.
-    const panelMesh = meshes.find((m) => m.material === mats.get(materials.panel))
-    const c = panelMesh.geometry.attributes.color
-    let tinted = false
-    for (let i = 0; i < c.count && !tinted; i++) tinted = c.getX(i) !== 1 || c.getY(i) !== 1 || c.getZ(i) !== 1
-    expect(tinted).toBe(true)
+    const worker = new FakeWorker({ fail })
+    const rt = new PathTraceRealtime(engine, { createWorker: () => worker })
+    return { rt, worker, engine, deferred, camera }
+  }
+
+  // One engine frame: the deferred render (its hook snapshots a reserved
+  // slot), then the driver.
+  const frame = (t, now) => {
+    t.rt.blend.render(t.deferred)
+    t.rt.afterRender(now)
+  }
+
+  it('starts the worker on the megakernel and hooks the blend in', async () => {
+    const t = setup()
+    await t.rt.init()
+    expect(t.worker.of('init')[0].settings).toMatchObject({ maxBounces: 3, maxSamples: 512, megakernel: true })
+    expect(t.rt.backend).toBe('megakernel')
+    expect(t.deferred.pathTraceHook).toBe(t.rt.blend)
   })
 
-  it('leaves the realtime-skipped parts out', () => {
-    const materialFor = () => new THREE.MeshStandardMaterial()
-    const full = mergeChunk(chunk.group, materialFor)
-    const skip = new Set(REALTIME_SKIPPED_PARTS.map((k) => chunk.renderParts[k]).filter(Boolean))
-    expect(skip.size).toBeGreaterThan(0)
-    const lean = mergeChunk(chunk.group, materialFor, skip)
-    expect(lean.triangles).toBeLessThan(full.triangles)
+  it('a failed start rejects init and never hooks the blend', async () => {
+    const t = setup({ fail: 'No WebGPU adapter' })
+    await expect(t.rt.init()).rejects.toThrow('No WebGPU adapter')
+    expect(t.deferred.pathTraceHook).toBeNull()
   })
 
-  it('caches merged chunks across builds and prewarms within a budget', () => {
-    const builder = new ProxySceneBuilder({ merged: true, skipParts: REALTIME_SKIPPED_PARTS })
-    const built = vi.fn((g) => {
-      g.boundsTree = { fake: true }
-    })
-    // Budget 0 ms: merges the chunk, builds nothing yet.
-    let clock = 0
-    const now = () => clock
-    expect(builder.prewarm([chunk], { x: SPAWN_WORLD, z: SPAWN_WORLD, budgetMs: 0, buildBVH: built, now })).toBe(true)
-    expect(built).not.toHaveBeenCalled()
-    // A real budget builds every BVH.
-    builder.prewarm([chunk], { x: SPAWN_WORLD, z: SPAWN_WORLD, budgetMs: 1e9, buildBVH: built, now })
-    const count = built.mock.calls.length
-    expect(count).toBeGreaterThan(0)
-    const first = builder.build({ chunks: [chunk], camera, panelMaterial: materials.panel })
-    expect(first.stats.mergedChunks).toBe(0) // prewarmed
-    // Cached meshes move to the next scene, so read this one first.
-    const meshesA = first.scene.children.filter((o) => o.isMesh)
-    for (const m of meshesA) expect(m.geometry.boundsTree).toEqual({ fake: true })
-    const second = builder.build({ chunks: [chunk], camera, panelMaterial: materials.panel })
-    expect(second.stats.mergedChunks).toBe(0)
-    const meshesB = second.scene.children.filter((o) => o.isMesh)
-    expect(meshesB.map((m) => m.geometry)).toEqual(meshesA.map((m) => m.geometry))
-    // Merged proxies use vertex colours; the lit panel stays a dark diffuser.
-    for (const m of meshesB) expect(m.material.vertexColors).toBe(true)
-    builder.dispose()
+  it('mirrors the neighbourhood, then dispatches each snapshotted frame', async () => {
+    const t = setup()
+    await t.rt.init()
+    frame(t, 0)
+    // First frame: geometry, chunk, materials, then the scene, in that order.
+    const order = t.worker.sent.map((m) => m.type).filter((x) => x !== 'geometry' && x !== 'texture')
+    expect(order.slice(1, 4)).toEqual(['chunk', 'materials', 'scene'])
+    const [scene] = t.worker.of('scene')
+    expect(scene.chunks).toHaveLength(1)
+    expect(scene.lights.length).toBeGreaterThan(0)
+    expect(scene.flashlight.on).toBe(false)
+    expect(t.worker.of('trace')).toHaveLength(0)
+    frame(t, 16)
+    const [job] = t.worker.of('trace')
+    expect(job.width).toBe(160)
+    expect(job.height).toBe(90)
+    expect(job.camera.m).toEqual(Array.from(t.camera.matrixWorld.elements))
+    expect(job.samples).toBeGreaterThanOrEqual(MIN_JOB_SAMPLES)
+    expect(job.samples).toBeLessThanOrEqual(MAX_JOB_SAMPLES)
+    t.worker.reply({ type: 'frame', slot: job.slot, serial: job.serial, data: new Float32Array(160 * 90 * 4), width: 160, height: 90, continued: false, samples: 1, ms: 5 })
+    expect(t.rt.blend.stats.accepted).toBe(1)
+    expect(t.rt.blend.slots[job.slot].state).toBe('current')
+  })
+
+  it('stops tracing once a still view converges and resumes when the camera moves', async () => {
+    const t = setup()
+    await t.rt.init()
+    frame(t, 0)
+    frame(t, 16)
+    const [job] = t.worker.of('trace')
+    t.worker.reply({ type: 'frame', slot: job.slot, serial: job.serial, data: new Float32Array(160 * 90 * 4), width: 160, height: 90, continued: true, samples: 512, ms: 5 })
+    expect(t.rt.converged).toBe(true)
+    const before = t.worker.of('trace').length
+    for (let i = 2; i < 6; i++) frame(t, i * 16)
+    // At most the job already reserved before the frame came back.
+    expect(t.worker.of('trace').length - before).toBeLessThanOrEqual(1)
+    expect(t.rt.blend.inFlight).toBe(0)
+    t.camera.position.x += 0.5
+    t.camera.updateMatrixWorld(true)
+    frame(t, 100)
+    expect(t.rt.converged).toBe(false)
+    frame(t, 116)
+    expect(t.worker.of('trace').at(-1).camera.m).toEqual(Array.from(t.camera.matrixWorld.elements))
+  })
+
+  it('never holds more than two jobs in flight', async () => {
+    const t = setup()
+    await t.rt.init()
+    for (let i = 0; i < 10; i++) frame(t, i * 16)
+    expect(t.worker.of('trace')).toHaveLength(2)
+    expect(t.rt.blend.inFlight).toBe(2)
+    const [a] = t.worker.of('trace')
+    t.worker.reply({ type: 'skipped', slot: a.slot })
+    expect(t.rt.blend.inFlight).toBe(1)
+  })
+
+  it('sheds samples when frames run over budget and grows them back slowly', async () => {
+    const t = setup()
+    await t.rt.init()
+    let now = 0
+    for (let i = 0; i < 60; i++) frame(t, (now += 10))
+    expect(t.rt.samples).toBe(MAX_JOB_SAMPLES)
+    frame(t, (now += 40))
+    expect(t.rt.samples).toBe(MAX_JOB_SAMPLES - 1)
+    frame(t, (now += 10))
+    expect(t.rt.samples).toBe(MAX_JOB_SAMPLES - 1)
+  })
+
+  it('re-sends the lights when the torch toggles', async () => {
+    const t = setup()
+    await t.rt.init()
+    frame(t, 0)
+    t.engine.state.flashlightOn = true
+    frame(t, 16)
+    const [lights] = t.worker.of('lights')
+    expect(lights.flashlight.on).toBe(true)
+    frame(t, 32)
+    expect(t.worker.of('trace').at(-1).flash.position).toHaveLength(3)
+  })
+
+  it('a worker error drops back to raster through onLost; dispose ends the worker', async () => {
+    const t = setup()
+    await t.rt.init()
+    const lost = vi.fn()
+    t.rt.onLost = lost
+    t.worker.reply({ type: 'error', message: 'Device lost' })
+    expect(lost).toHaveBeenCalledWith('Device lost')
+    t.rt.dispose()
+    expect(t.worker.of('dispose')).toHaveLength(1)
+    expect(t.worker.terminated).toBe(true)
+    expect(t.deferred.pathTraceHook).toBeNull()
   })
 })
 

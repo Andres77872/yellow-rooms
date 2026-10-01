@@ -4,28 +4,22 @@ import { lampTint } from '../../world/lampCharacter.js'
 import { mirrorMaterial } from '../../debug/PbrReference.js'
 import { FLASH_HAND_OFFSET } from '../flashFrame.js'
 
-// Proxy scene for the experimental WebGPU path tracer (PathTraceView.js,
-// PathTraceRealtime.js).
+// Proxy scene for the experimental WebGPU path tracer's VIEWER
+// (PathTraceView.js), plus the chunk, lamp and torch policies the realtime
+// tracer shares with it (its own proxies are built in a worker:
+// sceneMirror.js, chunkMerge.js, tracerHost.js).
 //
 // The tracer only understands MeshStandard/MeshPhysical materials and stock
 // lights, and it writes into what it is given: setScene() hangs a BVH on
 // every geometry and, with generateMissingAttributes, adds attributes to it.
 // So nothing the deferred renderer draws is handed over. Resident chunks
-// near the camera are mirrored instead, in one of two layouts:
-//
-//   instanced (viewer)  InstancedMesh batches stay instanced. The WebGPU
-//                       backend's two-level BVH consumes instance matrices and
-//                       instanceColor directly, so proxies share the chunks'
-//                       instance attributes read-only and geometry is cloned
-//                       once per source geometry. Cheap to build, but the
-//                       tracer's top-level BVH then spans every instance:
-//                       setScene costs ~65 us per instance (0.45 s for a
-//                       6.4k-instance neighbourhood, docs/pathracer/10).
-//   merged (realtime)   every chunk is baked once into one world-space mesh
-//                       per material (instanceColor folded into vertex
-//                       colour) and cached per chunk. A streaming rebuild
-//                       then packs tens of objects instead of thousands and
-//                       only chunks new to the cache are merged.
+// near the camera are mirrored instead. InstancedMesh batches stay
+// instanced: the WebGPU backend's two-level BVH consumes instance matrices
+// and instanceColor directly, so proxies share the chunks' instance
+// attributes read-only and geometry is cloned once per source geometry.
+// Cheap to build, but the tracer's top-level BVH then spans every instance:
+// setScene costs ~65 us per instance (0.45 s for a 6.4k-instance
+// neighbourhood, docs/pathracer/10), which only the frozen viewer can afford.
 //
 // Materials map through debug/PbrReference's mirrorMaterial, are kept for
 // the builder's lifetime, and are re-synced from their G-buffer source on
@@ -63,9 +57,6 @@ export const DEFAULT_MAX_LIGHTS = 64
 // Geometry reach: every surface the kept lamps can light, plus a margin so
 // corridors do not end in a void within the first bounce.
 export const DEFAULT_GEOMETRY_RADIUS = DEFAULT_LIGHT_RADIUS + 2 * CELL
-// Merged chunk proxies unused for this many builds are released.
-const CHUNK_CACHE_BUILDS = 3
-
 // Flashlight disc radius for the tracer's spot light (m). A hand torch lens.
 const FLASH_RADIUS = 0.02
 
@@ -73,10 +64,6 @@ const white = new THREE.Color(1, 1, 1)
 const _pos = new THREE.Vector3()
 const _dir = new THREE.Vector3()
 const _v = new THREE.Vector3()
-const _m = new THREE.Matrix4()
-const _inst = new THREE.Matrix4()
-const _nm = new THREE.Matrix3()
-const _c = new THREE.Color()
 const _tint = [1, 1, 1]
 
 // Horizontal distance from (x, z) to a chunk's footprint (0 inside it).
@@ -133,6 +120,94 @@ export function selectLamps(candidates, origin, radius = DEFAULT_LIGHT_RADIUS, m
   return { kept, culled: candidates.length - kept.length }
 }
 
+// The lit panels around `eye` as plain area-light descriptions (see the
+// header): { lights: [{ color, intensity, width, height, position }], culled }.
+// Every light points straight down (-Z rotated onto -Y) with its width on X
+// like the panel. Plain data, so the realtime tracer's worker can rebuild
+// them; the viewer turns them into RectAreaLights directly.
+export function panelLights({
+  eye,
+  floor = 0,
+  lamps = null,
+  chunks = [],
+  lampColor = white,
+  lampPower = 1,
+  lightRadius = DEFAULT_LIGHT_RADIUS,
+  maxLights = DEFAULT_MAX_LIGHTS,
+}) {
+  const candidates = lamps ?? floorLamps(chunks, floor)
+  const { kept, culled } = selectLamps(candidates, eye, lightRadius, maxLights)
+  const lights = kept.map((lamp) => {
+    lampTint(lamp.x, lamp.z, lamp.cy ?? floor, _tint, lamp.role ?? 0)
+    return {
+      color: [_tint[0] * lampColor.r, _tint[1] * lampColor.g, _tint[2] * lampColor.b],
+      intensity: lampPower / PANEL_AREA,
+      width: PANEL_W,
+      height: PANEL_D,
+      position: [lamp.x, lamp.y + PANEL_LIGHT_LIFT, lamp.z],
+    }
+  })
+  return { lights, culled }
+}
+
+// A panel light description as a RectAreaLight (emitting side down).
+export function rectAreaLight(desc) {
+  const light = new THREE.RectAreaLight(new THREE.Color(...desc.color), desc.intensity, desc.width, desc.height)
+  light.position.set(...desc.position)
+  light.rotation.set(-Math.PI / 2, 0, 0)
+  light.updateMatrixWorld()
+  return light
+}
+
+// The torch as physical spot parameters: the engine's
+// smoothstep(cosOuter, cosInner) cone mapped onto three's angle / penumbra,
+// 1/d^2 out to the torch range.
+export function flashlightParams({ color, intensity, range, cosInner, cosOuter }) {
+  const outer = Math.acos(cosOuter)
+  const inner = Math.acos(cosInner)
+  return {
+    color: [color.r, color.g, color.b],
+    intensity,
+    distance: range,
+    angle: outer,
+    penumbra: 1 - inner / outer,
+    decay: 2,
+    radius: FLASH_RADIUS,
+  }
+}
+
+// Spot parameters as a SpotLight (aimed with aimFlashlight / flashPose).
+export function spotFromParams(p, SpotLight = THREE.SpotLight, Color = THREE.Color) {
+  const spot = new SpotLight(new Color(...p.color), p.intensity, p.distance, p.angle, p.penumbra, p.decay)
+  spot.radius = p.radius
+  return spot
+}
+
+export function flashlightSpot(flashlight) {
+  return spotFromParams(flashlightParams(flashlight))
+}
+
+// Torch pose for `camera`: the hand-offset origin and a target 10 m along
+// the camera's forward axis. Plain arrays, for the realtime worker.
+export function flashPose(camera) {
+  camera.updateMatrixWorld()
+  _pos.set(...FLASH_HAND_OFFSET).applyMatrix4(camera.matrixWorld)
+  camera.getWorldDirection(_dir)
+  _v.copy(_pos).addScaledVector(_dir, 10)
+  return { position: _pos.toArray(), target: _v.toArray() }
+}
+
+// Hand-offset origin, the camera's forward axis (the viewer re-aims it when
+// the player looks around).
+export function aimFlashlight(spot, camera) {
+  const pose = flashPose(camera)
+  spot.position.fromArray(pose.position)
+  spot.target.position.fromArray(pose.target)
+  spot.updateMatrixWorld()
+  spot.target.updateMatrixWorld()
+  return spot
+}
+
 // True when `node` and every ancestor below `root` is visible. The chunk
 // group itself is skipped: its flag is the sight-culling result for the
 // current eye, not whether the geometry exists (culled rooms still bounce).
@@ -144,28 +219,6 @@ function visibleBelow(node, root) {
 function triangleCount(geometry) {
   const n = geometry.index ? geometry.index.count : (geometry.attributes.position?.count ?? 0)
   return Math.floor(n / 3)
-}
-
-// The torch as a physical spot: the engine's smoothstep(cosOuter, cosInner)
-// cone mapped onto three's angle / penumbra, 1/d^2 out to the torch range.
-export function flashlightSpot({ color, intensity, range, cosInner, cosOuter }) {
-  const outer = Math.acos(cosOuter)
-  const inner = Math.acos(cosInner)
-  const spot = new THREE.SpotLight(color, intensity, range, outer, 1 - inner / outer, 2)
-  spot.radius = FLASH_RADIUS
-  return spot
-}
-
-// Hand-offset origin, the camera's forward axis (the views re-aim it when
-// the player looks around).
-export function aimFlashlight(spot, camera) {
-  camera.updateMatrixWorld()
-  spot.position.set(...FLASH_HAND_OFFSET).applyMatrix4(camera.matrixWorld)
-  camera.getWorldDirection(_dir)
-  spot.target.position.copy(spot.position).addScaledVector(_dir, 10)
-  spot.updateMatrixWorld()
-  spot.target.updateMatrixWorld()
-  return spot
 }
 
 // Re-read a G-buffer material's live uniforms into its proxy.
@@ -181,151 +234,15 @@ function syncMaterial(proxy, src) {
   proxy.metalness = u.uMetalness?.value ?? 0
 }
 
-// Signature of what a chunk's merged proxy was built from: detail tier and
-// the furniture batch both swap child meshes in place.
-function chunkSignature(chunk) {
-  return `${chunk.renderDetail ?? ''}|${chunk.furnitureModelCount ?? 0}|${chunk.group.children.length}`
-}
-
-// True when `node` sits in one of the `skip` subtrees below `root`.
-function inSkipped(node, root, skip) {
-  if (!skip?.size) return false
-  for (let n = node; n && n !== root; n = n.parent) if (skip.has(n)) return true
-  return false
-}
-
-// Bake one chunk into world-space meshes, one per proxy material.
-// instanceColor (and the part colour of USE_PART_COLOR materials) is folded
-// into a vertex colour, so every merged proxy material uses vertexColors.
-// Subtrees in `skip` are left out.
-export function mergeChunk(root, materialFor, skip = null) {
-  root.updateWorldMatrix(true, true)
-  const buckets = new Map()
-  let instances = 0
-  root.traverse((node) => {
-    if (!node.isMesh || node.isSkinnedMesh || !visibleBelow(node, root) || inSkipped(node, root, skip)) return
-    const g = node.geometry
-    const pos = g.attributes.position
-    const count = node.isInstancedMesh ? node.count : 1
-    if (!pos || count === 0) return
-    const mats = Array.isArray(node.material) ? node.material : null
-    const ranges = mats
-      ? g.groups.map((gr) => ({ start: gr.start, count: gr.count, material: mats[gr.materialIndex] }))
-      : [{ start: 0, count: g.index ? g.index.count : pos.count, material: node.material }]
-    for (const range of ranges) {
-      if (!range.material || range.count === 0) continue
-      const proxy = materialFor(range.material)
-      let b = buckets.get(proxy)
-      if (!b) buckets.set(proxy, (b = { verts: 0, indices: 0, items: [] }))
-      b.items.push({ node, g, range, count, partColor: !!range.material.defines?.USE_PART_COLOR })
-      b.verts += pos.count * count
-      b.indices += range.count * count
-    }
-    instances += count
-  })
-
-  const meshes = []
-  let triangles = 0
-  for (const [material, b] of buckets) {
-    const position = new Float32Array(b.verts * 3)
-    const normal = new Float32Array(b.verts * 3)
-    const uv = new Float32Array(b.verts * 2)
-    const color = new Float32Array(b.verts * 3)
-    const index = new Uint32Array(b.indices)
-    let vo = 0
-    let io = 0
-    for (const { node, g, range, count, partColor } of b.items) {
-      const pos = g.attributes.position
-      const nrm = g.attributes.normal
-      const tex = g.attributes.uv
-      const vcol = partColor ? g.attributes.color : null
-      const idx = g.index
-      for (let i = 0; i < count; i++) {
-        if (node.isInstancedMesh) {
-          node.getMatrixAt(i, _inst)
-          _m.multiplyMatrices(node.matrixWorld, _inst)
-          if (node.instanceColor) node.getColorAt(i, _c)
-          else _c.copy(white)
-        } else {
-          _m.copy(node.matrixWorld)
-          _c.copy(white)
-        }
-        _nm.getNormalMatrix(_m)
-        const base = vo
-        for (let k = 0; k < pos.count; k++, vo++) {
-          _v.fromBufferAttribute(pos, k).applyMatrix4(_m)
-          position[vo * 3] = _v.x
-          position[vo * 3 + 1] = _v.y
-          position[vo * 3 + 2] = _v.z
-          if (nrm) {
-            _v.fromBufferAttribute(nrm, k).applyMatrix3(_nm).normalize()
-            normal[vo * 3] = _v.x
-            normal[vo * 3 + 1] = _v.y
-            normal[vo * 3 + 2] = _v.z
-          }
-          if (tex) {
-            uv[vo * 2] = tex.getX(k)
-            uv[vo * 2 + 1] = tex.getY(k)
-          }
-          const r = vcol ? vcol.getX(k) : 1
-          const gg = vcol ? vcol.getY(k) : 1
-          const bb = vcol ? vcol.getZ(k) : 1
-          color[vo * 3] = _c.r * r
-          color[vo * 3 + 1] = _c.g * gg
-          color[vo * 3 + 2] = _c.b * bb
-        }
-        for (let k = range.start, end = range.start + range.count; k < end; k++) {
-          index[io++] = base + (idx ? idx.getX(k) : k)
-        }
-      }
-    }
-    const geometry = new THREE.BufferGeometry()
-    geometry.setAttribute('position', new THREE.BufferAttribute(position, 3))
-    geometry.setAttribute('normal', new THREE.BufferAttribute(normal, 3))
-    geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2))
-    geometry.setAttribute('color', new THREE.BufferAttribute(color, 3))
-    // Proxies carry no normal maps: a zero tangent stops the tracer's
-    // setScene from running computeTangents() over every merged chunk.
-    geometry.setAttribute('tangent', new THREE.BufferAttribute(new Float32Array(b.verts * 4), 4))
-    geometry.setIndex(new THREE.BufferAttribute(index, 1))
-    const mesh = new THREE.Mesh(geometry, material)
-    mesh.matrixAutoUpdate = false
-    mesh.frustumCulled = false
-    meshes.push(mesh)
-    triangles += b.indices / 3
-  }
-  return { meshes, triangles, instances }
-}
-
-// Chunk render parts (Chunk.renderParts) the realtime tracer leaves out:
-// trims, props, signs and dead panels hug walls and ceilings, change the
-// lighting of a room very little, and are ~36% of a chunk's triangles, which
-// setScene repacks on every streaming rebuild. Their pixels take the traced
-// lighting of the surface right behind them. Furniture stays: desks and
-// shelves really do shadow the floor.
-export const REALTIME_SKIPPED_PARTS = ['frames', 'props', 'signs', 'deadPanels']
-
-function skippedParts(chunk, names) {
-  if (!names?.length || !chunk.renderParts) return null
-  const out = new Set()
-  for (const name of names) if (chunk.renderParts[name]) out.add(chunk.renderParts[name])
-  return out
-}
-
 export class ProxySceneBuilder {
-  constructor({ merged = false, skipParts = [] } = {}) {
-    this.merged = merged
-    this.skipParts = skipParts
+  constructor() {
     // Source geometry -> private clone (and, after the first setScene, its
     // BVH). Weak so furniture-model upgrades let old sources go.
     this._geometries = new WeakMap()
     this._clones = new Set()
     // G-buffer material -> proxy, for the builder's lifetime.
     this._materials = new Map()
-    // Chunk -> merged proxy { signature, meshes, triangles, instances, used }.
-    this._chunks = new Map()
     this._lights = []
-    this._builds = 0
     this._panelMaterial = null
   }
 
@@ -351,14 +268,12 @@ export class ProxySceneBuilder {
       m = mirrorMaterial(src)
     }
     m.side = src.side ?? THREE.FrontSide
-    // Merged proxies carry instance/part colour in a vertex colour.
-    if (this.merged) m.vertexColors = true
     this._materials.set(src, m)
     return m
   }
 
-  // Rebuild the proxy scene. Materials and geometry (clones, merged chunks)
-  // are cached; the previous lights are released.
+  // Rebuild the proxy scene. Materials and geometry clones are cached; the
+  // previous lights are released.
   //
   //   chunks         resident Chunk objects ({ cx, cy, cz, group, lamps })
   //   camera         the player camera (world matrix current)
@@ -387,7 +302,6 @@ export class ProxySceneBuilder {
   }) {
     this._disposeLights()
     this._panelMaterial = panelMaterial
-    this._builds++
     const scene = new THREE.Scene()
     const stats = {
       chunks: 0,
@@ -397,7 +311,6 @@ export class ProxySceneBuilder {
       lights: 0,
       culledLights: 0,
       flashlight: false,
-      mergedChunks: 0,
     }
 
     camera.updateMatrixWorld()
@@ -405,8 +318,7 @@ export class ProxySceneBuilder {
     const selected = selectChunks(chunks, _pos.x, _pos.z, floor, geometryRadius)
     stats.chunks = selected.length
 
-    if (this.merged) this._addMerged(scene, selected, stats)
-    else this._addInstanced(scene, selected, stats)
+    this._addInstanced(scene, selected, stats)
     // The lit-panel proxy is a fixed dark diffuser: never re-synced from its
     // (emissive) source.
     for (const [src, proxy] of this._materials) if (src !== panelMaterial) syncMaterial(proxy, src)
@@ -459,67 +371,9 @@ export class ProxySceneBuilder {
     }
   }
 
-  _addMerged(scene, selected, stats) {
-    const materialFor = (src) => this._material(src)
-    for (const chunk of selected) {
-      const signature = chunkSignature(chunk)
-      let entry = this._chunks.get(chunk)
-      if (!entry || entry.signature !== signature) {
-        if (entry) this._releaseChunk(entry)
-        entry = { signature, ...mergeChunk(chunk.group, materialFor, skippedParts(chunk, this.skipParts)) }
-        this._chunks.set(chunk, entry)
-        stats.mergedChunks++
-      }
-      entry.used = this._builds
-      for (const mesh of entry.meshes) scene.add(mesh)
-      stats.meshes += entry.meshes.length
-      stats.instances += entry.instances
-      stats.triangles += entry.triangles
-    }
-    for (const [chunk, entry] of this._chunks) {
-      if (this._builds - entry.used >= CHUNK_CACHE_BUILDS) {
-        this._releaseChunk(entry)
-        this._chunks.delete(chunk)
-      }
-    }
-  }
-
-  // Spread the cost of the chunks a coming rebuild will select (merged mode):
-  // merge at most one uncached chunk, then build bottom-level BVHs for
-  // merged meshes that lack one (`buildBVH(geometry)`), until `budgetMs` is
-  // spent. setScene reuses a geometry's existing boundsTree, so the rebuild
-  // itself is left with only the top-level BVH and packing. Returns whether
-  // work remains.
-  prewarm(chunks, { x, z, floor = 0, radius = DEFAULT_GEOMETRY_RADIUS, budgetMs = 4, buildBVH, now = () => performance.now() }) {
-    if (!this.merged) return false
-    const t0 = now()
-    const materialFor = (src) => this._material(src)
-    let merged = false
-    for (const chunk of selectChunks(chunks, x, z, floor, radius)) {
-      const signature = chunkSignature(chunk)
-      let entry = this._chunks.get(chunk)
-      if (entry && entry.signature === signature) {
-        entry.used = Math.max(entry.used ?? 0, this._builds)
-      } else if (!merged) {
-        if (entry) this._releaseChunk(entry)
-        entry = { signature, used: this._builds, ...mergeChunk(chunk.group, materialFor, skippedParts(chunk, this.skipParts)) }
-        this._chunks.set(chunk, entry)
-        merged = true
-      } else {
-        return true
-      }
-      for (const mesh of entry.meshes) {
-        if (mesh.geometry.boundsTree) continue
-        if (now() - t0 >= budgetMs) return true
-        buildBVH?.(mesh.geometry)
-      }
-    }
-    return false
-  }
-
   // Replace the panel lights in `scene` (the flashlight is left alone).
   // Cheap: the tracer only re-packs its light buffer (updateLights()).
-  setLights(scene, { camera, floor = 0, lamps = null, chunks = [], lampColor, lampPower, lightRadius = DEFAULT_LIGHT_RADIUS, maxLights = DEFAULT_MAX_LIGHTS }) {
+  setLights(scene, { camera, ...options }) {
     for (let i = this._lights.length - 1; i >= 0; i--) {
       const l = this._lights[i]
       if (!l.isRectAreaLight) continue
@@ -528,29 +382,13 @@ export class ProxySceneBuilder {
       this._lights.splice(i, 1)
     }
     camera.updateMatrixWorld()
-    const eye = _v.setFromMatrixPosition(camera.matrixWorld)
-    const candidates = lamps ?? floorLamps(chunks, floor)
-    const { kept, culled } = selectLamps(candidates, eye, lightRadius, maxLights)
-    for (const lamp of kept) {
-      lampTint(lamp.x, lamp.z, lamp.cy ?? floor, _tint, lamp.role ?? 0)
-      const color = new THREE.Color(_tint[0], _tint[1], _tint[2]).multiply(lampColor)
-      const light = new THREE.RectAreaLight(color, lampPower / PANEL_AREA, PANEL_W, PANEL_D)
-      light.position.set(lamp.x, lamp.y + PANEL_LIGHT_LIFT, lamp.z)
-      // -Z (the emitting side) straight down; width stays on X like the panel.
-      light.rotation.set(-Math.PI / 2, 0, 0)
-      light.updateMatrixWorld()
+    const { lights, culled } = panelLights({ ...options, eye: _v.setFromMatrixPosition(camera.matrixWorld) })
+    for (const desc of lights) {
+      const light = rectAreaLight(desc)
       scene.add(light)
       this._lights.push(light)
     }
-    return { lights: kept.length, culled }
-  }
-
-  _releaseChunk(entry) {
-    for (const mesh of entry.meshes) {
-      mesh.removeFromParent()
-      mesh.geometry.boundsTree = null
-      mesh.geometry.dispose()
-    }
+    return { lights: lights.length, culled }
   }
 
   _disposeLights() {
@@ -565,8 +403,6 @@ export class ProxySceneBuilder {
     this._disposeLights()
     for (const m of this._materials.values()) m.dispose()
     this._materials.clear()
-    for (const entry of this._chunks.values()) this._releaseChunk(entry)
-    this._chunks.clear()
     for (const g of this._clones) {
       g.boundsTree = null
       g.dispose()

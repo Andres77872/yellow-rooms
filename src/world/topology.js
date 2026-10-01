@@ -1,7 +1,5 @@
-import { CHUNK } from './constants.js'
+import { CHUNK, cIdx as index } from './constants.js'
 import { PASSAGE_OPEN } from './mapTypes.js'
-
-const index = (x, z) => z * CHUNK + x
 
 function labelComponents(data, respectColumns) {
   const labels = new Int16Array(CHUNK * CHUNK).fill(-1)

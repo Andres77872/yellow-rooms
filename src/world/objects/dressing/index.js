@@ -1,5 +1,6 @@
 import { CHUNK } from '../../constants.js'
 import { dressEdge } from './edges.js'
+import { collectWallTrim } from '../wallShell.js'
 import { dressColumns } from './columns.js'
 import { dressCeiling } from './ceiling.js'
 import { dressTowerLandmarkSockets } from './towerSockets.js'
@@ -16,8 +17,9 @@ import { MAP_FAMILY_LATTICE, MAP_FAMILY_SEWER, MAP_FAMILY_TOWER } from '../../ma
 // across reloads.
 //
 // Returns { trim, props, signs }:
-//   trim  : baseboards, crown molding, column bases/caps — batched with the
-//           door/window casings (uniform trim paint, no per-instance tint).
+//   trim  : baseboards and crown molding (per wall RUN, wrapping corners and
+//           free ends — objects/wallShell.js), column bases/caps — batched
+//           with the door/window casings (uniform trim paint, no tint).
 //   props : tinted flat items — floor thresholds, radiators, clocks, notice
 //           boards, extinguisher cabinets, ceiling vents. Each carries `tint`.
 //   signs : emissive items — exit signs over doors, hanging blade signs.
@@ -36,14 +38,14 @@ export function collectInteriorDressing(data) {
   if (data.mapFamily === MAP_FAMILY_SEWER) return collectSewerDressing(data)
   if (data.mapFamily === MAP_FAMILY_LATTICE) return collectLatticeDressing(data)
 
-  const trim = []
+  const trim = collectWallTrim(data)
   const props = []
   const signs = []
   for (let z = 0; z < CHUNK; z++) {
-    for (let lx = 0; lx < CHUNK; lx++) dressEdge(data, 'v', lx, z, trim, props, signs)
+    for (let lx = 0; lx < CHUNK; lx++) dressEdge(data, 'v', lx, z, props, signs)
   }
   for (let lz = 0; lz < CHUNK; lz++) {
-    for (let x = 0; x < CHUNK; x++) dressEdge(data, 'h', lz, x, trim, props, signs)
+    for (let x = 0; x < CHUNK; x++) dressEdge(data, 'h', lz, x, props, signs)
   }
   dressColumns(data, trim)
   dressCeiling(data, props, signs)

@@ -1,127 +1,134 @@
-import * as THREE from 'three/webgpu'
-import { WebGPUPathTracer } from 'three-gpu-pathtracer/webgpu'
-import { MeshBVH, SAH } from 'three-mesh-bvh'
-import {
-  DEFAULT_LIGHT_RADIUS,
-  ProxySceneBuilder,
-  REALTIME_SKIPPED_PARTS,
-  aimFlashlight,
-  selectChunks,
-} from './proxyScene.js'
 import { PathTraceBlend, traceSize } from './pathTraceBlend.js'
+import { DEFAULT_LIGHT_RADIUS, flashPose, flashlightParams, panelLights, selectChunks } from './proxyScene.js'
 import { GEOMETRY_RADIUS, REBUILD_DISTANCE, needsRebuild, worldKey } from './realtimePolicy.js'
-import { createTracerRenderer, disposeRenderer, disposeTracer } from './webgpuContext.js'
+import { SceneMirror } from './sceneMirror.js'
 
 // Experimental REALTIME path tracing (settings: ADVANCED > EXPERIMENTAL >
 // PATH TRACER = REALTIME, off by default). The game keeps running; the
-// path tracer replaces the deferred renderer's lighting term every frame.
+// path tracer replaces the deferred renderer's lighting term.
 // docs/pathracer/10-realtime-integration.md has the research behind every
 // choice here. Lazy-loaded through LazyPathTraceView, never at boot.
 //
-// Per engine frame (Engine._animate):
-//   1. DeferredRenderer.render(): after the lighting pass, PathTraceBlend
-//      reprojects the newest traced frame (and its own history) into litRT,
-//      and snapshots the G-buffer if a dispatch slot was reserved.
-//   2. afterRender() (here): stream the proxy scene, sync camera, lights and
-//      torch, run an adaptive number of tracer steps, and read the output
-//      back for the frame just snapshotted. The readback lands a frame or
-//      two later and is accepted by the blend with the camera it was traced
-//      from, so the latency never misplaces light.
+// The tracer runs in a WORKER (tracerWorker.js -> tracerHost.js) with its
+// own WebGPU device. This page side never blocks on it:
+//   - scene: resident chunks cross as plain records (sceneMirror.js); the
+//     worker bakes them, builds BVHs and runs setScene, the 60-800 ms of
+//     synchronous work that used to freeze the game on every rebuild;
+//   - frames: per engine frame,
+//       1. DeferredRenderer.render(): after the lighting pass,
+//          PathTraceBlend reprojects the newest traced frame (and its own
+//          history) into litRT, and snapshots the G-buffer if a slot was
+//          reserved;
+//       2. afterRender() (here): stream the scene, then dispatch a trace
+//          job for the frame just snapshotted: its camera, torch pose and a
+//          sample count. The worker traces and reads back; the frame lands
+//          a few engine frames later and is accepted by the blend with the
+//          camera it was traced from, so the latency never misplaces light.
 //
-// The tracer resets on every camera move, so a moving view gets ~1-3 fresh
-// samples per frame at trace resolution; the blend's reprojected history
-// averages them, and a still camera converges (the tracer keeps
-// accumulating and the blend follows it).
+// The worker uses the megakernel backend: one sample for every trace pixel
+// costs ~1.5-2 ms on the reference GPU (tracerHost.js), so a moving camera
+// gets 1-4 fresh samples per frame. A still camera keeps accumulating, and
+// once MAX_SAMPLES are in and nothing changed, tracing stops (the GPU goes
+// quiet and the blend holds the converged image).
 
-// Short paths: the first bounces carry nearly all indirect light in these
-// low-albedo rooms, and path length is what one frame's steps must cover.
 const MAX_BOUNCES = 3
-// A still camera stops accumulating here (converged; the GPU goes quiet).
 const MAX_SAMPLES = 512
-// Pool cap (see PathTraceView): every trace pixel gets a path slot.
-const FRAME_BUDGET = 1 << 20
-// renderSample() calls per frame: each advances every path one segment, so
-// MIN covers a camera ray plus the bounces; the rest is adaptive.
-const MIN_STEPS = MAX_BOUNCES + 2
-const MAX_STEPS = 16
-const TARGET_FRAME_MS = 18
-// Readbacks in flight (each holds a G-buffer snapshot slot).
+// Samples per trace job, adapted to the frame interval: additive increase
+// after a run of frames on budget, decrease on the first frame over it.
+export const MIN_JOB_SAMPLES = 1
+export const MAX_JOB_SAMPLES = 4
+const GROW_AFTER_FRAMES = 8
+// Over-budget slack on the frame interval before the job shrinks.
+const BUDGET_SLACK = 1.08
+// Trace jobs in flight (each holds a G-buffer snapshot slot).
 const MAX_IN_FLIGHT = 2
 // Lights follow the eye every LIGHT_REFRESH metres (geometry streaming is in
 // realtimePolicy.js).
 const LIGHT_REFRESH_DISTANCE = 2
-// Per-frame budget for merging and BVH-building the chunks the next rebuild
-// will need (ProxySceneBuilder.prewarm), and how far ahead that looks.
-const PREWARM_BUDGET_MS = 3
+// Chunks within this reach are sent to the worker ahead of the rebuild that
+// will need them, one per frame, so it can merge and BVH them in advance.
 const PREWARM_RADIUS = GEOMETRY_RADIUS + REBUILD_DISTANCE
-// The same bottom-level BVH the tracer's setScene would build itself.
-const buildBVH = (geometry) => {
-  geometry.boundsTree = new MeshBVH(geometry, { strategy: SAH, targetLeafSize: 5 })
-}
+const INIT_TIMEOUT_MS = 20_000
 
-const _eye = new THREE.Vector3()
+const createTracerWorker = () =>
+  new Worker(new URL('./tracerWorker.js', import.meta.url), { type: 'module', name: 'path-tracer' })
+
+const _eye = { x: 0, y: 0, z: 0 }
 
 export class PathTraceRealtime {
-  constructor(engine) {
+  constructor(engine, { createWorker = createTracerWorker } = {}) {
     this.engine = engine
     this.blend = new PathTraceBlend()
-    this.builder = new ProxySceneBuilder({ merged: true, skipParts: REALTIME_SKIPPED_PARTS })
-    this.renderer = null
-    this.tracer = null
-    this.camera = new THREE.PerspectiveCamera()
-    this.scene = null
+    this.mirror = new SceneMirror((msg, transfer) => this._post(msg, transfer))
+    this.worker = null
     this.adapterInfo = null
+    this.backend = ''
     this.onLost = null
-    this.steps = MIN_STEPS
+    this.samples = MIN_JOB_SAMPLES
     this.stats = {
       rebuilds: 0,
-      lastRebuildMs: 0,
+      buildMs: 0,
+      setSceneMs: 0,
       lights: 0,
       triangles: 0,
       meshes: 0,
       traceWidth: 0,
       traceHeight: 0,
+      jobs: 0,
+      frames: 0,
+      skipped: 0,
+      latencyMs: 0,
+      samples: 0,
+      converged: false,
     }
-    this._spot = null
-    this._flashOn = null
-    this._center = new THREE.Vector3(Infinity, 0, Infinity)
-    this._lightCenter = new THREE.Vector3(Infinity, 0, Infinity)
+    this._createWorker = createWorker
+    this._ready = null
+    this._initTimer = null
+    this._center = { x: Infinity, z: Infinity }
+    this._lightCenter = { x: Infinity, z: Infinity }
     this._floor = null
     this._key = ''
     this._chunks = []
+    this._sceneId = 0
     this._lastBuildAt = -Infinity
     this._lampPower = -1
-    this._lampColor = new THREE.Color(-1, -1, -1)
-    this._lastCamera = new THREE.Matrix4()
-    this._lastAspect = 0
-    this._resetSinceReadback = true
+    this._lampColor = [-1, -1, -1]
+    this._lights = []
+    this._flashOn = null
+    this._lastCamera = null
+    // Bumped by anything that restarts the tracer's accumulation; a frame
+    // traced at the current serial with MAX_SAMPLES in is final.
+    this._serial = 0
+    this._final = { serial: -1, samples: 0 }
     this._lastFrameAt = 0
+    this._onBudget = 0
+    this._lost = null
     this._disposed = false
   }
 
   async init() {
-    const { renderer, info } = await createTracerRenderer({ onLost: (message) => this._lose(message) })
-    this.adapterInfo = info
-    this.renderer = renderer
-    // The canvas is never shown: the output is read back into WebGL. The
-    // tracer still blits into it every call, sized to the trace resolution.
-    const tracer = new WebGPUPathTracer(renderer)
-    tracer.maxBounces = MAX_BOUNCES
-    tracer.maxSamples = MAX_SAMPLES
-    tracer.frameBudget = FRAME_BUDGET
-    // No low-res preview, delay or fade: every frame is read as it is.
-    tracer.dynamicLowRes = false
-    tracer.renderDelay = 0
-    tracer.minSamples = 0
-    tracer.fadeDuration = 0
-    // Fresh noise after every reset, so the blend's temporal history
-    // averages independent samples instead of one frozen pattern.
-    tracer.stableNoise = false
-    // A few samples per pixel cannot average out fireflies; clamp indirect
-    // radiance harder than the default (10), trading a little energy.
-    tracer.clampIndirect = 3
-    tracer.renderScale = 1
-    this.tracer = tracer
+    const worker = this._createWorker()
+    this.worker = worker
+    worker.onmessage = (event) => this._onMessage(event.data)
+    worker.onerror = (event) => {
+      event?.preventDefault?.()
+      this._lose(event?.message || 'Path tracer worker failed')
+    }
+    worker.onmessageerror = () => this._lose('Path tracer worker message failed')
+    const ready = new Promise((resolve, reject) => {
+      this._ready = { resolve, reject }
+      this._initTimer = setTimeout(() => reject(new Error('WebGPU start timed out')), INIT_TIMEOUT_MS)
+    })
+    this._post({ type: 'init', settings: { maxBounces: MAX_BOUNCES, maxSamples: MAX_SAMPLES, megakernel: true } })
+    try {
+      const msg = await ready
+      this.adapterInfo = msg.info ?? null
+      this.backend = msg.backend ?? ''
+    } finally {
+      clearTimeout(this._initTimer)
+      this._ready = null
+    }
+    if (this._disposed) return
     this.engine.deferred.setPathTraceHook(this.blend)
   }
 
@@ -135,7 +142,7 @@ export class PathTraceRealtime {
     if (this.blend.enabled === !!on) return
     this.blend.enabled = !!on
     this.blend.resetHistory()
-    this._resetSinceReadback = true
+    this._serial++
   }
 
   // A frame that is not traced (not PLAYING, raster A/B, not ready) must
@@ -145,53 +152,93 @@ export class PathTraceRealtime {
     if (captured) this.blend.cancel(captured.slot)
   }
 
+  get converged() {
+    return this._final.serial === this._serial && this._final.samples >= MAX_SAMPLES
+  }
+
   afterRender(now = performance.now()) {
-    if (this._disposed || !this.tracer || !this.blend.enabled) {
+    if (this._disposed || !this.worker || !this.blend.enabled || this._lost) {
       this.idle()
       return
     }
-    const d = this.engine.deferred
+    const e = this.engine
+    const d = e.deferred
     const size = traceSize(d.gBuffer.width, d.gBuffer.height)
-    if (this.blend.setTraceSize(size.width, size.height)) {
-      this.renderer.setSize(size.width, size.height, false)
-      this._resetSinceReadback = true
-    }
+    if (this.blend.setTraceSize(size.width, size.height)) this._serial++
     this.stats.traceWidth = size.width
     this.stats.traceHeight = size.height
 
     const captured = this.blend.takeCaptured()
+    e.camera.updateMatrixWorld()
+    const m = e.camera.matrixWorld.elements
+    _eye.x = m[12]
+    _eye.y = m[13]
+    _eye.z = m[14]
     const rebuilt = this._stream(now)
-    if (this._syncCamera()) {
-      if (this._spot) aimFlashlight(this._spot, this.engine.camera)
-      if (this._flashOn) this.tracer.updateLights()
-      this.tracer.updateCamera()
-      this._resetSinceReadback = true
-    }
     this._syncFlashlight()
+    if (this._cameraMoved()) this._serial++
 
-    const steps = this._stepsFor(now)
-    for (let i = 0; i < steps; i++) this.tracer.renderSample()
-    if (captured) this._readback(captured.slot, size)
-    if (this.blend.inFlight < MAX_IN_FLIGHT) this.blend.reserve()
-    if (!rebuilt) {
-      this.builder.prewarm(this.engine.cm.chunks.values(), {
-        x: _eye.x,
-        z: _eye.z,
-        floor: this._floor,
-        radius: PREWARM_RADIUS,
-        budgetMs: PREWARM_BUDGET_MS,
-        buildBVH,
-      })
+    const samples = this._samplesFor(now)
+    if (captured) {
+      if (this.converged) this.blend.cancel(captured.slot)
+      else this._dispatch(captured.slot, samples, size)
     }
+    this.stats.converged = this.converged
+    if (!this.converged && this.blend.inFlight < MAX_IN_FLIGHT) this.blend.reserve()
+    if (!rebuilt) this._prewarm()
+  }
+
+  _dispatch(slot, samples, { width, height }) {
+    const cam = this.engine.camera
+    this._post({
+      type: 'trace',
+      slot,
+      serial: this._serial,
+      camera: { m: Array.from(cam.matrixWorld.elements), fov: cam.fov, aspect: cam.aspect, near: cam.near, far: cam.far },
+      samples,
+      flash: this._flashOn ? flashPose(cam) : null,
+      width,
+      height,
+    })
+    this.stats.jobs++
+  }
+
+  _cameraMoved() {
+    const cam = this.engine.camera
+    const m = cam.matrixWorld.elements
+    const last = this._lastCamera
+    if (last && last.fov === cam.fov && last.aspect === cam.aspect && last.m.every((v, i) => v === m[i])) return false
+    this._lastCamera = { m: Array.from(m), fov: cam.fov, aspect: cam.aspect }
+    return true
+  }
+
+  // Samples for the next job. A job's GPU cost lands on the frame interval,
+  // which must stay inside the engine's own frame budget (the frame limit,
+  // at most 60 fps): one sample less on the first frame over it, one more
+  // after a run of frames inside it.
+  _samplesFor(now) {
+    const interval = now - this._lastFrameAt
+    this._lastFrameAt = now
+    if (interval > 0 && interval < 250) {
+      const fps = Math.min(60, this.engine._drsTargetFps?.() ?? 60)
+      if (interval > (1000 / fps) * BUDGET_SLACK) {
+        this.samples = Math.max(MIN_JOB_SAMPLES, this.samples - 1)
+        this._onBudget = 0
+      } else if (++this._onBudget >= GROW_AFTER_FRAMES) {
+        this.samples = Math.min(MAX_JOB_SAMPLES, this.samples + 1)
+        this._onBudget = 0
+      }
+    }
+    this.stats.samplesPerJob = this.samples
+    return this.samples
   }
 
   _stream(now) {
     const e = this.engine
     const floor = e.controller?.floor ?? 0
-    _eye.setFromMatrixPosition(e.camera.matrixWorld)
     const key = worldKey(e.state)
     const chunks = [...e.cm.chunks.values()]
-    const hasScene = !!this.scene
+    const hasScene = this._sceneId > 0
     const selected = hasScene ? selectChunks(chunks, this._center.x, this._center.z, this._floor, GEOMETRY_RADIUS) : null
     const sameChunks =
       !!selected && selected.length === this._chunks.length && selected.every((c, i) => c === this._chunks[i])
@@ -213,152 +260,149 @@ export class PathTraceRealtime {
       return true
     }
     const lu = e.deferred.lightUniforms
-    const lampChanged = lu.uLampIntensity.value !== this._lampPower || !lu.uLampColor.value.equals(this._lampColor)
-    if (lampChanged || _eye.distanceTo(this._lightCenter) > LIGHT_REFRESH_DISTANCE) {
-      const lit = this.builder.setLights(this.scene, { ...this._lightOptions(floor), chunks: this._chunks })
-      this.stats.lights = lit.lights
-      this.tracer.updateLights()
-      this._lightCenter.copy(_eye)
-      this._resetSinceReadback = true
+    const c = lu.uLampColor.value
+    const lampChanged =
+      lu.uLampIntensity.value !== this._lampPower ||
+      c.r !== this._lampColor[0] ||
+      c.g !== this._lampColor[1] ||
+      c.b !== this._lampColor[2]
+    if (lampChanged || Math.hypot(_eye.x - this._lightCenter.x, _eye.z - this._lightCenter.z) > LIGHT_REFRESH_DISTANCE) {
+      this._lights = this._panelLights(floor, this._chunks)
+      this._post({ type: 'lights', lights: this._lights, flashlight: this._flashlight() })
+      this._lightCenter.x = _eye.x
+      this._lightCenter.z = _eye.z
+      this._serial++
     }
     return false
   }
 
-  _lightOptions(floor) {
+  _panelLights(floor, chunks) {
     const e = this.engine
     const lu = e.deferred.lightUniforms
     this._lampPower = lu.uLampIntensity.value
-    this._lampColor.copy(lu.uLampColor.value)
-    return {
-      camera: e.camera,
+    const c = lu.uLampColor.value
+    this._lampColor = [c.r, c.g, c.b]
+    const { lights } = panelLights({
+      eye: _eye,
       floor,
+      chunks,
       // The engine's own cross-floor spill policy picks the candidates.
       lamps: e.cm.collectLampsNear?.(_eye.x, _eye.z, [], floor, DEFAULT_LIGHT_RADIUS) ?? null,
-      lampColor: lu.uLampColor.value,
+      lampColor: c,
       lampPower: lu.uLampIntensity.value,
-    }
+    })
+    this.stats.lights = lights.length
+    return lights
   }
 
-  _rebuild(chunks, floor, key, now) {
+  _flashlight() {
     const e = this.engine
-    const t0 = performance.now()
     const lu = e.deferred.lightUniforms
-    const { scene, stats, flashlight } = this.builder.build({
-      chunks,
-      camera: e.camera,
-      floor,
-      center: _eye,
-      geometryRadius: GEOMETRY_RADIUS,
-      panelMaterial: e.materials.panel,
-      flashlight: {
+    this._flashOn = !!e.state.flashlightOn
+    return {
+      ...flashlightParams({
         color: lu.uFlashColor.value,
         intensity: lu.uFlashIntensity.value,
         range: lu.uFlashRange.value,
         cosInner: lu.uFlashCosInner.value,
         cosOuter: lu.uFlashCosOuter.value,
-      },
-      ...this._lightOptions(floor),
-    })
-    // The torch stays in the scene; visibility is how it switches (the
-    // tracer only collects visible lights, so an off torch costs nothing).
-    flashlight.visible = !!e.state.flashlightOn
-    this._flashOn = flashlight.visible
-    this._spot = flashlight
-    this._syncCamera(true)
-    const t1 = performance.now()
-    this.tracer.setScene(scene, this.camera)
-    this.stats.buildMs = t1 - t0
-    this.stats.setSceneMs = performance.now() - t1
-    this.scene = scene
+      }),
+      on: this._flashOn,
+    }
+  }
+
+  _rebuild(chunks, floor, key, now) {
+    const t0 = performance.now()
+    const selected = selectChunks(chunks, _eye.x, _eye.z, floor, GEOMETRY_RADIUS)
+    const keys = this.mirror.sceneChunks(selected)
+    // After the chunks: they register the materials the sync describes.
+    this.mirror.syncMaterials(this.engine.materials.panel)
+    this._lights = this._panelLights(floor, selected)
+    this._post({ type: 'scene', id: ++this._sceneId, chunks: keys, lights: this._lights, flashlight: this._flashlight() })
     if (key !== this._key) this.blend.resetHistory()
     this._key = key
     this._floor = floor
-    this._center.copy(_eye)
-    this._lightCenter.copy(_eye)
-    this._chunks = selectChunks(chunks, _eye.x, _eye.z, floor, GEOMETRY_RADIUS)
+    this._center.x = this._lightCenter.x = _eye.x
+    this._center.z = this._lightCenter.z = _eye.z
+    this._chunks = selected
     this._lastBuildAt = now
-    this._resetSinceReadback = true
-    const s = this.stats
-    s.rebuilds++
-    s.lastRebuildMs = performance.now() - t0
-    s.lights = stats.lights
-    s.triangles = stats.triangles
-    s.meshes = stats.meshes
-    s.mergedChunks = stats.mergedChunks
+    this._serial++
+    this.stats.rebuilds++
+    this.stats.exportMs = performance.now() - t0
   }
 
   _syncFlashlight() {
     const on = !!this.engine.state.flashlightOn
-    if (!this._spot || on === this._flashOn) return
-    this._spot.visible = on
-    this._flashOn = on
-    if (on) aimFlashlight(this._spot, this.engine.camera)
-    this.tracer.updateLights()
-    this._resetSinceReadback = true
+    if (this._sceneId === 0 || on === this._flashOn) return
+    this._post({ type: 'lights', lights: this._lights, flashlight: this._flashlight() })
+    this._serial++
   }
 
-  // Copy the player camera into the tracer's own camera (the tracer switches
-  // the camera it is given to WebGPU clip space). Returns whether it moved.
-  _syncCamera(force = false) {
-    const src = this.engine.camera
-    src.updateMatrixWorld()
-    if (!force && src.aspect === this._lastAspect && this._lastCamera.equals(src.matrixWorld)) return false
-    this._lastCamera.copy(src.matrixWorld)
-    this._lastAspect = src.aspect
-    const cam = this.camera
-    cam.fov = src.fov
-    cam.aspect = src.aspect
-    cam.near = src.near
-    cam.far = src.far
-    src.matrixWorld.decompose(cam.position, cam.quaternion, cam.scale)
-    cam.updateProjectionMatrix()
-    cam.updateMatrixWorld()
-    return true
-  }
-
-  // Additive increase while frames arrive on cadence, multiplicative
-  // decrease when the GPU backlog stretches them; never below MIN_STEPS.
-  _stepsFor(now) {
-    const interval = now - this._lastFrameAt
-    this._lastFrameAt = now
-    if (interval > 0 && interval < 250) {
-      if (interval > TARGET_FRAME_MS) this.steps = Math.max(MIN_STEPS, Math.floor(this.steps * 0.75))
-      else this.steps = Math.min(MAX_STEPS, this.steps + 1)
+  // Send one chunk the next rebuild will select, if the worker lacks it.
+  _prewarm() {
+    const chunks = selectChunks(this.engine.cm.chunks.values(), _eye.x, _eye.z, this._floor ?? 0, PREWARM_RADIUS)
+    for (const chunk of chunks) {
+      if (this.mirror.holds(chunk)) continue
+      this.mirror.ensureChunk(chunk)
+      return
     }
-    return this.steps
   }
 
-  _readback(slot, { width, height }) {
-    const continued = !this._resetSinceReadback
-    this._resetSinceReadback = false
-    const target = this.tracer.target
-    this.renderer.backend
-      .copyTextureToBuffer(target, 0, 0, width, height, 0)
-      .then((data) => {
-        if (this._disposed) return
-        this.blend.accept(slot, data, width, height, { continued })
-      })
-      .catch(() => {
-        if (!this._disposed) this.blend.cancel(slot)
-      })
+  _onMessage(msg) {
+    if (this._disposed) return
+    switch (msg.type) {
+      case 'ready':
+        this._ready?.resolve(msg)
+        break
+      case 'frame': {
+        this.stats.frames++
+        this.stats.latencyMs = msg.ms
+        this.stats.samples = msg.samples
+        if (msg.serial >= this._final.serial) this._final = { serial: msg.serial, samples: msg.samples }
+        this.blend.accept(msg.slot, msg.data, msg.width, msg.height, { continued: msg.continued, samples: msg.samples })
+        break
+      }
+      case 'skipped':
+        this.stats.skipped++
+        this.blend.cancel(msg.slot)
+        break
+      case 'scene': {
+        const s = this.stats
+        s.buildMs = msg.buildMs
+        s.setSceneMs = msg.setSceneMs
+        s.triangles = msg.triangles
+        s.meshes = msg.meshes
+        break
+      }
+      case 'error':
+        if (this._ready) this._ready.reject(new Error(msg.message))
+        else this._lose(msg.message)
+        break
+    }
+  }
+
+  _post(msg, transfer = []) {
+    if (this._disposed || !this.worker) return
+    this.worker.postMessage(msg, transfer)
   }
 
   _lose(message) {
     if (this._disposed || this._lost) return
     this._lost = message
-    this.onLost?.(message)
+    if (this._ready) this._ready.reject(new Error(message))
+    else this.onLost?.(message)
   }
 
   dispose() {
     if (this._disposed) return
+    this._post({ type: 'dispose' })
     this._disposed = true
+    clearTimeout(this._initTimer)
     const d = this.engine.deferred
     if (d?.pathTraceHook === this.blend) d.setPathTraceHook(null)
     this.blend.dispose()
-    disposeTracer(this.tracer)
-    this.tracer = null
-    this.builder.dispose()
-    disposeRenderer(this.renderer)
-    this.renderer = null
+    // Terminating the worker releases its WebGPU device with it.
+    this.worker?.terminate()
+    this.worker = null
   }
 }

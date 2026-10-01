@@ -221,13 +221,23 @@ export class ChunkData {
       lethalVoidCellAt(this, 'down', lx, lz) !== null
   }
 
-  // --- Protected edges (stair stamp ownership) ---
+  // --- Protected edges (stair and structure stamp ownership) ---
 
   protectV(lx, z) {
     this._protV.add(vIdx(lx, z))
   }
   protectH(x, lz) {
     this._protH.add(hIdx(x, lz))
+  }
+  // Set an edge and protect it from later carves in one step: the stamps'
+  // guard walls, rails, mouths and owned seam openings.
+  setProtectedV(lx, z, v, passage, feature) {
+    this.setV(lx, z, v, passage, feature)
+    this.protectV(lx, z)
+  }
+  setProtectedH(x, lz, v, passage, feature) {
+    this.setH(x, lz, v, passage, feature)
+    this.protectH(x, lz)
   }
 
   clearingPassageV(lx, z) {
@@ -246,24 +256,28 @@ export class ChunkData {
 
   // Force-open every INTERIOR wall edge touching the cell rect [x0..x1]x[z0..z1]
   // and delete its columns. Monotone (only ever opens edges) so it can never
-  // disconnect the graph; it also opens the ring of edges to the surrounding
-  // cells, so the opened pocket always joins the chunk's (already connected)
-  // open set. Never touches the owned border lines (0) or protected edges.
-  carveRect(x0, z0, x1, z1) {
+  // disconnect the graph. With `ring` (the default) it also opens the ring of
+  // edges to the surrounding cells, so the opened pocket always joins the
+  // chunk's open set even when it was walled in. `ring: false` opens only the
+  // rect's interior: for a rect the layout already reaches (a reserved stair
+  // halo), that keeps the neighbouring rooms' walls whole instead of leaving
+  // them as dangling blades. Never touches the owned border lines (0) or
+  // protected edges.
+  carveRect(x0, z0, x1, z1, { ring = true } = {}) {
     for (let z = z0; z <= z1; z++) {
       for (let x = x0; x <= x1; x++) {
         if (x < 0 || x >= CHUNK || z < 0 || z >= CHUNK) continue
         this.setCol(x, z, 0)
-        if (x >= 1 && !this._protV.has(vIdx(x, z))) {
+        if (x >= 1 && (ring || x > x0) && !this._protV.has(vIdx(x, z))) {
           this.setV(x, z, 0, this.clearingPassageV(x, z))
         }
-        if (x + 1 <= CHUNK - 1 && !this._protV.has(vIdx(x + 1, z))) {
+        if (x + 1 <= CHUNK - 1 && (ring || x < x1) && !this._protV.has(vIdx(x + 1, z))) {
           this.setV(x + 1, z, 0, this.clearingPassageV(x + 1, z))
         }
-        if (z >= 1 && !this._protH.has(hIdx(x, z))) {
+        if (z >= 1 && (ring || z > z0) && !this._protH.has(hIdx(x, z))) {
           this.setH(x, z, 0, this.clearingPassageH(x, z))
         }
-        if (z + 1 <= CHUNK - 1 && !this._protH.has(hIdx(x, z + 1))) {
+        if (z + 1 <= CHUNK - 1 && (ring || z < z1) && !this._protH.has(hIdx(x, z + 1))) {
           this.setH(x, z + 1, 0, this.clearingPassageH(x, z + 1))
         }
       }

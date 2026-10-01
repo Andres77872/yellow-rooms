@@ -125,6 +125,7 @@ export class Chunk {
     this._mesh = mesh
     this.renderParts = mesh.parts
     this.renderDetail = RENDER_DETAIL_FULL
+    this.bevelDetail = true // built with the bevelled detail cube
     this.stairCells = buildStairCells(this.data, cx, cy, cz)
     this.structure = this.data.structure
 
@@ -177,12 +178,35 @@ export class Chunk {
     if (p.floor) p.floor.visible = true
     if (p.ceiling) p.ceiling.visible = true
     if (p.walls) p.walls.visible = true
+    if (p.stairs) p.stairs.visible = true
     if (p.signs) p.signs.visible = true
     if (p.litPanels) p.litPanels.visible = true
     if (p.exit) p.exit.visible = true
 
     this.renderDetail = next
     return true
+  }
+
+  // Swap the detail batches between the bevelled and the sharp unit cube
+  // (renderDetail.js BEVEL_DETAIL_RING). Both are the same unit box to every
+  // bound and instance transform, so only the triangle count changes.
+  setBevelDetail(on) {
+    const next = on !== false
+    if (next === this.bevelDetail) return false
+    this.bevelDetail = next
+    this._swapDetailGeometry(Object.values(this.renderParts))
+    return true
+  }
+
+  _swapDetailGeometry(parts) {
+    const { detailUnit, detailUnitSharp } = this._geom
+    if (!detailUnit || !detailUnitSharp) return
+    const [from, to] = this.bevelDetail ? [detailUnitSharp, detailUnit] : [detailUnit, detailUnitSharp]
+    for (const part of parts) {
+      part?.traverse((object) => {
+        if (object.geometry === from) object.geometry = to
+      })
+    }
   }
 
   // Rebuild only the furniture batch in place — called by ChunkManager when
@@ -196,6 +220,7 @@ export class Chunk {
     disposeFurniturePart(oldPart) // also detaches from this.group
     if (nextPart) {
       nextPart.visible = this.renderDetail !== RENDER_DETAIL_SHELL
+      this._swapDetailGeometry([nextPart]) // fallback boxes follow the chunk's bevel tier
       this.group.add(nextPart)
       // mount() froze this subtree's auto matrix composition; a late swap-in
       // composes its world matrix once, then freezes the same way.

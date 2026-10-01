@@ -291,8 +291,7 @@ function stampRetainedBoundaryRails(data, geometry) {
       const left = geometry.retained.has(latticeHorizontalCellKey(gx - 1, gz))
       const right = geometry.retained.has(latticeHorizontalCellKey(gx, gz))
       if (left === right) continue
-      data.setV(line, cell, 1, PASSAGE_WALL, WALL_RAIL)
-      data.protectV(line, cell)
+      data.setProtectedV(line, cell, 1, PASSAGE_WALL, WALL_RAIL)
     }
   }
   for (let cell = 0; cell < CHUNK; cell++) {
@@ -302,8 +301,7 @@ function stampRetainedBoundaryRails(data, geometry) {
       const north = geometry.retained.has(latticeHorizontalCellKey(gx, gz - 1))
       const south = geometry.retained.has(latticeHorizontalCellKey(gx, gz))
       if (north === south) continue
-      data.setH(cell, line, 1, PASSAGE_WALL, WALL_RAIL)
-      data.protectH(cell, line)
+      data.setProtectedH(cell, line, 1, PASSAGE_WALL, WALL_RAIL)
     }
   }
 }
@@ -414,16 +412,14 @@ function stampChamberCueRails(data, structure) {
           if (cx !== data.cx || cz !== data.cz) continue
           const line = edge.gx - chunkGx
           const cell = edge.gz - chunkGz
-          data.setV(line, cell, 1, PASSAGE_WALL, WALL_RAIL)
-          data.protectV(line, cell)
+          data.setProtectedV(line, cell, 1, PASSAGE_WALL, WALL_RAIL)
         } else {
           const cx = Math.floor(edge.gx / CHUNK)
           const cz = Math.floor(edge.gz / CHUNK)
           if (cx !== data.cx || cz !== data.cz) continue
           const cell = edge.gx - chunkGx
           const line = edge.gz - chunkGz
-          data.setH(cell, line, 1, PASSAGE_WALL, WALL_RAIL)
-          data.protectH(cell, line)
+          data.setProtectedH(cell, line, 1, PASSAGE_WALL, WALL_RAIL)
         }
       }
     }

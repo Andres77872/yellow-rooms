@@ -238,9 +238,18 @@ describe('stair stamps', () => {
       linksFrom.get(b).push(a)
     }
 
-    // BFS from the layer-0 hub.
-    const start = `${7},${7},${0}`
-    expect(total.has(start)).toBe(true)
+    // BFS from the walkable layer-0 cell nearest the hub (furniture may
+    // stand on the hub cell itself).
+    let start = null
+    for (let r = 0; r < CHUNK && !start; r++) {
+      for (let dz = -r; dz <= r && !start; dz++) {
+        for (let dx = -r; dx <= r && !start; dx++) {
+          const key = `${7 + dx},${7 + dz},${0}`
+          if (Math.max(Math.abs(dx), Math.abs(dz)) === r && total.has(key)) start = key
+        }
+      }
+    }
+    expect(start).not.toBeNull()
     const seen = new Set([start])
     const queue = [start]
     while (queue.length) {

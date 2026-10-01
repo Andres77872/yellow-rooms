@@ -306,8 +306,9 @@ tall structure.
 
 Reduced detail hides ornamental frames, props, and dead lamp panels; Lattice
 retains its rail-bearing frame batch at this level. Shell detail additionally
-hides door leaves and furniture. Floors, ceilings, walls, emissive signs, live
-lamp panels, and the exit anomaly remain visible at every level. Ultra retains
+hides door leaves and furniture. Floors, ceilings, walls, stair treads,
+emissive signs, live lamp panels, and the exit anomaly remain visible at every
+level. Ultra retains
 silhouette batches at every distance, but still removes small decoration beyond
 ring 3.
 
@@ -316,6 +317,53 @@ profile change, or family change, and classifies new chunks as they mount.
 `render-coupling.test.js` locks the profile boundaries to the analytic fog:
 default decoration reduction starts only after fog dominates, and silhouette
 removal starts only where fog is effectively opaque.
+
+### Rounded edges (`render/bevel.js`)
+
+Architecture batches are instanced unit boxes stretched per instance, so a
+rounding modelled into the box would stretch with it. The vertex stage applies
+it instead, at a constant world radius
+`r = min(cap, BEVEL_FRAC × the instance's smallest side)`. The geometry's
+`position` stays on the sharp unit-box corner and a `bevel` attribute
+(xyz offset, w = −cap) moves it. Consumers that ignore the attribute, such as
+bounding spheres, raycasts and the path tracer's scene mirror, therefore see
+an exact box.
+
+- **Wall shell** (`wallUnit`, cap `BEVEL_WALL`): walls, columns and beams.
+  Only the vertical edges round; the feet and heads meet the slabs.
+- **Stair treads** (`stairUnit`, cap `BEVEL_STAIR`): every nosing is a
+  bullnose.
+- **Detail** (`detailUnit`, cap `BEVEL_DETAIL`): trim, props, signs, door
+  leaves and fallback furniture. All twelve edges are chamfered and
+  smooth-shaded. That costs 44 triangles per instance instead of 12, and a
+  2 cm rounding is sub-pixel past the player's neighbourhood. Chunks beyond
+  `BEVEL_DETAIL_RING` (`world/renderDetail.js`, ring 1) therefore swap these
+  batches to the plain `detailUnitSharp` cube (`Chunk.setBevelDetail`).
+  Measured with the office benchmark at the high profile, against v27's
+  plain boxes: 18% fewer instances (merged runs), +55% visible triangles,
+  +17% resident triangles.
+
+A face resting on a slab stays square, so no rounded groove opens along a
+floor or ceiling line. That covers a foot at chunk-local y 0 and a head at
+`WALL_H` or `LAYER_H`.
+
+The G-buffer materials apply the bevel under `USE_BEVEL`. They turn the
+rounded normals by the instance rotation only, because the stretched-model
+inverse-transpose would flatten them. The flashlight's depth override
+(`bevelDepthMaterial`) applies the same offset, so the shadow caster matches
+the visible surface. Programs reading a geometry without the attribute get w
+≥ 0 and pass vertices through unchanged.
+
+The wall shell (`world/objects/wallShell.js`) feeds these batches with
+merged runs. Collinear edges join, so a bevel never rounds an interior
+seam. A run end that is exposed reaches `THICK / 2` past its vertex, which
+closes L-corners and wraps free ends. Window sills, headers and rail
+parapets reach into the walls beside them. T-stems end buried in the
+through-wall. Baseboards and crowns follow the same rules.
+
+Slab holes round their lower edge, the nosing seen looking up a stairwell
+or atrium, with a quarter-round strip at `WALL_BEVEL`
+(`mesh.js buildCeilingSlab`). The strips are mitred at the hole's corners.
 
 ### Low-activity cadence
 

@@ -527,8 +527,9 @@ describe('multi-chunk office district plan', () => {
               (z > 0 && plan.vAt(x, z - 1) ? 1 : 0) +
               (z < plan.size - 1 && plan.vAt(x, z + 1) ? 1 : 0)
             expect(support).toBeGreaterThan(0)
-            if (z < plan.size - 1) {
-              expect(plan.passageVAt(x, z + 1)).not.toBe(PASSAGE_DOOR)
+            // Side-by-side doors only where a party wall splits them.
+            if (z < plan.size - 1 && plan.passageVAt(x, z + 1) === PASSAGE_DOOR) {
+              expect((x > 0 && plan.hAt(x - 1, z + 1)) || plan.hAt(x, z + 1)).toBeTruthy()
             }
           }
           if (plan.passageHAt(x, z) === PASSAGE_DOOR) {
@@ -536,8 +537,8 @@ describe('multi-chunk office district plan', () => {
               (x > 0 && plan.hAt(x - 1, z) ? 1 : 0) +
               (x < plan.size - 1 && plan.hAt(x + 1, z) ? 1 : 0)
             expect(support).toBeGreaterThan(0)
-            if (x < plan.size - 1) {
-              expect(plan.passageHAt(x + 1, z)).not.toBe(PASSAGE_DOOR)
+            if (x < plan.size - 1 && plan.passageHAt(x + 1, z) === PASSAGE_DOOR) {
+              expect((z > 0 && plan.vAt(x + 1, z - 1)) || plan.vAt(x + 1, z)).toBeTruthy()
             }
           }
         }

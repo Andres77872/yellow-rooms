@@ -67,3 +67,14 @@ export function renderDetailForChunk(
   )
   return renderDetailForRing(ring, profile)
 }
+
+// Rounded detail edges (render/bevel.js BEVEL_DETAIL) are a few centimetres
+// wide, so they only resolve in the player's chunk and its neighbours. Chunks
+// beyond this inclusive ring draw trim, props, signs, leaves and fallback
+// furniture with the sharp unit cube; walls and stairs keep their bevel.
+export const BEVEL_DETAIL_RING = 1
+
+export function bevelDetailForChunk(playerCx, playerCz, chunkCx, chunkCz) {
+  const ring = Math.max(Math.abs(chunkCx - playerCx), Math.abs(chunkCz - playerCz))
+  return ring <= BEVEL_DETAIL_RING
+}

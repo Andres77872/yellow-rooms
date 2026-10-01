@@ -11,6 +11,8 @@
 // exchange this pass makes is structurally safe; the candidate scorer then
 // penalizes ugly outcomes. The guards below exist to keep the GOOD outcomes
 // common, not to protect correctness:
+//   - the cut is at least 2x2 cells, so neither the donor's notch nor the
+//     receiver's bump is a one-cell jog or a one-cell-wide arm;
 //   - the cut leaves both remaining arms >= 3 cells (roomMin-scale);
 //   - the cut area stays <= a quarter of the leaf (compactness >= 0.75);
 //   - the receiving side of the cut must be one single neighbouring leaf, so
@@ -62,12 +64,12 @@ function exchangeCorner(field, size, leaves, i, cwRoll, chRoll, cornerRoll, flip
   const { x0, z0, x1, z1 } = leaves[i]
   const w = x1 - x0 + 1
   const h = z1 - z0 + 1
-  if (w < 4 || h < 4) return false
-  let cw = Math.min(cwRoll, w - 3)
-  let ch = Math.min(chRoll, h - 3)
+  if (w < 5 || h < 5) return false // no room for a 2-cell cut and 3-cell arms
+  let cw = Math.max(2, Math.min(cwRoll, w - 3))
+  let ch = Math.max(2, Math.min(chRoll, h - 3))
   while (cw * ch * 4 > w * h) {
-    if (cw >= ch && cw > 1) cw--
-    else if (ch > 1) ch--
+    if (cw >= ch && cw > 2) cw--
+    else if (ch > 2) ch--
     else return false
   }
   const corner = CORNERS[cornerRoll]

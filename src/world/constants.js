@@ -485,8 +485,14 @@ export const OUTLINE_FADE_FAR = 0.34
 
 // --- Thin-wall model (refactor) ---------------------------------------
 // World-gen version: bump whenever the algorithm changes the bytes a seed
-// produces. Guards the golden determinism test. v27 is a Tower-only byte
-// change: every upper storey of a Tower landmark opens both outer gallery
+// produces. Guards the golden determinism test. v28 keeps plan outlines
+// whole: a stair stamp opens only its halo's interior, so the walls of the
+// rooms around a reserved halo stay closed instead of ending as dangling
+// blades (ChunkData.carveRect ring: false); two rooms' doors side by side
+// on a corridor stay two doors when a party wall splits them, rather than
+// merging into one wide mouth with the party wall's end standing in it; and
+// room-shape corner cuts are at least 2x2, so no room grows a one-cell jog
+// or a one-cell-wide arm. v27 is a Tower-only byte change: every upper storey of a Tower landmark opens both outer gallery
 // walks onto the ring at each participant's end wall, so no walk is stranded
 // behind its court rails and glazing (in a 25-seed scan, 38% of Tower
 // landmark chunk-storeys were two components on their own). v26 separates the
@@ -527,7 +533,7 @@ export const OUTLINE_FADE_FAR = 0.34
 // release-eligible bounded Lattice stream; v17 introduced the bounded
 // Tower/skybridge stream, v16 the bounded Sewer stream; v15 added the
 // collision-real furniture layer.
-export const WORLD_GEN_VERSION = 27
+export const WORLD_GEN_VERSION = 28
 
 // Interior archetypes. The room-dominant macro planner bounds the two open
 // styles; the registry in zones/index.js maps ids to their chunk compilers.
@@ -542,6 +548,24 @@ export const WALL_COL_HALF = 0.08 // collision half-thickness of a wall line
 export const COL_HALF = 0.4 // freestanding column half-width
 export const MONUMENTAL_COL_HALF = 1.1 // landmark pier half-width (2.2u square)
 export const MAX_COL_HALF = MONUMENTAL_COL_HALF
+
+// Bevelled edges (render/bevel.js). Every instanced architecture box is drawn
+// with softened edges whose radius is constant in WORLD units, however the
+// instance is stretched: r = min(cap, BEVEL_FRAC x the box's smallest side).
+// Walls, columns, steps and beams round only their vertical edges (their
+// tops and feet meet the slabs, where a rounded edge would open a groove);
+// stair treads, trim, props, signs and door leaves round all twelve.
+// BEVEL_FRAC < 1/2 is what lets abutting wall pieces hide each other's
+// rounding (objects/wallShell.js): a T-stem ends THICK/2 deep in the wall it
+// meets, and the legs of an L each reach the far face of the corner square,
+// where the other leg is flat for THICK - r > r.
+export const BEVEL_FRAC = 0.4
+export const BEVEL_WALL = 0.1 // radius cap for the wallpaper shell (columns reach it)
+export const BEVEL_DETAIL = 0.02 // radius cap for trim, props, signs and leaves
+export const BEVEL_STAIR = 0.04 // stair treads: a bullnose on every nosing
+// The radius every THICK-deep wall piece (runs, sills, headers, rails)
+// actually gets — the wall-shell joint rules are sized from it.
+export const WALL_BEVEL = Math.min(BEVEL_WALL, BEVEL_FRAC * THICK) // 0.064
 // Lintel/transom band above a doorway. 0.8 (not 0.5) drops the clear opening
 // to DOOR_H = 2.4 — a real door height under the 3.2 ceiling instead of a
 // near-square gate — and the deeper band reads as a designed transom.

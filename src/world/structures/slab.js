@@ -286,6 +286,21 @@ export function stairStrip(contract) {
   return [contract.landing, contract.run[0], contract.run[1], contract.exit]
 }
 
+// The strip's 1-cell halo: its bounding rect grown by one cell, clamped to the
+// chunk. Office plans reserve it as circulation, sewer walls it as a pocket,
+// and the stamp opens its interior (stairStamp.js).
+export function stairHaloRect(contract) {
+  const strip = stairStrip(contract)
+  const xs = strip.map((cell) => cell.lx)
+  const zs = strip.map((cell) => cell.lz)
+  return {
+    x0: Math.max(0, Math.min(...xs) - 1),
+    z0: Math.max(0, Math.min(...zs) - 1),
+    x1: Math.min(CHUNK - 1, Math.max(...xs) + 1),
+    z1: Math.min(CHUNK - 1, Math.max(...zs) + 1),
+  }
+}
+
 // Both contracts a LAYER participates in: `up` pierces this layer's ceiling
 // (slab cy), `down` pierces its floor (slab cy-1). Consumers that need "which
 // stairs touch chunk (cx, cy, cz)" — the stamp, exit placement, streaming

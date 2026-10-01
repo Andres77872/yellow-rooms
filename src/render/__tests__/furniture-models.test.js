@@ -490,14 +490,14 @@ describe('chunk furniture batching (GLB path)', () => {
     const geom = createGeometries()
     const noModels = buildChunkMeshes(deskChairData(), geom, stubMaterials(), 0, 0, 0, null)
     expect(noModels.parts.furniture.children).toHaveLength(1)
-    expect(noModels.parts.furniture.children[0].geometry).toBe(geom.wallUnit)
+    expect(noModels.parts.furniture.children[0].geometry).toBe(geom.detailUnit)
     noModels.dispose()
 
     const noMaterial = { ...stubMaterials() }
     delete noMaterial.furnitureModel
     const mesh = buildChunkMeshes(deskChairData(), geom, noMaterial, 0, 0, 0, stubLibrary())
     expect(mesh.parts.furniture.children).toHaveLength(1)
-    expect(mesh.parts.furniture.children[0].geometry).toBe(geom.wallUnit)
+    expect(mesh.parts.furniture.children[0].geometry).toBe(geom.detailUnit)
     mesh.dispose()
   })
 
@@ -510,7 +510,7 @@ describe('chunk furniture batching (GLB path)', () => {
     chunk.refreshFurniture(null) // null library -> box builder batch
     const boxed = chunk.renderParts.furniture
     expect(boxed.children).toHaveLength(1)
-    expect(boxed.children[0].geometry).toBe(geom.wallUnit)
+    expect(boxed.children[0].geometry).toBe(geom.detailUnit)
 
     const lib = stubLibrary()
     chunk.refreshFurniture(lib)
@@ -518,10 +518,10 @@ describe('chunk furniture batching (GLB path)', () => {
     expect(glb).not.toBe(boxed)
     expect(glb.children.length).toBeGreaterThan(0)
     // Batches are GLB kinds the library covers; kinds the stub library lacks
-    // keep a shared wallUnit box batch (per-kind fallback).
+    // keep a shared detailUnit box batch (per-kind fallback).
     for (const c of glb.children) {
       const isGlb = [...lib.geometries.values()].includes(c.geometry)
-      expect(isGlb || c.geometry === geom.wallUnit).toBe(true)
+      expect(isGlb || c.geometry === geom.detailUnit).toBe(true)
     }
     expect(glb.children.some((c) => c.geometry === lib.geometries.get(FURN_DESK))).toBe(true)
     expect(chunk.group.children.includes(boxed)).toBe(false) // old node detached

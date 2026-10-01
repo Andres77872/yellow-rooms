@@ -1,5 +1,6 @@
 import * as THREE from 'three'
-import { CHUNK, CHUNK_WORLD } from '../world/constants.js'
+import { BEVEL_DETAIL, BEVEL_STAIR, BEVEL_WALL, CHUNK, CHUNK_WORLD } from '../world/constants.js'
+import { createBevelBoxGeometry, createBevelPrismGeometry } from './bevel.js'
 
 // Shared geometries reused by every chunk (positioned via mesh transforms /
 // instance matrices). Created once, disposed once at teardown.
@@ -22,9 +23,19 @@ export function createGeometries() {
   ceiling.rotateX(Math.PI / 2)
   scaleUV(ceiling, CHUNK)
 
-  // Unit cube for the thin-wall model: scaled per instance (thin on one axis for
-  // wall slabs, square for columns) via the instance matrix.
-  const wallUnit = new THREE.BoxGeometry(1, 1, 1)
+  // Unit cubes for the thin-wall model, scaled per instance (thin on one axis
+  // for wall runs, square for columns and posts) via the instance matrix.
+  // All are bevelled at a constant world radius (render/bevel.js): the wall
+  // shell rounds its vertical edges only (feet and heads meet the slabs);
+  // the stair and detail cubes — treads; trim, props, signs, leaves and
+  // fallback furniture — round all twelve.
+  const wallUnit = createBevelPrismGeometry(BEVEL_WALL)
+  const stairUnit = createBevelBoxGeometry(BEVEL_STAIR)
+  const detailUnit = createBevelBoxGeometry(BEVEL_DETAIL)
+  // A detail bevel is a couple of centimetres, sub-pixel beyond the player's
+  // neighbourhood: farther chunks swap their detail batches to this plain
+  // 12-triangle cube (Chunk.setBevelDetail) instead of the 44-triangle one.
+  const detailUnitSharp = new THREE.BoxGeometry(1, 1, 1)
 
   // Recessed fluorescent panel, faces down just below the ceiling.
   const panel = new THREE.PlaneGeometry(1.7, 1.0)
@@ -44,7 +55,7 @@ export function createGeometries() {
   // remnant that just stands there.
   const husk = new THREE.CapsuleGeometry(0.38, 1.2, 4, 10)
 
-  return { floor, ceiling, wallUnit, panel, exit, entity, pursuer, husk }
+  return { floor, ceiling, wallUnit, stairUnit, detailUnit, detailUnitSharp, panel, exit, entity, pursuer, husk }
 }
 
 export function disposeGeometries(geom) {

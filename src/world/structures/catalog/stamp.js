@@ -11,7 +11,6 @@ import {
   PASSAGE_WALL,
   PASSAGE_WIDE,
   SPACE_ROLE_NONE,
-  WALL_PLAIN,
   WALL_RAIL,
   WALL_WINDOW,
 } from '../../mapTypes.js'
@@ -47,16 +46,6 @@ import {
 
 const walkableClass = (c) => c === CELL_CLASS_RING || c === CELL_CLASS_SOLID || c === CELL_CLASS_BRIDGE
 
-function setV(data, line, z, wall, passage, feature = WALL_PLAIN) {
-  data.setV(line, z, wall, passage, feature)
-  data.protectV(line, z)
-}
-
-function setH(data, x, line, wall, passage, feature = WALL_PLAIN) {
-  data.setH(x, line, wall, passage, feature)
-  data.protectH(x, line)
-}
-
 export function stampCatalogStructure(data, structure) {
   if (!isCatalogStructure(structure)) return false
   const k = data.cy - structure.baseCy
@@ -76,8 +65,8 @@ export function stampCatalogStructure(data, structure) {
   // 1. carve + owned seams inside the carve box.
   data.carveRect(lx0, lz0, lx1, lz1)
   for (let l = 0; l < CHUNK; l++) {
-    if (inRect(box, ox - 1, oz + l) && inRect(box, ox, oz + l)) setV(data, 0, l, 0, PASSAGE_WIDE)
-    if (inRect(box, ox + l, oz - 1) && inRect(box, ox + l, oz)) setH(data, l, 0, 0, PASSAGE_WIDE)
+    if (inRect(box, ox - 1, oz + l) && inRect(box, ox, oz + l)) data.setProtectedV(0, l, 0, PASSAGE_WIDE)
+    if (inRect(box, ox + l, oz - 1) && inRect(box, ox + l, oz)) data.setProtectedH(l, 0, 0, PASSAGE_WIDE)
   }
 
   // 2. cell kinds, ownership, piers.
@@ -117,10 +106,10 @@ export function stampCatalogStructure(data, structure) {
         }
         // Chunk-local lines only; seams never carry a void boundary.
         let f
-        if (lx >= 1 && (f = guard(lx - 1, lz))) setV(data, lx, lz, 1, PASSAGE_WALL, f)
-        if (lx + 1 <= CHUNK - 1 && (f = guard(lx + 1, lz))) setV(data, lx + 1, lz, 1, PASSAGE_WALL, f)
-        if (lz >= 1 && (f = guard(lx, lz - 1))) setH(data, lx, lz, 1, PASSAGE_WALL, f)
-        if (lz + 1 <= CHUNK - 1 && (f = guard(lx, lz + 1))) setH(data, lx, lz + 1, 1, PASSAGE_WALL, f)
+        if (lx >= 1 && (f = guard(lx - 1, lz))) data.setProtectedV(lx, lz, 1, PASSAGE_WALL, f)
+        if (lx + 1 <= CHUNK - 1 && (f = guard(lx + 1, lz))) data.setProtectedV(lx + 1, lz, 1, PASSAGE_WALL, f)
+        if (lz >= 1 && (f = guard(lx, lz - 1))) data.setProtectedH(lx, lz, 1, PASSAGE_WALL, f)
+        if (lz + 1 <= CHUNK - 1 && (f = guard(lx, lz + 1))) data.setProtectedH(lx, lz + 1, 1, PASSAGE_WALL, f)
       }
     }
   }
@@ -145,16 +134,16 @@ export function stampCatalogStructure(data, structure) {
       const x1 = r.x1 - ox
       const z1 = r.z1 - oz
       for (let z = z0; z <= z1; z++) {
-        setV(data, x0, z, 1, PASSAGE_WALL)
-        setV(data, x1 + 1, z, 1, PASSAGE_WALL)
+        data.setProtectedV(x0, z, 1, PASSAGE_WALL)
+        data.setProtectedV(x1 + 1, z, 1, PASSAGE_WALL)
       }
       for (let x = x0; x <= x1; x++) {
-        setH(data, x, z0, 1, PASSAGE_WALL)
-        setH(data, x, z1 + 1, 1, PASSAGE_WALL)
+        data.setProtectedH(x, z0, 1, PASSAGE_WALL)
+        data.setProtectedH(x, z1 + 1, 1, PASSAGE_WALL)
       }
       const door = coreDoor(core)
-      if (door.axis === 'h') setH(data, door.gx - ox, door.line - oz, 0, PASSAGE_DOOR)
-      else setV(data, door.line - ox, door.gz - oz, 0, PASSAGE_DOOR)
+      if (door.axis === 'h') data.setProtectedH(door.gx - ox, door.line - oz, 0, PASSAGE_DOOR)
+      else data.setProtectedV(door.line - ox, door.gz - oz, 0, PASSAGE_DOOR)
     }
   }
 

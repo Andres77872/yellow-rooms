@@ -37,16 +37,6 @@ import {
 // different bridge above and below; ChunkData therefore records separate up
 // and down slab slices.
 
-function setV(data, line, cell, wall, passage, feature) {
-  data.setV(line, cell, wall, passage, feature)
-  data.protectV(line, cell)
-}
-
-function setH(data, cell, line, wall, passage, feature) {
-  data.setH(cell, line, wall, passage, feature)
-  data.protectH(cell, line)
-}
-
 function labelRing(data, slice) {
   const { x0, z0, x1, z1 } = slice.localBounds
   for (let z = z0 - 1; z <= z1 + 1; z++) {
@@ -78,11 +68,11 @@ function openOwnedStructureSeams(data, slice) {
   for (let local = 0; local < CHUNK; local++) {
     const gz = lineGZ + local
     if (inside(carve, lineGX - 1, gz) && inside(carve, lineGX, gz)) {
-      setV(data, 0, local, 0, PASSAGE_WIDE)
+      data.setProtectedV(0, local, 0, PASSAGE_WIDE)
     }
     const gx = lineGX + local
     if (inside(carve, gx, lineGZ - 1) && inside(carve, gx, lineGZ)) {
-      setH(data, local, 0, 0, PASSAGE_WIDE)
+      data.setProtectedH(local, 0, 0, PASSAGE_WIDE)
     }
   }
 }
@@ -133,9 +123,9 @@ function stampOuterWindowsAndApproaches(data, slice, roomOpenings = null) {
     for (const [x, gx] of [[x0, chunkGX + x0], [x1 + 1, chunkGX + x1 + 1]]) {
       if (gx !== global.x0 && gx !== global.x1 + 1) continue
       if (isBridgeEnd || roomOpenings?.has(edgeKey('v', x, z))) {
-        setV(data, x, z, 0, PASSAGE_WIDE)
+        data.setProtectedV(x, z, 0, PASSAGE_WIDE)
       }
-      else setV(data, x, z, 1, PASSAGE_WALL, isOverlook ? WALL_RAIL : WALL_WINDOW)
+      else data.setProtectedV(x, z, 1, PASSAGE_WALL, isOverlook ? WALL_RAIL : WALL_WINDOW)
     }
   }
 
@@ -146,9 +136,9 @@ function stampOuterWindowsAndApproaches(data, slice, roomOpenings = null) {
     for (const [z, gz] of [[z0, chunkGZ + z0], [z1 + 1, chunkGZ + z1 + 1]]) {
       if (gz !== global.z0 && gz !== global.z1 + 1) continue
       if (isBridgeEnd || roomOpenings?.has(edgeKey('h', z, x))) {
-        setH(data, x, z, 0, PASSAGE_WIDE)
+        data.setProtectedH(x, z, 0, PASSAGE_WIDE)
       }
-      else setH(data, x, z, 1, PASSAGE_WALL, isOverlook ? WALL_RAIL : WALL_WINDOW)
+      else data.setProtectedH(x, z, 1, PASSAGE_WALL, isOverlook ? WALL_RAIL : WALL_WINDOW)
     }
   }
 }
@@ -157,13 +147,13 @@ function stampBridgeGuards(data, slice) {
   if (slice.globalBridgeLine === null) return
   if (slice.bridgeAxis === 'x') {
     for (const { lx, lz } of slice.bridgeCells) {
-      setH(data, lx, lz, 1, PASSAGE_WALL, WALL_RAIL)
-      setH(data, lx, lz + 1, 1, PASSAGE_WALL, WALL_RAIL)
+      data.setProtectedH(lx, lz, 1, PASSAGE_WALL, WALL_RAIL)
+      data.setProtectedH(lx, lz + 1, 1, PASSAGE_WALL, WALL_RAIL)
     }
   } else {
     for (const { lx, lz } of slice.bridgeCells) {
-      setV(data, lx, lz, 1, PASSAGE_WALL, WALL_RAIL)
-      setV(data, lx + 1, lz, 1, PASSAGE_WALL, WALL_RAIL)
+      data.setProtectedV(lx, lz, 1, PASSAGE_WALL, WALL_RAIL)
+      data.setProtectedV(lx + 1, lz, 1, PASSAGE_WALL, WALL_RAIL)
     }
   }
 }
@@ -356,10 +346,10 @@ function stampTowerVoidGuards(data, structure, slice) {
       const gz = data.cz * CHUNK + lz
       const center = voidKeys.has(localCellKey(gx, gz))
       if (center !== voidKeys.has(localCellKey(gx - 1, gz))) {
-        setV(data, lx, lz, 1, PASSAGE_WALL, WALL_RAIL)
+        data.setProtectedV(lx, lz, 1, PASSAGE_WALL, WALL_RAIL)
       }
       if (center !== voidKeys.has(localCellKey(gx, gz - 1))) {
-        setH(data, lx, lz, 1, PASSAGE_WALL, WALL_RAIL)
+        data.setProtectedH(lx, lz, 1, PASSAGE_WALL, WALL_RAIL)
       }
     }
   }
@@ -400,7 +390,7 @@ function stampTowerDoorSocket(data, structure) {
       lz < CHUNK &&
       data.vAt(line, lz) === 0 &&
       data.passageVAt(line, lz) !== PASSAGE_WALL
-    ) setV(data, line, lz, 0, PASSAGE_DOOR)
+    ) data.setProtectedV(line, lz, 0, PASSAGE_DOOR)
   } else if (socket.axis === 'z') {
     const line = lz + (socket.side > 0 ? 1 : 0)
     if (
@@ -410,7 +400,7 @@ function stampTowerDoorSocket(data, structure) {
       line < CHUNK &&
       data.hAt(lx, line) === 0 &&
       data.passageHAt(lx, line) !== PASSAGE_WALL
-    ) setH(data, lx, line, 0, PASSAGE_DOOR)
+    ) data.setProtectedH(lx, line, 0, PASSAGE_DOOR)
   }
 }
 

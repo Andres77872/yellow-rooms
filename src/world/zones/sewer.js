@@ -2,7 +2,7 @@ import { CHUNK, ZONE_SEWER } from '../constants.js'
 import { hash3i } from '../core/hash.js'
 import { deepFreeze } from '../mapFamily.js'
 import { countChunkComponents } from '../topology.js'
-import { chunkStairs, stairStrip } from '../structures/slab.js'
+import { chunkStairs, stairHaloRect, stairStrip } from '../structures/slab.js'
 import { SEWER_CHAMBER_CATALOG } from '../rooms/catalog.js'
 import {
   CELL_CORRIDOR,
@@ -330,25 +330,6 @@ function carveRoomRegion(net, rect, region, dir) {
   }
 }
 
-function stripRect(contract) {
-  let x0 = CHUNK
-  let z0 = CHUNK
-  let x1 = -1
-  let z1 = -1
-  for (const cell of stairStrip(contract)) {
-    x0 = Math.min(x0, cell.lx)
-    z0 = Math.min(z0, cell.lz)
-    x1 = Math.max(x1, cell.lx)
-    z1 = Math.max(z1, cell.lz)
-  }
-  return {
-    x0: Math.max(0, x0 - 1),
-    z0: Math.max(0, z0 - 1),
-    x1: Math.min(CHUNK - 1, x1 + 1),
-    z1: Math.min(CHUNK - 1, z1 + 1),
-  }
-}
-
 // One full-span straight trunk gallery on a line that avoids both stair
 // strips, so it never needs to jog through a guard wall.
 function carveTrunk(net, seed, ctx, heading, blockedLines) {
@@ -636,7 +617,7 @@ function buildPlan(ctx) {
       }
       net.blocked.delete(posKey(contract.exit.lx, contract.exit.lz))
     }
-    pockets.push({ contract, kind, rect: stripRect(contract) })
+    pockets.push({ contract, kind, rect: stairHaloRect(contract) })
   }
   reserveStrip(stairs.up, SEWER_MODULE_MANHOLE_UP)
   reserveStrip(stairs.down, SEWER_MODULE_MANHOLE_DOWN)

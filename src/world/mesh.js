@@ -5,21 +5,16 @@ import {
   CHUNK,
   CHUNK_WORLD,
   WALL_H,
+  WALL_BEVEL,
   LAYER_H,
   STAIR_STEPS,
-  THICK,
   COL_HALF,
   MONUMENTAL_COL_HALF,
-  FRAME_DEPTH,
   DOOR_LEAF_FRACTION,
   DOOR_DARK_CHANCE,
   DOOR_DARK_TINT,
   DOOR_TINT_VAR,
-  WINDOW_SILL_H,
-  WINDOW_HEAD_Y,
   WINDOW_SALT,
-  BRIDGE_GUARD_H,
-  BRIDGE_GUARD_CAP_H,
   BRIDGE_BEAM_H,
   BRIDGE_BEAM_W,
   vIdx,
@@ -27,6 +22,7 @@ import {
   cIdx,
 } from './constants.js'
 import { collectDoorways } from './doors.js'
+import { collectWallShell, mergeCollinearBoxes } from './objects/wallShell.js'
 import {
   pushDoorFrame,
   pushDoorLeaves,
@@ -37,13 +33,7 @@ import {
 import { hash2i } from './core/hash.js'
 import { lampPanelTint } from './lampCharacter.js'
 import { STAIR_E, STAIR_S, STAIR_W } from './structures/slab.js'
-import {
-  COLUMN_FURNITURE,
-  COLUMN_MONUMENTAL,
-  WALL_PLAIN,
-  WALL_RAIL,
-  WALL_WINDOW,
-} from './mapTypes.js'
+import { COLUMN_FURNITURE, COLUMN_MONUMENTAL, WALL_WINDOW } from './mapTypes.js'
 
 const _m = new THREE.Matrix4()
 const _q = new THREE.Quaternion()
@@ -139,24 +129,34 @@ export function buildFurniturePart(data, geom, materials, models = null) {
 }
 
 // The procedural fallback: multi-part models (objects/furniture/) batched
-// into one instanced unit-box draw with per-part tints.
+// into one instanced bevelled-box draw with per-part tints.
 function pushBoxBatch(node, geom, materials, records) {
   const parts = []
   for (const f of records) pushFurnitureModel(parts, f)
-  if (!parts.length) return
-  const batch = new THREE.InstancedMesh(geom.wallUnit, materials.furniture, parts.length)
-  for (let i = 0; i < parts.length; i++) {
-    const it = parts[i]
+  const batch = boxBatch(geom.detailUnit, materials.furniture, parts, partTint)
+  if (batch) node.add(batch)
+}
+
+const partTint = (it, out) => out.setRGB(it.tint[0], it.tint[1], it.tint[2])
+
+// One InstancedMesh of unit boxes from {px,py,pz, sx,sy,sz} descriptors
+// (axis-aligned, chunk-local), optionally coloured per instance. Every
+// architecture batch in this file goes through here; null when empty.
+function boxBatch(geometry, material, list, colorOf = null) {
+  if (!list.length) return null
+  const batch = new THREE.InstancedMesh(geometry, material, list.length)
+  for (let i = 0; i < list.length; i++) {
+    const it = list[i]
     _p.set(it.px, it.py, it.pz)
     _s.set(it.sx, it.sy, it.sz)
     _m.compose(_p, _q, _s)
     batch.setMatrixAt(i, _m)
-    batch.setColorAt(i, _c.setRGB(it.tint[0], it.tint[1], it.tint[2]))
+    if (colorOf) batch.setColorAt(i, colorOf(it, _c))
   }
   batch.instanceMatrix.needsUpdate = true
-  batch.instanceColor.needsUpdate = true
-  batch.computeBoundingSphere()
-  node.add(batch)
+  if (colorOf) batch.instanceColor.needsUpdate = true
+  batch.computeBoundingSphere() // else the whole batch frustum-culls wrongly
+  return batch
 }
 
 // The furniture node owns only its InstancedMesh GPU buffers: geometries and
@@ -176,12 +176,16 @@ export function disposeFurniturePart(node) {
 // (created once); only per-chunk InstancedMesh GPU buffers — and, for stair
 // chunks, the hole-punched slab geometries — are owned here.
 //
-// Walls are emitted as one instanced unit-box per cell-edge (each <= CELL long,
-// so wallpaper texel density matches a full cell), plus columns and stair
-// steps — all in a single InstancedMesh / draw call. A chunk OWNS its West
-// (lx=0) and North (lz=0) border lines and all interior lines; the East/South
-// borders are drawn by the neighbours as their line 0, so every shared wall is
-// drawn exactly once. Vertically (v8) a chunk owns its floor top face and its
+// Walls are emitted as merged runs of collinear cell edges resolved at every
+// vertex (objects/wallShell.js), plus columns and bridge beams — all in a
+// single InstancedMesh / draw call of the bevelled wall cube (render/bevel.js);
+// the wallpaper samples world-space UVs, so a run of any length keeps one
+// texel density. A stair flight adds one wallpaper draw of fully bevelled
+// treads. A chunk OWNS its West (lx=0) and North (lz=0) border lines and all
+// interior lines; the East/South borders are drawn by the neighbours as their
+// line 0, so every shared wall is drawn once (a run crossing a seam overlaps
+// the neighbour's by THICK, coplanar and invisible). Vertically (v8) a chunk
+// owns its floor top face and its
 // ceiling underside; the SLAB_T gap between one chunk's ceiling and the next
 // layer's floor is only ever seen through stair holes, whose rim skirts are
 // owned by the LOWER chunk (the slab owner, matching the contract convention).
@@ -202,36 +206,26 @@ function pushQuad(arr, n, uv, c0, c1, c2, c3, u0, u1, u2, u3, nx, ny, nz) {
   }
 }
 
-// Hole-punched horizontal slab face: row-span merged quads over the cell grid
-// skipping `holes` ("lx,lz" strings), at local height y, facing up or down.
-// UVs are 1 per cell, matching scaleUV(plane, CHUNK) on the shared geometry.
-function buildSlabFace(holes, y, faceUp) {
+// Hole-punched floor (the slab's top face, local y 0): row-span merged quads
+// over the cell grid skipping `holes` ("lx,lz" strings). UVs are 1 per cell,
+// matching scaleUV(plane, CHUNK) on the shared geometry.
+function buildFloorFace(holes) {
   const pos = []
   const nrm = []
   const uv = []
-  const emit = (x0, z, x1) => {
-    const ax = x0 * CELL
-    const bx = (x1 + 1) * CELL
-    const az = z * CELL
-    const bz = (z + 1) * CELL
-    const A = [ax, y, az]
-    const B = [bx, y, az]
-    const C = [bx, y, bz]
-    const D = [ax, y, bz]
-    const uA = [x0, z]
-    const uB = [x1 + 1, z]
-    const uC = [x1 + 1, z + 1]
-    const uD = [x0, z + 1]
-    if (faceUp) pushQuad(pos, nrm, uv, A, D, C, B, uA, uD, uC, uB, 0, 1, 0)
-    else pushQuad(pos, nrm, uv, A, B, C, D, uA, uB, uC, uD, 0, -1, 0)
-  }
   for (let z = 0; z < CHUNK; z++) {
     let start = -1
     for (let x = 0; x <= CHUNK; x++) {
       const solid = x < CHUNK && !holes.has(`${x},${z}`)
       if (solid && start < 0) start = x
       if (!solid && start >= 0) {
-        emit(start, z, x - 1)
+        const [ax, bx, az, bz] = [start * CELL, x * CELL, z * CELL, (z + 1) * CELL]
+        pushQuad(
+          pos, nrm, uv,
+          [ax, 0, az], [ax, 0, bz], [bx, 0, bz], [bx, 0, az],
+          [start, z], [start, z + 1], [x, z + 1], [x, z],
+          0, 1, 0
+        )
         start = -1
       }
     }
@@ -243,48 +237,165 @@ function buildSlabFace(holes, y, faceUp) {
   return geo
 }
 
-// Inward-facing skirts around arbitrary ceiling-hole masks, spanning the slab
-// thickness (local y WALL_H..LAYER_H). Emitting each solid/void boundary edge
-// independently supports irregular masks and the two lobes split by a retained
-// bridge deck; the old bounding-rectangle rim incorrectly sealed such shapes.
-function appendHoleRims(geo, holes, outsideHole = null) {
-  const pos = Array.from(geo.attributes.position.array)
-  const nrm = Array.from(geo.attributes.normal.array)
-  const uv = Array.from(geo.attributes.uv.array)
+// Smooth-shaded quad: corners in either winding, flipped to face along the
+// mean of the per-corner normals.
+const _e1 = new THREE.Vector3()
+const _e2 = new THREE.Vector3()
+function pushSmoothQuad(pos, nrm, uv, corners, normals, uvs) {
+  _e1.set(corners[1][0] - corners[0][0], corners[1][1] - corners[0][1], corners[1][2] - corners[0][2])
+  _e2.set(corners[2][0] - corners[0][0], corners[2][1] - corners[0][1], corners[2][2] - corners[0][2])
+  _e1.cross(_e2)
+  let dot = 0
+  for (const n of normals) dot += _e1.x * n[0] + _e1.y * n[1] + _e1.z * n[2]
+  const order = dot < 0 ? [0, 3, 2, 0, 2, 1] : [0, 1, 2, 0, 2, 3]
+  for (const i of order) {
+    pos.push(corners[i][0], corners[i][1], corners[i][2])
+    nrm.push(normals[i][0], normals[i][1], normals[i][2])
+    uv.push(uvs[i][0], uvs[i][1])
+  }
+}
+
+const NOSING_SEGMENTS = 3
+
+// Ceiling underside of a punched slab plus the inward skirts that close each
+// hole over the slab thickness (local y WALL_H..LAYER_H). Each solid/void
+// boundary edge is emitted independently, so irregular masks and the two
+// lobes split by a retained bridge deck stay open (a bounding-rectangle rim
+// would seal them).
+//
+// The skirt's lower edge — the slab nosing seen looking up a stairwell or an
+// atrium — rounds at WALL_BEVEL like the wall shell: a quarter-round strip
+// replaces the corner and the underside steps back by the radius along every
+// hole-facing side. Strip ends mitre where the boundary turns: round a solid
+// corner (convex) they draw back, into a notch (reflex) they run on over the
+// corner square the underside gives up, so the two strips meeting at a
+// corner share one diagonal end profile and the slab stays closed. Above the
+// strip the skirt is the plain vertical face it always was.
+export function buildCeilingSlab(holes, outsideHole = null) {
+  const r = WALL_BEVEL
   const y0 = WALL_H
   const y1 = LAYER_H
-  const v = (u, y) => [u / CELL, y / CELL]
+  const pos = []
+  const nrm = []
+  const uv = []
   const has = (x, z) => {
-    if (x >= 0 && x < CHUNK && z >= 0 && z < CHUNK) {
-      return holes.has(`${x},${z}`)
-    }
+    if (x >= 0 && x < CHUNK && z >= 0 && z < CHUNK) return holes.has(`${x},${z}`)
     return outsideHole ? outsideHole(x, z) : false
   }
+  const under = (x0, z0, x1, z1) =>
+    pushQuad(
+      pos, nrm, uv,
+      [x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1],
+      [x0 / CELL, z0 / CELL], [x1 / CELL, z0 / CELL], [x1 / CELL, z1 / CELL], [x0 / CELL, z1 / CELL],
+      0, -1, 0
+    )
+
+  // Underside. A solid cell touching a hole (by a side or a corner) is cut
+  // on a 3x3 grid at the radius, dropping the bands under hole-facing sides
+  // and the corner square of a notch; every other cell merges into row spans.
+  const touchesHole = (x, z) => {
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) if ((dx || dz) && has(x + dx, z + dz)) return true
+    }
+    return false
+  }
+  const cutCell = (x, z) => {
+    const w = has(x - 1, z)
+    const e = has(x + 1, z)
+    const n = has(x, z - 1)
+    const s = has(x, z + 1)
+    const notch = (dx, dz) => has(x + dx, z + dz) && !has(x + dx, z) && !has(x, z + dz)
+    const xs = [x * CELL, x * CELL + r, (x + 1) * CELL - r, (x + 1) * CELL]
+    const zs = [z * CELL, z * CELL + r, (z + 1) * CELL - r, (z + 1) * CELL]
+    for (let j = 0; j < 3; j++) {
+      if ((j === 0 && n) || (j === 2 && s)) continue
+      let i0 = -1
+      for (let i = 0; i <= 3; i++) {
+        const keep =
+          i < 3 &&
+          !((i === 0 && w) || (i === 2 && e)) &&
+          !(i !== 1 && j !== 1 && notch(i - 1, j - 1))
+        if (keep && i0 < 0) i0 = i
+        if (!keep && i0 >= 0) {
+          under(xs[i0], zs[j], xs[i], zs[j + 1])
+          i0 = -1
+        }
+      }
+    }
+  }
+  for (let z = 0; z < CHUNK; z++) {
+    let start = -1
+    for (let x = 0; x <= CHUNK; x++) {
+      const plain = x < CHUNK && !has(x, z) && !touchesHole(x, z)
+      if (plain && start < 0) start = x
+      if (!plain && start >= 0) {
+        under(start * CELL, z * CELL, x * CELL, (z + 1) * CELL)
+        start = -1
+      }
+      if (x < CHUNK && !plain && !has(x, z)) cutCell(x, z)
+    }
+  }
+
+  // Nosing profile: inset into the solid side and height above the
+  // underside, from tangent to the underside (j = 0) to tangent to the
+  // skirt (j = NOSING_SEGMENTS).
+  const profile = []
+  for (let j = 0; j <= NOSING_SEGMENTS; j++) {
+    const t = (j / NOSING_SEGMENTS) * (Math.PI / 2)
+    profile.push({ inset: r * (1 - Math.sin(t)), y: y0 + r * (1 - Math.cos(t)), sin: Math.sin(t), cos: Math.cos(t) })
+  }
+  // End treatment where the boundary meets the next cell along it: +1 draw
+  // back (the solid turns a convex corner), -1 run on (a notch), 0 straight.
+  const endMode = (sx, sz, hx, hz) => (has(sx, sz) ? 1 : has(hx, hz) ? 0 : -1)
+
   for (let z = 0; z < CHUNK; z++) {
     for (let x = 0; x < CHUNK; x++) {
       if (!has(x, z)) continue
-      const wx0 = x * CELL
-      const wx1 = (x + 1) * CELL
-      const wz0 = z * CELL
-      const wz1 = (z + 1) * CELL
-      // West face (+x into the hole), East (-x), North (+z), South (-z).
-      if (!has(x - 1, z)) {
-        pushQuad(pos, nrm, uv, [wx0, y0, wz1], [wx0, y0, wz0], [wx0, y1, wz0], [wx0, y1, wz1], v(wz1, y0), v(wz0, y0), v(wz0, y1), v(wz1, y1), 1, 0, 0)
-      }
-      if (!has(x + 1, z)) {
-        pushQuad(pos, nrm, uv, [wx1, y0, wz0], [wx1, y0, wz1], [wx1, y1, wz1], [wx1, y1, wz0], v(wz0, y0), v(wz1, y0), v(wz1, y1), v(wz0, y1), -1, 0, 0)
-      }
-      if (!has(x, z - 1)) {
-        pushQuad(pos, nrm, uv, [wx0, y0, wz0], [wx1, y0, wz0], [wx1, y1, wz0], [wx0, y1, wz0], v(wx0, y0), v(wx1, y0), v(wx1, y1), v(wx0, y1), 0, 0, 1)
-      }
-      if (!has(x, z + 1)) {
-        pushQuad(pos, nrm, uv, [wx1, y0, wz1], [wx0, y0, wz1], [wx0, y1, wz1], [wx1, y1, wz1], v(wx1, y0), v(wx0, y0), v(wx0, y1), v(wx1, y1), 0, 0, -1)
+      // [inward x, inward z] points from the hole into the solid neighbour.
+      for (const [ix, iz] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+        if (has(x + ix, z + iz)) continue
+        const tx = iz === 0 ? 0 : 1 // along unit: z for x-facing sides, x otherwise
+        const tz = 1 - tx
+        const line = ix ? (x + (ix > 0 ? 1 : 0)) * CELL : (z + (iz > 0 ? 1 : 0)) * CELL
+        const e0 = (tx ? x : z) * CELL
+        const e1 = e0 + CELL
+        const m0 = endMode(x + ix - tx, z + iz - tz, x - tx, z - tz)
+        const m1 = endMode(x + ix + tx, z + iz + tz, x + tx, z + tz)
+        const at = (along, inset, y) =>
+          tx ? [along, y, line + iz * inset] : [line + ix * inset, y, along]
+        const uvAt = (along, y) => [along / CELL, y / CELL]
+        for (let j = 0; j < NOSING_SEGMENTS; j++) {
+          const p = profile[j]
+          const q = profile[j + 1]
+          const a0p = e0 + m0 * p.inset
+          const a1p = e1 - m1 * p.inset
+          const a0q = e0 + m0 * q.inset
+          const a1q = e1 - m1 * q.inset
+          const np = [-ix * p.sin, -p.cos, -iz * p.sin]
+          const nq = [-ix * q.sin, -q.cos, -iz * q.sin]
+          pushSmoothQuad(
+            pos, nrm, uv,
+            [at(a0p, p.inset, p.y), at(a1p, p.inset, p.y), at(a1q, q.inset, q.y), at(a0q, q.inset, q.y)],
+            [np, np, nq, nq],
+            [uvAt(a0p, p.y), uvAt(a1p, p.y), uvAt(a1q, q.y), uvAt(a0q, q.y)]
+          )
+        }
+        const skirt = [-ix, 0, -iz]
+        const ys = y0 + r
+        pushSmoothQuad(
+          pos, nrm, uv,
+          [at(e0, 0, ys), at(e1, 0, ys), at(e1, 0, y1), at(e0, 0, y1)],
+          [skirt, skirt, skirt, skirt],
+          [uvAt(e0, ys), uvAt(e1, ys), uvAt(e1, y1), uvAt(e0, y1)]
+        )
       }
     }
   }
+  const geo = new THREE.BufferGeometry()
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
   geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3))
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2))
+  return geo
 }
 
 function collectHoles(data, ceiling) {
@@ -302,7 +413,7 @@ function collectHoles(data, ceiling) {
 // A tall void can continue through an owned chunk seam. Chunk-local hole sets
 // alone would treat the neighbour as solid and erect a false vertical fascia
 // across the shaft/bridge. The canonical slab slice has enough global geometry
-// to answer the one-cell halo queried by appendHoleRims without generating the
+// to answer the one-cell halo queried by buildCeilingSlab without generating the
 // neighbouring chunk.
 function multilevelHoleOutsideChunk(data, lx, lz) {
   const room = data.structureUp
@@ -337,7 +448,7 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz, models = nul
     floor = new THREE.Mesh(geom.floor, materials.carpet)
     floor.position.set(CHUNK_WORLD / 2, 0, CHUNK_WORLD / 2)
   } else {
-    const g = buildSlabFace(floorHoles, 0, true)
+    const g = buildFloorFace(floorHoles)
     ownedGeos.push(g)
     floor = new THREE.Mesh(g, materials.carpet)
   }
@@ -349,76 +460,38 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz, models = nul
     ceil = new THREE.Mesh(geom.ceiling, materials.ceiling)
     ceil.position.set(CHUNK_WORLD / 2, WALL_H, CHUNK_WORLD / 2)
   } else {
-    const g = buildSlabFace(ceilingHoles, WALL_H, false)
-    appendHoleRims(
-      g,
-      ceilingHoles,
-      (x, z) => multilevelHoleOutsideChunk(data, x, z)
-    ) // slab-owner renders only real global solid/void boundaries
+    // The slab owner renders only real global solid/void boundaries.
+    const g = buildCeilingSlab(ceilingHoles, (x, z) => multilevelHoleOutsideChunk(data, x, z))
     ownedGeos.push(g)
     ceil = new THREE.Mesh(g, materials.ceiling)
   }
   group.add(ceil)
 
-  // --- Collect wall + column + stair-step instance transforms ---
-  const inst = [] // [{px,py,pz, sx,sy,sz}]
-  const featureFrameInst = []
+  // --- Wall shell + columns + stair flight + beams: one wallpaper batch ---
+  // The shell (objects/wallShell.js) turns the edge bytes into merged runs,
+  // window/rail pieces with joints and corner posts, so bevelled walls read
+  // as continuous planes with rounded corners and ends. Rail caps come back
+  // with it (trim batch); window joinery stays per window edge.
+  const shell = collectWallShell(data)
+  const inst = shell.walls // [{px,py,pz, sx,sy,sz}]
+  const featureFrameInst = shell.caps
+  for (const axis of ['v', 'h']) {
+    for (let line = 0; line < CHUNK; line++) {
+      for (let cell = 0; cell < CHUNK; cell++) {
+        const i = axis === 'v' ? vIdx(line, cell) : hIdx(cell, line)
+        const wall = axis === 'v' ? data.wallV[i] : data.wallH[i]
+        const feature = axis === 'v' ? data.wallFeatureV[i] : data.wallFeatureH[i]
+        if (wall !== 1 || feature !== WALL_WINDOW) continue
+        // Casings, stool and glazing from the shared joinery builder, with a
+        // deterministic per-window tone selecting cross / single-bar /
+        // venetian-blind glazing.
+        const gx = data.cx * CHUNK + (axis === 'v' ? line : cell)
+        const gz = data.cz * CHUNK + (axis === 'v' ? cell : line)
+        pushWindowTrim(featureFrameInst, axis, line, cell, hash2i(WINDOW_SALT, gx, gz) / 4294967296)
+      }
+    }
+  }
   const wallY = WALL_H / 2
-  const addFeatureWall = (axis, line, cell, feature) => {
-    const vertical = axis === 'v'
-    const px = vertical ? line * CELL : (cell + 0.5) * CELL
-    const pz = vertical ? (cell + 0.5) * CELL : line * CELL
-    const sx = vertical ? THICK : CELL
-    const sz = vertical ? CELL : THICK
-    if (feature === WALL_WINDOW) {
-      // Collision-solid sill + header (wallpaper); the joinery (casings, stool,
-      // glazing) comes from the shared objects/joinery builder, with a
-      // deterministic per-window tone selecting cross / single-bar /
-      // venetian-blind glazing.
-      inst.push({ px, py: WINDOW_SILL_H / 2, pz, sx, sy: WINDOW_SILL_H, sz })
-      inst.push({
-        px,
-        py: (WINDOW_HEAD_Y + WALL_H) / 2,
-        pz,
-        sx,
-        sy: WALL_H - WINDOW_HEAD_Y,
-        sz,
-      })
-      const gx = data.cx * CHUNK + (vertical ? line : cell)
-      const gz = data.cz * CHUNK + (vertical ? cell : line)
-      pushWindowTrim(featureFrameInst, axis, line, cell, hash2i(WINDOW_SALT, gx, gz) / 4294967296)
-      return
-    }
-    if (feature === WALL_RAIL) {
-      inst.push({ px, py: BRIDGE_GUARD_H / 2, pz, sx, sy: BRIDGE_GUARD_H, sz })
-      featureFrameInst.push({
-        px,
-        py: BRIDGE_GUARD_H,
-        pz,
-        sx: vertical ? FRAME_DEPTH : CELL,
-        sy: BRIDGE_GUARD_CAP_H,
-        sz: vertical ? CELL : FRAME_DEPTH,
-      })
-      return
-    }
-    inst.push({ px, py: wallY, pz, sx, sy: WALL_H, sz })
-  }
-  // Vertical wall lines (lx in [0..CHUNK-1]): slab at world x = lx*CELL,
-  // spanning the depth of cell row z.
-  for (let z = 0; z < CHUNK; z++) {
-    for (let lx = 0; lx < CHUNK; lx++) {
-      if (data.wallV[vIdx(lx, z)] !== 1) continue
-      addFeatureWall('v', lx, z, data.wallFeatureV[vIdx(lx, z)] ?? WALL_PLAIN)
-    }
-  }
-  // Horizontal wall lines (lz in [0..CHUNK-1]): slab at world z = lz*CELL,
-  // spanning the width of cell column x.
-  for (let lz = 0; lz < CHUNK; lz++) {
-    for (let x = 0; x < CHUNK; x++) {
-      if (data.wallH[hIdx(x, lz)] !== 1) continue
-      addFeatureWall('h', lz, x, data.wallFeatureH[hIdx(x, lz)] ?? WALL_PLAIN)
-    }
-  }
   // Freestanding columns at cell centres. Furniture cells are built separately
   // from their records (precise pieces, not full-height shafts).
   for (let z = 0; z < CHUNK; z++) {
@@ -436,10 +509,16 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz, models = nul
       })
     }
   }
-  // Stair steps (up-stair only — the lower chunk owns the whole flight).
-  // STAIR_STEPS solid risers over the two run cells; collision is the analytic
-  // ramp (player/ground.js), these are render detail. The top step's top face
-  // sits flush with the upper layer's floor at LAYER_H.
+  // Stair flight (up-stair only — the lower chunk owns the whole flight).
+  // STAIR_STEPS treads over the two run cells; collision is the analytic
+  // ramp (player/ground.js), these are render detail. Step i is a block
+  // standing on the floor from its nosing to the head of the flight: the
+  // union is the stepped solid, every riser/tread joint is a concave corner
+  // on a flat face, and only the nosings meet the air — so the fully
+  // bevelled stair cube rounds exactly those into bullnoses (the floor
+  // contact and the top tread, flush with the next storey, stay square).
+  // The top step sits flush with the upper floor at LAYER_H.
+  const stepInst = []
   if (data.stairUp) {
     const s = data.stairUp
     const horiz = s.dir === STAIR_E || s.dir === STAIR_W
@@ -450,17 +529,20 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz, models = nul
     const start = horiz
       ? Math.max(s.landing.lx, s.run[0].lx) * CELL
       : Math.max(s.landing.lz, s.run[0].lz) * CELL
+    const head = start + sign * STAIR_STEPS * tread
     const cross = horiz ? (s.landing.lz + 0.5) * CELL : (s.landing.lx + 0.5) * CELL
     for (let i = 0; i < STAIR_STEPS; i++) {
-      const along = start + sign * (i + 0.5) * tread
+      const nosing = start + sign * i * tread
+      const along = (nosing + head) / 2
+      const len = Math.abs(head - nosing)
       const h = (i + 1) * rise
-      inst.push({
+      stepInst.push({
         px: horiz ? along : cross,
         py: h / 2,
         pz: horiz ? cross : along,
-        sx: horiz ? tread : CELL,
+        sx: horiz ? len : CELL,
         sy: h,
-        sz: horiz ? CELL : tread,
+        sz: horiz ? CELL : len,
       })
     }
   }
@@ -475,7 +557,8 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz, models = nul
   // Lattice decks carry per-edge bridgeSegments instead of one bridge line:
   // give every deck cell a pair of under-slung beams so the catwalk reads as
   // a supported steel span. The arterial spine gets visibly heavier steel
-  // than minor bridges — the route hierarchy made legible.
+  // than minor bridges — the route hierarchy made legible. (Collinear cell
+  // beams merge into one member below.)
   if (data.structureUp?.bridgeSegments?.length) {
     const chunkGx = data.cx * CHUNK
     const chunkGz = data.cz * CHUNK
@@ -532,20 +615,13 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz, models = nul
     }
   }
 
-  let walls = null
-  if (inst.length) {
-    walls = new THREE.InstancedMesh(geom.wallUnit, materials.wallpaper, inst.length)
-    for (let i = 0; i < inst.length; i++) {
-      const it = inst[i]
-      _p.set(it.px, it.py, it.pz)
-      _s.set(it.sx, it.sy, it.sz)
-      _m.compose(_p, _q, _s)
-      walls.setMatrixAt(i, _m)
-    }
-    walls.instanceMatrix.needsUpdate = true
-    walls.computeBoundingSphere() // else the whole batch frustum-culls wrongly
-    group.add(walls)
-  }
+  // Collinear boxes of one cross-section (run + post, cell beams, stools of
+  // neighbouring windows, wainscot bands) become single members: no seam for
+  // a bevel to round, and fewer instances.
+  const walls = boxBatch(geom.wallUnit, materials.wallpaper, mergeCollinearBoxes(inst))
+  if (walls) group.add(walls)
+  const stairs = boxBatch(geom.stairUnit, materials.wallpaper, stepInst)
+  if (stairs) group.add(stairs)
 
   // --- Decorative door frames + dressed open leaves (from explicit passage metadata) ---
   // Purely visual: a plinth-and-cap casing around every single-cell doorway,
@@ -555,7 +631,7 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz, models = nul
   // so it adds no geometry primitive and never blocks the opening
   // (collision/LOS read the edge bytes). Leaves carry the doorway's `tone`
   // seed for per-door tinting.
-  const frameInst = featureFrameInst.slice() // {px,py,pz, sx,sy,sz}
+  const frameInst = featureFrameInst // {px,py,pz, sx,sy,sz}
   const leafInst = [] // same, plus role (0 paint / 1 knob) + tone
   for (const d of collectDoorways(data, DOOR_LEAF_FRACTION)) {
     pushDoorFrame(frameInst, d.axis, d.line, d.cell)
@@ -570,75 +646,19 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz, models = nul
   // Trim (baseboards, crowns, column bases/caps) shares the frame batch and
   // its uniform trim paint; tinted props and emissive wayfinding signs get
   // their own instanced batches with per-instance colours. All purely visual
-  // and collision-free by construction (see props.js header).
+  // and collision-free by construction (see props.js header). Every detail
+  // batch draws the all-edges bevelled cube.
   const dressing = collectInteriorDressing(data)
   for (const t of dressing.trim) frameInst.push(t)
 
-  let frames = null
-  if (frameInst.length) {
-    frames = new THREE.InstancedMesh(geom.wallUnit, materials.doorFrame, frameInst.length)
-    for (let i = 0; i < frameInst.length; i++) {
-      const it = frameInst[i]
-      _p.set(it.px, it.py, it.pz)
-      _s.set(it.sx, it.sy, it.sz)
-      _m.compose(_p, _q, _s)
-      frames.setMatrixAt(i, _m)
-    }
-    frames.instanceMatrix.needsUpdate = true
-    frames.computeBoundingSphere()
-    group.add(frames)
-  }
-
-  let leaves = null
-  if (leafInst.length) {
-    leaves = new THREE.InstancedMesh(geom.wallUnit, materials.doorLeaf, leafInst.length)
-    for (let i = 0; i < leafInst.length; i++) {
-      const it = leafInst[i]
-      _p.set(it.px, it.py, it.pz)
-      _s.set(it.sx, it.sy, it.sz)
-      _m.compose(_p, _q, _s)
-      leaves.setMatrixAt(i, _m)
-      leaves.setColorAt(i, leafTint(it, _c))
-    }
-    leaves.instanceMatrix.needsUpdate = true
-    leaves.instanceColor.needsUpdate = true
-    leaves.computeBoundingSphere()
-    group.add(leaves)
-  }
-
-  let props = null
-  if (dressing.props.length) {
-    props = new THREE.InstancedMesh(geom.wallUnit, materials.prop, dressing.props.length)
-    for (let i = 0; i < dressing.props.length; i++) {
-      const it = dressing.props[i]
-      _p.set(it.px, it.py, it.pz)
-      _s.set(it.sx, it.sy, it.sz)
-      _m.compose(_p, _q, _s)
-      props.setMatrixAt(i, _m)
-      props.setColorAt(i, _c.setRGB(it.tint[0], it.tint[1], it.tint[2]))
-    }
-    props.instanceMatrix.needsUpdate = true
-    props.instanceColor.needsUpdate = true
-    props.computeBoundingSphere()
-    group.add(props)
-  }
-
-  let signs = null
-  if (dressing.signs.length) {
-    signs = new THREE.InstancedMesh(geom.wallUnit, materials.signGlow, dressing.signs.length)
-    for (let i = 0; i < dressing.signs.length; i++) {
-      const it = dressing.signs[i]
-      _p.set(it.px, it.py, it.pz)
-      _s.set(it.sx, it.sy, it.sz)
-      _m.compose(_p, _q, _s)
-      signs.setMatrixAt(i, _m)
-      signs.setColorAt(i, _c.setRGB(it.tint[0], it.tint[1], it.tint[2]))
-    }
-    signs.instanceMatrix.needsUpdate = true
-    signs.instanceColor.needsUpdate = true
-    signs.computeBoundingSphere()
-    group.add(signs)
-  }
+  const frames = boxBatch(geom.detailUnit, materials.doorFrame, mergeCollinearBoxes(frameInst))
+  if (frames) group.add(frames)
+  const leaves = boxBatch(geom.detailUnit, materials.doorLeaf, leafInst, leafTint)
+  if (leaves) group.add(leaves)
+  const props = boxBatch(geom.detailUnit, materials.prop, mergeCollinearBoxes(dressing.props), partTint)
+  if (props) group.add(props)
+  const signs = boxBatch(geom.detailUnit, materials.signGlow, dressing.signs, partTint)
+  if (signs) group.add(signs)
 
   // --- Furniture (collision-real pieces from ChunkData.furniture) ---
   // buildFurniturePart picks the render path: instanced Blender GLBs once the
@@ -713,6 +733,7 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz, models = nul
 
   const dispose = () => {
     walls?.dispose()
+    stairs?.dispose()
     frames?.dispose()
     leaves?.dispose()
     props?.dispose()
@@ -731,6 +752,7 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz, models = nul
     floor,
     ceiling: ceil,
     walls,
+    stairs,
     frames,
     leaves,
     props,

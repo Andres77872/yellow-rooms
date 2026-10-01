@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { FLASH_COS_OUTER, FLASH_RANGE } from '../world/constants.js'
 import { FLASH_HAND_OFFSET, FLASH_NEAR } from './flashFrame.js'
+import { bevelDepthMaterial } from './bevel.js'
 
 export { FLASH_HAND_OFFSET, FLASH_NEAR }
 
@@ -35,6 +36,10 @@ export { FLASH_HAND_OFFSET, FLASH_NEAR }
 //
 // The hand offset (flashFrame.js) stays shorter than the player's collision
 // clearance, so the emitter can never end up behind a wall.
+//
+// The depth material resolves the bevelled unit boxes (bevel.js) exactly as
+// the G-buffer does: a caster with sharp corners would enclose the rounded
+// edge the camera sees and darken it.
 
 const BIAS = new THREE.Matrix4().set(
   0.5, 0, 0, 0.5,
@@ -57,7 +62,7 @@ export class FlashlightShadow {
     // outside the map inside the beam.
     const fov = THREE.MathUtils.radToDeg(Math.acos(FLASH_COS_OUTER)) * 2 + 8
     this.camera = new THREE.PerspectiveCamera(fov, 1, FLASH_NEAR, FLASH_RANGE)
-    this.material = new THREE.MeshDepthMaterial({ depthPacking: THREE.BasicDepthPacking })
+    this.material = bevelDepthMaterial({ depthPacking: THREE.BasicDepthPacking })
     this.material.colorWrite = false
     this.posView = new THREE.Vector3(...FLASH_HAND_OFFSET)
     this.dirView = new THREE.Vector3(0, 0, -1)

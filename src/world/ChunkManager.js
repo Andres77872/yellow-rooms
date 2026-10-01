@@ -30,6 +30,7 @@ import { DEFAULT_WORLD_CONFIG } from './config.js'
 import {
   DEFAULT_RENDER_DETAIL_PROFILE,
   normalizeRenderDetailProfile,
+  bevelDetailForChunk,
   renderDetailForChunk,
 } from './renderDetail.js'
 import { slabContract } from './structures/slab.js'
@@ -345,7 +346,12 @@ export class ChunkManager {
       chunk.cz,
       this._renderDetailProfile
     )
-    return chunk.setRenderDetail?.(detail) ?? false
+    const bevel = chunk.setBevelDetail?.(
+      bevelDetailForChunk(this._detailPcx, this._detailPcz, chunk.cx, chunk.cz)
+    ) ?? false
+    // A bevel swap changes caster geometry: invalidate cached torch shadows.
+    if (bevel) this.meshRevision++
+    return (chunk.setRenderDetail?.(detail) ?? false) || bevel
   }
 
   _syncRenderDetail(pcx, pcz) {

@@ -1,9 +1,66 @@
 # World Generation Architecture
 
-Updated on 2026-09-26 for world-gen version 27. This documents the current
+Updated on 2026-10-01 for world-gen version 28. This documents the current
 module layout and runtime performance model; `design-review.md`,
 `liminal-horror-design.md`, and `map-generation-research.md` preserve the
 versioned design history.
+
+## v28 — whole plan outlines
+
+**The problem.** With the walls rounded (`lighting-pipeline.md`, "Rounded
+edges"), every free wall end reads as a deliberate blade. A layout census
+(12 seeds, 6×6 chunk patches, cy 0 and 1, inner 4×4 analysed) found that
+most exposed ends were not planned. They were left behind by late carves:
+
+| exposed ends per chunk | office | hotel | sewer | tower | lattice |
+|---|---|---|---|---|---|
+| v27 | 3.64 | 5.37 | 0.74 | 2.24 | 1.65 |
+| v28 | 1.12 | 2.39 | 0.20 | 1.31 | 1.18 |
+
+The v28 row comes from 6 seeds. An exposed end has no door lintel, stair
+guard or framed mouth.
+
+**The fixes.**
+- **Stair halos open only their interior**
+  (`ChunkData.carveRect(..., { ring: false })`, `structures/stairStamp.js`).
+  - Office plans already reserve and route the halo rect. Sewer walls it as
+    a pocket.
+  - Opening the halo's outer ring as well cut the bordering side of every
+    neighbouring room down to dangling ends. That caused about 62% of office
+    exposed ends.
+  - In sewer it also exposed the rock mass. Unwalled rock faces dropped from
+    18.7 to 1.5 per chunk, and every remaining one is in a chunk that also
+    holds a catalog structure (1,024 chunks measured).
+  - Connectivity is unaffected. The strip cells were reachable before the
+    carve, so the ring edges they were reached through are still open, and
+    any path across the strip re-routes through the opened halo band.
+  - The halo rect is now one helper, `stairHaloRect` in `structures/slab.js`.
+    It was computed three times (stamp, office plan, sewer).
+- **Paired doors stay doors** (`zones/officePlan.js carveConnection`).
+  - Before, an opening next to an existing one always merged with it into a
+    wide mouth. When a party wall met the shared vertex, that left the party
+    wall ending as a bare blade in a two-cell gap (56% of hotel exposed
+    ends).
+  - Now the two openings stay two framed doors, as long as each keeps a wall
+    of its own line beside it. A third door in a row still merges.
+- **Room-shape cuts are at least 2×2** (`rooms/shapes.js`). Corner exchanges
+  no longer leave one-cell jogs or one-cell-wide arms. Office S-jogs dropped
+  from 1.67 to 1.38 per chunk.
+
+**Evidence.**
+- `stairs.test.js` floods a 12×12×5 patch as one graph. It now starts from
+  the walkable cell nearest the hub, because furniture can stand on the hub
+  itself.
+- `district-plan.test.js` allows side-by-side doors only where a party wall
+  splits them.
+- Every golden, family representative and family corpus digest is re-pinned.
+- `npm run audit:world -- --seeds 200 --radius 2 --wide-seeds 4 --wide-radius 6`
+  passes, with the same verdicts as v27.
+
+**Deferred.** Structure stamps (`multilevelStamp.js`, `catalog/stamp.js`)
+still open their footprint ring. Keeping it closed removes most of the
+remaining Hotel and Tower exposed ends. It also changes how open an atrium is
+to its surroundings, so it is a design decision, not a fix.
 
 ## v27 — one walk per Tower landmark storey
 

@@ -1,12 +1,7 @@
 import {
   CELL,
   CHUNK,
-  WALL_H,
   THICK,
-  BASEBOARD_H,
-  BASEBOARD_PROUD,
-  CROWN_H,
-  CROWN_PROUD,
   THRESHOLD_H,
   THRESHOLD_DEPTH,
   EXIT_SIGN_CHANCE,
@@ -42,7 +37,6 @@ import {
   PASSAGE_DOOR,
   PASSAGE_WIDE,
   WALL_PLAIN,
-  WALL_RAIL,
   WALL_WINDOW,
   CELL_CORRIDOR,
   CELL_LOBBY,
@@ -54,12 +48,13 @@ import {
 } from '../../mapTypes.js'
 import { PROP_TINT, ROLE_BAND, SIGN_TINT } from './palette.js'
 
-// Wall-edge dressing: thresholds and exit signs at openings, baseboards and
-// crown molding on solid walls, radiators under windows, and the wall-mounted
-// prop set (clocks, notice boards, extinguisher cabinets, caution plates).
+// Wall-edge dressing: thresholds and exit signs at openings, radiators under
+// windows, and the wall-mounted prop set (clocks, notice boards, extinguisher
+// cabinets, caution plates). Baseboards and crowns follow whole wall RUNS
+// (objects/wallShell.js collectWallTrim), not single edges.
 const roll = (salt, gx, gz) => hash2i(salt | 0, gx, gz) / 4294967296
 
-export function dressEdge(data, axis, line, cell, trim, props, signs) {
+export function dressEdge(data, axis, line, cell, props, signs) {
   const vertical = axis === 'v'
   const i = vertical ? vIdx(line, cell) : hIdx(cell, line)
   const wall = vertical ? data.wallV[i] : data.wallH[i]
@@ -101,12 +96,6 @@ export function dressEdge(data, axis, line, cell, trim, props, signs) {
       }
     }
     return
-  }
-
-  if (feature !== WALL_RAIL && !holeBefore && !holeAfter) {
-    // Baseboard + crown: one box straddling the wall plane dresses both faces.
-    box(trim, centre, BASEBOARD_H / 2, plane, CELL, BASEBOARD_H, THICK + 2 * BASEBOARD_PROUD)
-    box(trim, centre, WALL_H - CROWN_H / 2, plane, CELL, CROWN_H, THICK + 2 * CROWN_PROUD)
   }
 
   if (feature === WALL_WINDOW) {

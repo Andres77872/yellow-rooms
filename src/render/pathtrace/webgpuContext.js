@@ -1,12 +1,13 @@
 import * as THREE from 'three/webgpu'
 import { requestTracerAdapter } from './webgpuSupport.js'
 
-// One WebGPURenderer for the path tracer (viewer or realtime), with the
-// device limits the tracer needs and every way the device can fail wired to
-// `onLost(message)`. Lazy-loaded with the views, never at boot.
-export async function createTracerRenderer({ onLost }) {
+// One WebGPURenderer for the path tracer (the viewer on the page, or the
+// realtime tracer's worker on an OffscreenCanvas), with the device limits
+// the tracer needs and every way the device can fail wired to
+// `onLost(message)`. Lazy-loaded, never at boot.
+export async function createTracerRenderer({ onLost, canvas = undefined }) {
   const { requiredLimits, info } = await requestTracerAdapter()
-  const renderer = new THREE.WebGPURenderer({ antialias: false, requiredLimits })
+  const renderer = new THREE.WebGPURenderer({ antialias: false, requiredLimits, canvas })
   try {
     await renderer.init()
     // WebGPURenderer silently falls back to WebGL 2; the tracer's compute
@@ -40,6 +41,7 @@ export function disposeTracer(tracer) {
 export function disposeRenderer(renderer) {
   if (!renderer) return
   renderer.onDeviceLost = () => {}
-  renderer.domElement.remove()
+  // An OffscreenCanvas has no place in the DOM.
+  renderer.domElement?.remove?.()
   renderer.dispose()
 }

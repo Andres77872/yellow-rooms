@@ -168,8 +168,3 @@ export function hBorderContract(kx, kz, seed, config, layerContext = null) {
   }
   return reconcile(za, zb, kx, kz, seed, config.border.saltH, config)
 }
-
-export const vBorder = (kx, kz, seed, config, layerContext = null) =>
-  vBorderContract(kx, kz, seed, config, layerContext).walls
-export const hBorder = (kx, kz, seed, config, layerContext = null) =>
-  hBorderContract(kx, kz, seed, config, layerContext).walls

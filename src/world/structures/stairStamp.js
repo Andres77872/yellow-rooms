@@ -1,8 +1,8 @@
-import { cIdx, CHUNK } from '../constants.js'
+import { cIdx } from '../constants.js'
 import { PASSAGE_WALL, PASSAGE_WIDE, CELL_LOBBY, CELL_STAIR, SPACE_ROLE_NONE } from '../mapTypes.js'
 import {
   chunkStairs,
-  stairStrip,
+  stairHaloRect,
   STAIR_DX,
   STAIR_DZ,
   STAIR_E,
@@ -44,13 +44,8 @@ function edgeBetween(a, b, horiz) {
 }
 
 function setEdge(data, e, wall, passage) {
-  if (e.v) {
-    data.setV(e.lx, e.lz, wall, passage)
-    data.protectV(e.lx, e.lz)
-  } else {
-    data.setH(e.lx, e.lz, wall, passage)
-    data.protectH(e.lx, e.lz)
-  }
+  if (e.v) data.setProtectedV(e.lx, e.lz, wall, passage)
+  else data.setProtectedH(e.lx, e.lz, wall, passage)
 }
 
 // Both flank edges of a strip cell (perpendicular to the ascent axis).
@@ -67,23 +62,20 @@ function flankEdges(cell, horiz) {
 }
 
 function carveHalo(data, contract) {
-  const cells = stairStrip(contract)
-  let x0 = CHUNK, z0 = CHUNK, x1 = -1, z1 = -1
-  for (const c of cells) {
-    x0 = Math.min(x0, c.lx)
-    z0 = Math.min(z0, c.lz)
-    x1 = Math.max(x1, c.lx)
-    z1 = Math.max(z1, c.lz)
-  }
-  data.carveRect(x0 - 1, z0 - 1, x1 + 1, z1 + 1)
+  const { x0, z0, x1, z1 } = stairHaloRect(contract)
+  // Open the halo's interior only. The layout already reaches the halo (the
+  // strip cells were part of the connected chunk), so the ring edges it
+  // reached them through stay open and the rest of the ring keeps the walls
+  // of the rooms around it — opening the ring too would cut each neighbour's
+  // bordering side down to dangling blade ends.
+  data.carveRect(x0, z0, x1, z1, { ring: false })
   // Office plans reserve this exact rect before room allocation. Open zones do
   // not have a macro plan, so applying the same semantic label here keeps
   // lighting/debug/gameplay consumers aligned with the carved geometry. Any
   // role byte on a relabelled cell dies with it — the halo is circulation,
   // and SPACE_ROLE_* may only ride CELL_ROOM.
-  for (let z = z0 - 1; z <= z1 + 1; z++) {
-    for (let x = x0 - 1; x <= x1 + 1; x++) {
-      if (x < 0 || x >= CHUNK || z < 0 || z >= CHUNK) continue
+  for (let z = z0; z <= z1; z++) {
+    for (let x = x0; x <= x1; x++) {
       data.cellKind[cIdx(x, z)] = CELL_LOBBY
       data.spaceRole[cIdx(x, z)] = SPACE_ROLE_NONE
     }

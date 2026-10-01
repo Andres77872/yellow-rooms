@@ -8,6 +8,7 @@ import {
   COLUMN_STANDARD,
   MAP_FAMILY_LATTICE,
   MAP_FAMILY_OFFICE,
+  PASSAGE_DOOR,
 } from '../mapTypes.js'
 import {
   createGeometries,
@@ -23,6 +24,7 @@ import {
   normalizeRenderDetailProfile,
   renderDetailForChunk,
   renderDetailForRing,
+  bevelDetailForChunk,
 } from '../renderDetail.js'
 
 function partSet() {
@@ -30,6 +32,7 @@ function partSet() {
     'floor',
     'ceiling',
     'walls',
+    'stairs',
     'frames',
     'leaves',
     'props',
@@ -100,6 +103,7 @@ describe('Chunk child render detail', () => {
       'floor',
       'ceiling',
       'walls',
+      'stairs',
       'frames',
       'leaves',
       'props',
@@ -133,7 +137,7 @@ describe('Chunk child render detail', () => {
     expect(p.deadPanels.visible).toBe(false)
     expect(p.leaves.visible).toBe(true)
     expect(p.furniture.visible).toBe(true)
-    for (const key of ['floor', 'ceiling', 'walls', 'signs', 'litPanels', 'exit']) {
+    for (const key of ['floor', 'ceiling', 'walls', 'stairs', 'signs', 'litPanels', 'exit']) {
       expect(p[key].visible, key).toBe(true)
     }
     expect(chunk.group.visible).toBe(false)
@@ -142,7 +146,7 @@ describe('Chunk child render detail', () => {
     expect(chunk.setRenderDetail(RENDER_DETAIL_SHELL)).toBe(true)
     expect(p.leaves.visible).toBe(false)
     expect(p.furniture.visible).toBe(false)
-    for (const key of ['floor', 'ceiling', 'walls', 'signs', 'litPanels', 'exit']) {
+    for (const key of ['floor', 'ceiling', 'walls', 'stairs', 'signs', 'litPanels', 'exit']) {
       expect(p[key].visible, key).toBe(true)
     }
 
@@ -159,6 +163,43 @@ describe('Chunk child render detail', () => {
 
     expect(chunk.setRenderDetail(RENDER_DETAIL_SHELL)).toBe(true)
     expect(chunk.renderParts.frames.visible).toBe(false)
+  })
+
+  it('swaps detail batches to the sharp cube beyond the bevel ring, and back', () => {
+    const geometry = createGeometries()
+    const material = new THREE.MeshBasicMaterial()
+    const materials = new Proxy({}, { get: () => material })
+    const data = new ChunkData(0, 0, 0, 0)
+    for (let z = 0; z < 16; z++) data.setV(5, z, 1)
+    data.setV(5, 6, 0, PASSAGE_DOOR)
+    const mesh = buildChunkMeshes(data, geometry, materials, 0, 0, 0)
+    const chunk = Object.assign(Object.create(Chunk.prototype), {
+      _geom: geometry,
+      renderParts: mesh.parts,
+      bevelDetail: true,
+    })
+    const detailMeshes = () => {
+      const out = []
+      mesh.group.traverse((o) => {
+        if (o.geometry === geometry.detailUnit || o.geometry === geometry.detailUnitSharp) out.push(o)
+      })
+      return out
+    }
+    expect(detailMeshes().length).toBeGreaterThan(0)
+    expect(mesh.parts.frames.geometry).toBe(geometry.detailUnit)
+
+    expect(chunk.setBevelDetail(false)).toBe(true)
+    for (const o of detailMeshes()) expect(o.geometry).toBe(geometry.detailUnitSharp)
+    expect(mesh.parts.walls.geometry).toBe(geometry.wallUnit) // the shell keeps its bevel
+    expect(chunk.setBevelDetail(false)).toBe(false)
+    expect(chunk.setBevelDetail(true)).toBe(true)
+    for (const o of detailMeshes()) expect(o.geometry).toBe(geometry.detailUnit)
+
+    expect(bevelDetailForChunk(0, 0, 1, -1)).toBe(true)
+    expect(bevelDetailForChunk(0, 0, 2, 0)).toBe(false)
+    mesh.dispose()
+    disposeGeometries(geometry)
+    material.dispose()
   })
 
   it('tolerates absent optional batches', () => {
@@ -220,6 +261,29 @@ describe('ChunkManager render-detail cadence', () => {
     for (const chunk of [near, ring2, ring3, ring4]) {
       expect(chunk.setRenderDetail).toHaveBeenCalledTimes(4)
     }
+  })
+
+  it('swaps bevel tiers by ring and invalidates cached torch shadows when it does', () => {
+    const cm = new ChunkManager(new THREE.Scene(), 1, null, null)
+    cm.config = { mapFamily: { selected: MAP_FAMILY_OFFICE } }
+    const chunk = (cx, cz) => {
+      const c = { cx, cz, bevel: true, setRenderDetail: vi.fn(() => false) }
+      c.setBevelDetail = vi.fn((on) => {
+        const changed = on !== c.bevel
+        c.bevel = on
+        return changed
+      })
+      return c
+    }
+    const near = chunk(1, 1)
+    const far = chunk(2, 0)
+    cm.chunks.set('near', near)
+    cm.chunks.set('far', far)
+    const before = cm.meshRevision
+    cm._syncRenderDetail(0, 0)
+    expect(near.setBevelDetail).toHaveBeenLastCalledWith(true)
+    expect(far.setBevelDetail).toHaveBeenLastCalledWith(false)
+    expect(cm.meshRevision).toBe(before + 1) // only the far chunk swapped
   })
 
   it('applies the cached profile to a newly resident chunk without rewalking peers', () => {

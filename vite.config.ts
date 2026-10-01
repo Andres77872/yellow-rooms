@@ -27,6 +27,10 @@ const isThreeWebGPU = (id: string) => /[\\/]node_modules[\\/]three[\\/]build[\\/
 // Vanilla JS + Three.js app — no framework plugin needed.
 export default defineConfig({
   plugins: [editorRoute()],
+  // The realtime path tracer's worker (render/pathtrace/tracerWorker.js) is
+  // an ES module worker: it carries three's WebGPU build and the tracer,
+  // which then never touch the page's own bundles.
+  worker: { format: 'es' },
   build: {
     // The isolated three.js vendor chunk is ~610 kB minified on its own; the
     // limit sits just above it so the warning still flags app-code growth.

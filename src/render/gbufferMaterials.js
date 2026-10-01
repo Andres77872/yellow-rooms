@@ -5,6 +5,7 @@ import { MAP_FAMILY_OFFICE } from '../world/mapTypes.js'
 import { CELL, LAYER_H, WALL_H } from '../world/constants.js'
 import { glslFloat } from './shaders/common.js'
 import { MIN_ROUGHNESS, surfaceStyle } from './surfaces.js'
+import { BEVEL_GLSL } from './bevel.js'
 
 // G-buffer materials for the deferred pipeline — G-buffer v2
 // (engine-improvement ADR-001 §3). Each writes three MRT targets:
@@ -16,6 +17,13 @@ import { MIN_ROUGHNESS, surfaceStyle } from './surfaces.js'
 // materialAO: baked/cavity occlusion (1 = open; distinct from screen SSAO).
 // gloss: the legacy stylised highlight strength, retained so the Classic look
 //   profile renders exactly as before; the PBR profiles ignore it.
+//
+// Instanced unit-box batches (walls, trim, props, signs, leaves, fallback
+// furniture) carry USE_BEVEL: the vertex stage resolves the geometry's
+// `bevel` attribute into edges rounded at a constant world radius however
+// the instance is stretched (bevel.js), and transforms the rounded normals by
+// the instance ROTATION only — the inverse-transpose used for stretched
+// models would flatten a 45-degree bevel normal onto the thin axis.
 //
 // Architecture (floor, ceiling, walls, columns, steps) samples WORLD-space
 // UVs: the dominant axis of the geometric normal picks the projection, so
@@ -129,6 +137,10 @@ const VERT_INSTANCED = /* glsl */ `
   #ifdef USE_PART_SURFACE
     in vec2 surface;
   #endif
+  #ifdef USE_BEVEL
+    in vec4 bevel;
+    ${BEVEL_GLSL}
+  #endif
   uniform mat4 modelMatrix;
   uniform mat4 modelViewMatrix;
   uniform mat4 projectionMatrix;
@@ -142,9 +154,16 @@ const VERT_INSTANCED = /* glsl */ `
     mat3 basis = mat3(instanceMatrix);
     vec3 scaleSq = vec3(dot(basis[0], basis[0]), dot(basis[1], basis[1]), dot(basis[2], basis[2]));
     vec3 iNormal = basis * (normal / max(scaleSq, vec3(1e-8)));
+    vec3 pos = position;
+    #ifdef USE_BEVEL
+      if (bevel.w < 0.0) {
+        pos = bevelUnitPosition(position, bevel, instanceMatrix);
+        iNormal = basis * (normal / sqrt(max(scaleSq, vec3(1e-8))));
+      }
+    #endif
     vViewNormal = normalize(normalMatrix * iNormal);
     vWorldNormal = normalize(mat3(modelMatrix) * iNormal);
-    vWorldPos = (modelMatrix * instanceMatrix * vec4(position, 1.0)).xyz;
+    vWorldPos = (modelMatrix * instanceMatrix * vec4(pos, 1.0)).xyz;
     // Per-instance albedo multiplier (door-leaf tones, panel tube identity).
     // Only enabled on materials whose meshes ALWAYS setColorAt — an unbound
     // attribute reads as black, so it stays opt-in via the define.
@@ -163,7 +182,7 @@ const VERT_INSTANCED = /* glsl */ `
     #else
       vSurface = vec2(-1.0);
     #endif
-    gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(pos, 1.0);
   }
 `
 
@@ -312,6 +331,14 @@ function baseUniforms(color, matID, gloss, roughness = 0.6, metalness = 0) {
   }
 }
 
+// Instanced unit-box materials resolve the geometry's bevel (see bevel.js).
+// The attribute default keeps them correct on any geometry without it.
+function withBevel(material) {
+  material.defines.USE_BEVEL = ''
+  material.defaultAttributeValues = { ...material.defaultAttributeValues, bevel: [0, 0, 0, 0] }
+  return material
+}
+
 function surfaceMaterial(map, detail, instanced) {
   const m = new THREE.RawShaderMaterial({
     glslVersion: THREE.GLSL3,
@@ -322,11 +349,11 @@ function surfaceMaterial(map, detail, instanced) {
   })
   m.uniforms.map.value = map
   m.uniforms.tDetail.value = detail
-  return m
+  return instanced ? withBevel(m) : m
 }
 
 function flatMaterial(colorLinear, matID, instanced, tinted = false, partColor = false, gloss = 0, surface = {}) {
-  return new THREE.RawShaderMaterial({
+  const m = new THREE.RawShaderMaterial({
     glslVersion: THREE.GLSL3,
     defines: {
       ...(tinted ? { USE_INSTANCING_COLOR: '' } : {}),
@@ -338,18 +365,20 @@ function flatMaterial(colorLinear, matID, instanced, tinted = false, partColor =
     vertexShader: instanced ? VERT_INSTANCED : VERT_STATIC,
     fragmentShader: FRAG,
   })
+  return surface.bevel ? withBevel(m) : m
 }
 
-function emissiveMaterial(colorLinear, instanced, tinted = false, troffer = false) {
+function emissiveMaterial(colorLinear, instanced, tinted = false, troffer = false, bevel = false) {
   const uniforms = baseUniforms(colorLinear, 1, 0, 1) // uIntensity: flicker multiplier, updated per frame
   if (troffer) uniforms.uPanelPattern = { value: 0 }
-  return new THREE.RawShaderMaterial({
+  const m = new THREE.RawShaderMaterial({
     glslVersion: THREE.GLSL3,
     defines: { ...(tinted ? { USE_INSTANCING_COLOR: '' } : {}), ...(troffer ? { USE_TROFFER: '' } : {}) },
     uniforms,
     vertexShader: instanced ? VERT_INSTANCED : VERT_STATIC,
     fragmentShader: FRAG,
   })
+  return bevel ? withBevel(m) : m
 }
 
 // One canvas-texture set per family, built lazily and kept for the renderer's
@@ -451,21 +480,21 @@ export function createGBufferMaterials(renderer, family = MAP_FAMILY_OFFICE) {
   const exit = emissiveMaterial(lin(0xeafff2), false) // glowing anomaly
 
   // Instanced door/window casings: family trim, satin enamel.
-  const doorFrame = flatMaterial(lin(pal.trim), 0, true, false, false, 0.3, { roughness: 0.4 })
+  const doorFrame = flatMaterial(lin(pal.trim), 0, true, false, false, 0.3, { roughness: 0.4, bevel: true })
   // Painted leaf base; per-door instanceColor tones it (brightness band,
   // rare dark stain) and darkens the knob to metal — see mesh.js leafTint.
-  const doorLeaf = flatMaterial(lin(pal.leaf), 0, true, true, false, 0.25, { roughness: 0.46 })
+  const doorLeaf = flatMaterial(lin(pal.leaf), 0, true, true, false, 0.25, { roughness: 0.46, bevel: true })
   // Interior props (thresholds, radiators, clocks, boards, extinguisher
   // cabinets, vents): white base tinted per instance by the objects/dressing
   // palettes. Mostly painted metal and plastic.
-  const prop = flatMaterial(lin(0xffffff), 0, true, true, false, 0.25, { roughness: 0.5 })
+  const prop = flatMaterial(lin(0xffffff), 0, true, true, false, 0.25, { roughness: 0.5, bevel: true })
   // Emissive wayfinding signs (exit + hanging blades): they glow and bloom
   // but are NOT in the light field — beacons, not lamps. Steady (no flicker
   // wiring), tinted per instance (exit green / blade amber).
-  const signGlow = emissiveMaterial(lin(0xffffff), true, true)
+  const signGlow = emissiveMaterial(lin(0xffffff), true, true, false, true)
   // Collision-real office furniture (procedural fallback): white base tinted
   // per part by the objects/furniture palette (laminate, metal, fabric...).
-  const furniture = flatMaterial(lin(0xffffff), 0, true, true, false, 0.22, { roughness: 0.62 })
+  const furniture = flatMaterial(lin(0xffffff), 0, true, true, false, 0.22, { roughness: 0.62, bevel: true })
   // Blender-built furniture GLBs (render/furnitureModels.js): merged
   // per-kind geometry whose baked vertex colors carry the per-part palette
   // and whose `surface` attribute preserves each part's material identity,

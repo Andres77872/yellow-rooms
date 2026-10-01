@@ -15,12 +15,16 @@ import { SKY_NADIR_MULT, SKY_ZENITH_MULT } from '../../world/constants.js'
 // view distance at trace resolution) and to that frame's camera, so it can be
 // reprojected onto any later frame exactly. Passes:
 //
-//   snapshot    (trace res) the G-buffer for a frame being dispatched.
+//   snapshot    (trace res) the G-buffer for a frame being dispatched:
+//               albedo averaged over each trace pixel's footprint (the
+//               tracer jitters its rays over the whole pixel, so its
+//               radiance is a footprint average too) and the view distance
+//               at the pixel centre.
 //   demodulate  (trace res, once per new traced frame) radiance / snapshot
 //               albedo: lighting without texture, which filters cleanly.
 //   a-trous     (trace res) edge-aware wavelet filter, 5x5 B3 kernel at
 //               growing strides, stopped at view-distance edges. Iterations
-//               fall as a still camera's accumulation converges.
+//               fall as the traced frame's sample count grows.
 //   accumulate  (full res) world position from depth -> the traced frame's
 //               camera -> depth-checked bilinear lookup of the filtered
 //               lighting; blended with the reprojected history (rejected on
@@ -42,35 +46,58 @@ const ALBEDO_FLOOR = 0.03
 // the new frame contains the old one's samples, so it dominates).
 export const ALPHA_FRESH = 0.2
 export const ALPHA_CONTINUED = 0.6
-// A-trous iterations for a fresh frame; a continued (converging) one loses
-// one iteration every FILTER_DECAY frames down to none.
+// A-trous iterations for a traced frame with few samples per pixel; one
+// fewer at each of FILTER_SAMPLE_STEPS (noise falls as 1 / sqrt(spp)), so a
+// still view sheds the filter as it accumulates and a converged one keeps
+// every contact shadow sharp.
 export const FILTER_ITERATIONS = 3
-export const FILTER_DECAY = 8
+export const FILTER_SAMPLE_STEPS = [32, 128, 512]
 
 const glslFloat = (v) => (Number.isInteger(v) ? `${v}.0` : `${v}`)
 
-// A-trous iterations for the n-th consecutive continued traced frame.
-export function filterIterations(continuedFrames) {
-  return Math.max(0, FILTER_ITERATIONS - Math.floor(continuedFrames / FILTER_DECAY))
+// A-trous iterations for a traced frame of `samples` samples per pixel.
+export function filterIterations(samples) {
+  let n = FILTER_ITERATIONS
+  for (const step of FILTER_SAMPLE_STEPS) if (samples >= step) n--
+  return Math.max(0, n)
 }
 
 const SNAPSHOT_FRAG = /* glsl */ `
   precision highp float;
   precision highp int;
-  in vec2 vUv;
   out vec4 outColor;
   uniform sampler2D tDepth;
   uniform sampler2D tColor;
   uniform mat4 uProjInverse;
+  uniform vec2 uTraceSize;
   ${DEPTH_PX}
   void main(){
     ivec2 fs = textureSize(tDepth, 0);
-    ivec2 px = clamp(ivec2(vUv * vec2(fs)), ivec2(0), fs - 1);
+    vec2 t = floor(gl_FragCoord.xy);
+    vec2 scale = vec2(fs) / uTraceSize;
+    ivec2 px = clamp(ivec2((t + 0.5) * scale), ivec2(0), fs - 1);
     float d = texelFetch(tDepth, px, 0).x;
     vec4 c = texelFetch(tColor, px, 0);
     // Sky, emissives and entities never take traced light.
     if (d >= 1.0 || c.a > 0.5) { outColor = vec4(0.0, 0.0, 0.0, -1.0); return; }
-    outColor = vec4(c.rgb, length(viewPosPx(px, fs)));
+    // The tracer's radiance averages its jittered rays over the whole trace
+    // pixel, so demodulate by the albedo averaged over the same footprint
+    // (a stratified 4 x 4 grid of G-buffer pixels). The centre texel alone
+    // turns texture detail into speckle that never converges.
+    vec3 sum = vec3(0.0);
+    float n = 0.0;
+    for (int j = 0; j < 4; j++) {
+      for (int i = 0; i < 4; i++) {
+        vec2 f = (vec2(float(i), float(j)) + 0.5) * 0.25;
+        ivec2 q = clamp(ivec2((t + f) * scale), ivec2(0), fs - 1);
+        if (texelFetch(tDepth, q, 0).x >= 1.0) continue;
+        vec4 s = texelFetch(tColor, q, 0);
+        if (s.a > 0.5) continue;
+        sum += s.rgb;
+        n += 1.0;
+      }
+    }
+    outColor = vec4(n > 0.0 ? sum / n : c.rgb, length(viewPosPx(px, fs)));
   }
 `
 
@@ -301,7 +328,6 @@ export class PathTraceBlend {
     this._current = -1
     this._pendingFilter = false
     this._iterations = FILTER_ITERATIONS
-    this._continuedFrames = 0
     this._viewProj = new THREE.Matrix4()
     this._camPos = new THREE.Vector3()
     this.traceTex = null
@@ -311,6 +337,7 @@ export class PathTraceBlend {
       tDepth: { value: null },
       tColor: { value: null },
       uProjInverse: { value: new THREE.Matrix4() },
+      uTraceSize: { value: new THREE.Vector2(1, 1) },
     }
     this.demodUniforms = { tTrace: { value: null }, tSnap: { value: null } }
     this.atrousUniforms = { tIn: { value: null }, uStep: { value: 1 } }
@@ -418,8 +445,8 @@ export class PathTraceBlend {
 
   // A readback finished: `data` is the traced frame (RGBA32F, rows top-down)
   // for the snapshot in `slot`. `continued`: the tracer had not reset since
-  // the previously accepted frame.
-  accept(slot, data, width, height, { continued = false } = {}) {
+  // the previously accepted frame; `samples`: its samples per pixel.
+  accept(slot, data, width, height, { continued = false, samples = 1 } = {}) {
     const s = this.slots[slot]
     const valid = s && s.state === 'pending' && width === this.traceWidth && height === this.traceHeight
     if (!valid || data.length < width * height * 4) {
@@ -432,8 +459,7 @@ export class PathTraceBlend {
     this._current = slot
     this.traceTex.image.data = data.length === width * height * 4 ? data : data.subarray(0, width * height * 4)
     this.traceTex.needsUpdate = true
-    this._continuedFrames = continued ? this._continuedFrames + 1 : 0
-    this._iterations = filterIterations(this._continuedFrames)
+    this._iterations = filterIterations(samples)
     this._pendingFilter = true
     const u = this.accumUniforms
     u.uTraceViewProj.value.copy(s.viewProj)
@@ -455,7 +481,6 @@ export class PathTraceBlend {
     if (this._current >= 0) this.slots[this._current].state = 'free'
     this._current = -1
     this._pendingFilter = false
-    this._continuedFrames = 0
   }
 
   _ensureHistory(w, h) {
@@ -546,6 +571,7 @@ export class PathTraceBlend {
       su.tDepth.value = deferred.depthTex
       su.tColor.value = deferred.gColor
       su.uProjInverse.value.copy(deferred._projInv)
+      su.uTraceSize.value.set(this.traceWidth, this.traceHeight)
       r.setRenderTarget(this.snapRTs[slot])
       this.snapQuad.render(r)
       s.viewProj.copy(this._viewProj)
