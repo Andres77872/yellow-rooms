@@ -15,10 +15,130 @@
         overscroll-behavior: none; touch-action: none; }
       body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
       #app, #app canvas { display: block; }
+
+      /* ── boot screen (src/ui/bootLoader.js drives it once the bundle runs) ──
+         Inline so it is the first paint, not a flat brown page while ~1.3 MB
+         of script arrives. Every animation is transform/opacity only: those run
+         on the compositor and keep moving while the Engine boot blocks the main
+         thread. Tokens mirror src/ui/theme.js. */
+      #boot { position: fixed; inset: 0; z-index: 40; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 22px; padding: 24px;
+        background:
+          repeating-linear-gradient(0deg, rgba(0,0,0,.08) 0 1px, transparent 1px 3px),
+          radial-gradient(ellipse 75% 65% at 50% 44%, #241d0d 0%, #17120a 52%, #0a0805 100%);
+        color: #f4e9c8; text-align: center; overflow: hidden;
+        font-family: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, "Courier New", monospace;
+        transition: opacity .7s ease-in-out; }
+      /* the fixture's light spill on an unseen ceiling: warms up, then breathes
+         at a quarter hertz (one soft change, far from any flash threshold) */
+      #boot::before { content: ''; position: absolute; left: 50%; top: 46%;
+        width: min(900px, 160vw); height: 520px; transform: translate(-50%, -50%);
+        background: radial-gradient(ellipse 50% 42% at 50% 50%, rgba(232,207,122,.16), rgba(232,207,122,.05) 55%, transparent 72%);
+        pointer-events: none; opacity: 0;
+        animation: boot-warm 2.4s ease-out .2s forwards, boot-breathe 4s ease-in-out 2.6s infinite; }
+      #boot > * { position: relative; }
+      #boot .boot-jp { font-size: 14px; letter-spacing: .5em; color: #8a7a3f;
+        text-shadow: 0 0 10px rgba(232,207,122,.32); }
+      #boot .boot-jp .f, #boot .boot-fail { display: none; }
+      #boot .boot-mark { display: flex; align-items: center; gap: 14px; font-size: 12px;
+        letter-spacing: .42em; color: rgba(244,233,200,.7); white-space: nowrap; }
+      #boot .boot-mark::before, #boot .boot-mark::after { content: ''; width: 44px; height: 1px;
+        background: rgba(232,207,122,.28); }
+
+      /* the tube: a fluorescent fixture whose light is the progress */
+      #boot .tube { width: min(380px, 70vw); height: 4px; margin: 6px 0 2px;
+        background: rgba(232,207,122,.07); border: 1px solid rgba(232,207,122,.22); border-radius: 3px; }
+      #boot .tube::before, #boot .tube::after { content: ''; position: absolute; top: -6px; bottom: -6px;
+        width: 3px; background: #8a7a3f; border-radius: 1px; }
+      #boot .tube::before { left: -8px; }
+      #boot .tube::after { right: -8px; }
+      #boot .fill { position: absolute; inset: 0; transform-origin: 0 50%; transform: scaleX(0);
+        border-radius: 2px; background: linear-gradient(90deg, #d9bd62, #fbefc4);
+        box-shadow: 0 0 4px rgba(255,248,220,.8), 0 0 14px rgba(232,207,122,.55), 0 0 36px rgba(232,207,122,.22);
+        animation: boot-creep 10s cubic-bezier(.1,.6,.25,1) .1s forwards; }
+      /* current through the glass: a glint sweeping the whole tube */
+      #boot .glint { position: absolute; inset: -1px; overflow: hidden; border-radius: 3px; }
+      #boot .glint::after { content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 26%;
+        background: linear-gradient(90deg, transparent, rgba(255,250,230,.75), transparent);
+        transform: translateX(-100%); animation: boot-glint 2.2s cubic-bezier(.45,0,.55,1) .6s infinite; }
+      /* the finished tube blooms before the screen fades off the world */
+      #boot .halo { position: absolute; left: -12%; right: -12%; top: -26px; bottom: -26px;
+        background: radial-gradient(ellipse 50% 50% at 50% 50%, rgba(251,239,196,.4), transparent 70%);
+        opacity: 0; transition: opacity .35s ease-out; pointer-events: none; }
+      #boot.lit .halo { opacity: 1; }
+      #boot.lit .glint { opacity: 0; transition: opacity .2s; }
+
+      #boot .boot-status { display: flex; justify-content: space-between; align-items: baseline;
+        gap: 16px; width: min(380px, 70vw); font-size: 11px; letter-spacing: .26em;
+        color: rgba(244,233,200,.6); }
+      #boot .boot-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      #boot .boot-label::after { content: '_'; margin-left: .2em; color: #e8cf7a;
+        animation: boot-caret 1s steps(1, end) infinite; }
+      #boot .boot-step { color: #e8cf7a; letter-spacing: .12em; font-variant-numeric: tabular-nums; }
+      #boot .boot-note { margin: 10px 0 0; font-size: 10px; letter-spacing: .3em;
+        color: rgba(244,233,200,.38); }
+      #boot.out { opacity: 0; pointer-events: none; }
+
+      /* the bundle never ran (network failure, unsupported script) */
+      #boot.failed .boot-jp .w, #boot.failed .tube, #boot.failed .boot-status,
+      #boot.failed .boot-note { display: none; }
+      #boot.failed .boot-jp .f { display: inline; color: rgba(224,88,74,.8); }
+      #boot.failed::before { animation: none; opacity: 0; }
+      #boot.failed .boot-fail { display: flex; flex-direction: column; align-items: center; gap: 16px;
+        max-width: min(460px, 90vw); font-size: 13px; line-height: 1.9; letter-spacing: .08em;
+        color: rgba(244,233,200,.6); }
+      #boot .boot-fail b { font-size: 18px; letter-spacing: .3em; color: #f4e9c8;
+        text-shadow: 0 0 18px rgba(224,88,74,.4); }
+      #boot .boot-fail a { color: #e8cf7a; letter-spacing: .2em; }
+
+      @keyframes boot-creep { to { transform: scaleX(.3); } }
+      @keyframes boot-warm { to { opacity: 1; } }
+      @keyframes boot-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .72; } }
+      @keyframes boot-glint { to { transform: translateX(400%); } }
+      @keyframes boot-caret { 50% { opacity: 0; } }
+      @media (prefers-reduced-motion: reduce) {
+        #boot, #boot *, #boot::before, #boot *::before, #boot *::after {
+          animation: none !important; transition: none !important; }
+        #boot::before { opacity: 1; }
+        #boot .fill { transform: scaleX(.3); }
+      }
     </style>
   </head>
   <body>
+    <div id="boot" role="status" aria-live="polite" aria-busy="true">
+      <div class="boot-jp" aria-hidden="true"><span class="w">「起動中」</span><span class="f">「信号消失」</span></div>
+      <div class="boot-mark">THE YELLOW ROOMS</div>
+      <div class="tube" role="progressbar" aria-label="Loading" aria-valuemin="0" aria-valuemax="100">
+        <div class="halo"></div>
+        <div class="fill"></div>
+        <div class="glint"></div>
+      </div>
+      <div class="boot-status"><span class="boot-label">FETCHING THE ROOMS</span><span class="boot-step">01/04</span></div>
+      <p class="boot-note">best with headphones</p>
+      <div class="boot-fail">
+        <b>SIGNAL LOST</b>
+        <span>The rooms could not load. Check your connection, then try again.</span>
+        <a href="">RELOAD</a>
+      </div>
+      <noscript><style>#boot .tube, #boot .boot-status, #boot .boot-note { display: none; }</style>
+        <p>THE YELLOW ROOMS needs JavaScript.</p></noscript>
+    </div>
     <div id="app"></div>
+    <script>
+      // The bundle never took over the boot screen: a failed module fetch fires
+      // on the <script> element (capture), a parse/evaluation error on window.
+      // Once bootLoader.js marks the screen live, main.js reports failures.
+      (function () {
+        var boot = document.getElementById('boot')
+        function fail() {
+          if (boot && !boot.dataset.live) boot.classList.add('failed')
+        }
+        addEventListener('error', function (e) {
+          var t = e.target
+          if (t === window || (t && t.tagName === 'SCRIPT')) fail()
+        }, true)
+      })()
+    </script>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

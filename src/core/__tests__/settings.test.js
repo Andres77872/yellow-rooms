@@ -1,6 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { Settings, DEFAULTS, SENS_DEFAULT, SENS_MIN, SENS_MAX, dynamicResEnabled } from '../Settings.js'
-import { AUTO_FALLBACK_PRESET } from '../graphics.js'
+import {
+  Settings,
+  DEFAULTS,
+  FRAME_LIMITS,
+  PATH_TRACER_MODES,
+  SENS_DEFAULT,
+  SENS_MIN,
+  SENS_MAX,
+  dynamicResEnabled,
+} from '../Settings.js'
+import { AUTO_FALLBACK_PRESET, GRAPHICS_KEYS, GRAPHICS_PRESETS } from '../graphics.js'
 
 const KEY = 'yellowrooms.settings'
 
@@ -181,5 +190,74 @@ describe('dynamicResEnabled', () => {
     expect(dynamicResEnabled(store('high', false))).toBe(false)
     expect(dynamicResEnabled(store('high', true))).toBe(true)
     expect(dynamicResEnabled(store('custom', true))).toBe(true)
+  })
+})
+
+describe('experimental WebGPU path tracer setting', () => {
+  beforeEach(() => vi.unstubAllGlobals())
+
+  it('is off by default and for fresh installs', () => {
+    expect(DEFAULTS.pathTracer).toBe('off')
+    expect(PATH_TRACER_MODES).toEqual(['off', 'viewer', 'realtime'])
+    stubStorage()
+    expect(new Settings().get('pathTracer')).toBe('off')
+  })
+
+  it('persists an explicit choice and coerces junk back to off', () => {
+    const store = stubStorage()
+    const s = new Settings()
+    expect(s.set('pathTracer', 'realtime')).toBe('realtime')
+    expect(saved(store).pathTracer).toBe('realtime')
+    expect(new Settings().get('pathTracer')).toBe('realtime')
+    expect(s.set('pathTracer', 'turbo')).toBe('off')
+    stubStorage({ pathTracer: true })
+    expect(new Settings().get('pathTracer')).toBe('off')
+  })
+
+  it('migrates the first build\'s boolean opt-in to the viewer it enabled', () => {
+    stubStorage({ webgpuPathTracer: true })
+    expect(new Settings().get('pathTracer')).toBe('viewer')
+    stubStorage({ webgpuPathTracer: false })
+    expect(new Settings().get('pathTracer')).toBe('off')
+    stubStorage({ webgpuPathTracer: true, pathTracer: 'realtime' })
+    expect(new Settings().get('pathTracer')).toBe('realtime')
+  })
+
+  it('is not a graphics key: no preset can switch it on, RESET switches it off', () => {
+    expect(GRAPHICS_KEYS).not.toContain('pathTracer')
+    for (const preset of Object.values(GRAPHICS_PRESETS)) expect('pathTracer' in preset).toBe(false)
+    stubStorage()
+    const s = new Settings()
+    s.set('pathTracer', 'realtime')
+    s.reset()
+    expect(s.get('pathTracer')).toBe('off')
+  })
+})
+
+describe('frame rate limit setting', () => {
+  beforeEach(() => vi.unstubAllGlobals())
+
+  it('is off by default, so a fresh install keeps its display rate', () => {
+    expect(DEFAULTS.frameLimit).toBe('off')
+    stubStorage()
+    expect(new Settings().get('frameLimit')).toBe('off')
+  })
+
+  it('stores numbers as numbers and coerces anything else back to off', () => {
+    const store = stubStorage()
+    const s = new Settings()
+    expect(s.set('frameLimit', 60)).toBe(60)
+    expect(saved(store).frameLimit).toBe(60)
+    expect(new Settings().get('frameLimit')).toBe(60)
+    expect(s.set('frameLimit', 'half')).toBe('half')
+    expect(s.set('frameLimit', '60')).toBe('off') // the panel parses first
+    expect(s.set('frameLimit', 45)).toBe('off')
+    expect(s.set('frameLimit', 0)).toBe('off')
+    for (const v of FRAME_LIMITS) expect(s.set('frameLimit', v)).toBe(v)
+  })
+
+  it('is not a graphics key: presets never touch it', () => {
+    expect(GRAPHICS_KEYS).not.toContain('frameLimit')
+    for (const preset of Object.values(GRAPHICS_PRESETS)) expect('frameLimit' in preset).toBe(false)
   })
 })

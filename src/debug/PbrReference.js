@@ -15,7 +15,9 @@ import { LIGHT_INTENSITY, LIGHT_RANGE, PANEL_GLOW } from '../world/constants.js'
 
 const white = new THREE.Color(1, 1, 1)
 
-function mirrorMaterial(src) {
+// Shared with the WebGPU path tracer's proxy scene (render/pathtrace), so the
+// stock A/B and the path-traced view read G-buffer materials one way.
+export function mirrorMaterial(src) {
   const u = src.uniforms ?? {}
   const color = (u.uColor?.value ?? white).clone()
   const matID = u.uMatID?.value ?? 0

@@ -13,6 +13,12 @@ editor/rendering sources.
   (chapter 12) is implemented; see the
   [implementation record](engine-improvement/13-implementation-record.md) and
   [shadows, quality tiers and visual style](engine-improvement/14-shadows-quality-style.md).
+- [Path tracer research](pathracer/README.md) — 2026-09-28 deep research on
+  [three-gpu-pathtracer](https://github.com/gkjohnson/three-gpu-pathtracer)
+  (WebGL and the new WebGPU backend). Covers what it can and cannot do for
+  this engine, a feature-by-feature fit, measured experiments (bundle cost,
+  blue noise vs IGN, headless path tracing of real chunks, and a Monte Carlo
+  check of the cell-graph GI), ranked integration proposals and a roadmap.
 - [Model and engine review](model-engine-review.md) — September 2026 model
   polish, loading/rendering/runtime fixes, comparison metrics, visual QA tools,
   the 2026-09-22 engine architecture/runtime review, and the 2026-09-22

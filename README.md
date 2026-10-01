@@ -95,9 +95,37 @@ submissions to 30 FPS; gameplay, transitions, death effects, and active
 diagnostics remain display-rate. The disposable title world synchronously
 prewarms only its fog-visible radius-2/current-floor seed, then fills the normal
 streaming box within the per-frame count/time budget; playable levels retain
-the full ready-before-control prewarm. See
+the full ready-before-control prewarm. Both waits are covered: an inline boot
+screen (`index.html`, driven by `src/ui/bootLoader.js`) paints before the
+bundle arrives and lifts off the first drawn title frame once the Blender
+models have settled (capped at 2.5 s), and menu entries into a level cut to
+the NO-CLIP loading card before the synchronous prewarm runs, fading it off
+the level's first frames. See
 [Lighting & Rendering Pipeline](docs/lighting-pipeline.md) for the exact pass,
 detail-profile, instrumentation, and benchmark contracts.
+
+### Experimental: WebGPU path tracer (off by default)
+
+Settings → ADVANCED SETTINGS → EXPERIMENTAL → **WEBGPU PATH TRACER** runs
+[three-gpu-pathtracer](https://github.com/gkjohnson/three-gpu-pathtracer)
+0.0.25's `WebGPUPathTracer` in its own WebGPU context. It has two modes:
+
+- **VIEWER:** press `P` while playing. The world freezes on a path-traced
+  view of the frame; mouse look still works, holding still converges the
+  image, and `P` again returns.
+- **REALTIME:** while you play, path-traced lighting replaces the deferred
+  renderer's lighting pass. Fog, bloom, outline, grade and the tape still
+  apply, and enemies, emissives and the sky keep raster lighting. `P` flips
+  to raster lighting for an A/B. It is noisy in motion, heavy on the GPU,
+  and hitches briefly while streaming.
+
+Both modes need a desktop browser with WebGPU on a secure page; elsewhere
+the control is locked and says why. While the setting is OFF, nothing WebGPU
+loads: the tracer, `three/webgpu` and three-mesh-bvh are lazy chunks. Design,
+costs, measurements and limitations are in
+[docs/pathracer/09](docs/pathracer/09-webgpu-integration.md) (viewer) and
+[docs/pathracer/10](docs/pathracer/10-realtime-integration.md) (realtime:
+where it plugs into the render and why).
 
 ## World generation
 

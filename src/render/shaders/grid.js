@@ -446,17 +446,22 @@ export const GRID_GLSL = /* glsl */ `
   }
 
   // Cell-graph GI: ambient cube (luminance per axis face + hemisphere
-  // chroma) evaluated for normal N.
-  vec3 gCube(int gx, int gz, int cy, vec3 N){
+  // chroma). gCubeFetch reads a cell's texels and gCubeEval evaluates them
+  // for normal N, so one fetch can serve several directions.
+  struct GICube { vec4 a; vec4 b; vec4 c; };
+  GICube gCubeFetch(int gx, int gz, int cy){
     ivec2 t = gTexel(gx, gz, cy);
     t.x *= ${GI_TEXELS};
-    vec4 a = texelFetch(tGridGI, t, 0);
-    vec4 b = texelFetch(tGridGI, t + ivec2(1, 0), 0);
-    vec4 c = texelFetch(tGridGI, t + ivec2(2, 0), 0);
+    return GICube(
+      texelFetch(tGridGI, t, 0),
+      texelFetch(tGridGI, t + ivec2(1, 0), 0),
+      texelFetch(tGridGI, t + ivec2(2, 0), 0));
+  }
+  vec3 gCubeEval(GICube k, vec3 N){
     vec3 n2 = N * N;
-    float l = n2.x * (N.x >= 0.0 ? a.x : a.y) + n2.y * (N.y >= 0.0 ? b.x : b.y) + n2.z * (N.z >= 0.0 ? a.z : a.w);
-    vec3 up = vec3(b.z, b.w, c.x);
-    vec3 dn = c.yzw;
+    float l = n2.x * (N.x >= 0.0 ? k.a.x : k.a.y) + n2.y * (N.y >= 0.0 ? k.b.x : k.b.y) + n2.z * (N.z >= 0.0 ? k.a.z : k.a.w);
+    vec3 up = vec3(k.b.z, k.b.w, k.c.x);
+    vec3 dn = k.c.yzw;
     return l * mix(dn, up, clamp(N.y * 0.5 + 0.5, 0.0, 1.0));
   }
 
@@ -472,9 +477,17 @@ export const GRID_GLSL = /* glsl */ `
   // behind a wall gets zero weight, so bounce never leaks through a thin
   // partition — the stencil respects the same edges as the walls. With
   // stencil false only the own cell's cube is read (low tiers).
-  vec3 gridIndirect(vec3 Pl, vec3 N, int cy, bool stencil){
+  // Evaluated for two directions at once (diffuse N1, specular reflection
+  // N2): the stencil and the cell texels do not depend on the direction, so
+  // the second one costs only the cube evaluations.
+  void gridIndirect2(vec3 Pl, vec3 N1, vec3 N2, int cy, bool stencil, out vec3 r1, out vec3 r2){
     ivec2 cb = ivec2(floor(Pl.xz / G_CELL));
-    if (!stencil) return gCube(cb.x, cb.y, cy, N);
+    if (!stencil) {
+      GICube k = gCubeFetch(cb.x, cb.y, cy);
+      r1 = gCubeEval(k, N1);
+      r2 = gCubeEval(k, N2);
+      return;
+    }
     vec2 q = Pl.xz / G_CELL - 0.5;
     ivec2 c0 = ivec2(floor(q));
     vec2 f = q - vec2(c0);
@@ -493,12 +506,20 @@ export const GRID_GLSL = /* glsl */ `
     vec4 w = vec4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y)
            * vec4(r00, r10, r01, r11);
     float ws = max(w.x + w.y + w.z + w.w, 1e-4);
-    vec3 s = vec3(0.0);
-    if (w.x > 0.0) s += w.x * gCube(c0.x, c0.y, cy, N);
-    if (w.y > 0.0) s += w.y * gCube(c0.x + 1, c0.y, cy, N);
-    if (w.z > 0.0) s += w.z * gCube(c0.x, c0.y + 1, cy, N);
-    if (w.w > 0.0) s += w.w * gCube(c0.x + 1, c0.y + 1, cy, N);
-    return s / ws;
+    vec3 s1 = vec3(0.0);
+    vec3 s2 = vec3(0.0);
+    GICube k;
+    if (w.x > 0.0) { k = gCubeFetch(c0.x, c0.y, cy); s1 += w.x * gCubeEval(k, N1); s2 += w.x * gCubeEval(k, N2); }
+    if (w.y > 0.0) { k = gCubeFetch(c0.x + 1, c0.y, cy); s1 += w.y * gCubeEval(k, N1); s2 += w.y * gCubeEval(k, N2); }
+    if (w.z > 0.0) { k = gCubeFetch(c0.x, c0.y + 1, cy); s1 += w.z * gCubeEval(k, N1); s2 += w.z * gCubeEval(k, N2); }
+    if (w.w > 0.0) { k = gCubeFetch(c0.x + 1, c0.y + 1, cy); s1 += w.w * gCubeEval(k, N1); s2 += w.w * gCubeEval(k, N2); }
+    r1 = s1 / ws;
+    r2 = s2 / ws;
+  }
+  vec3 gridIndirect(vec3 Pl, vec3 N, int cy, bool stencil){
+    vec3 r1, r2;
+    gridIndirect2(Pl, N, N, cy, stencil, r1, r2);
+    return r1;
   }
 
   // --- Architectural crease AO (chapter 14 P10) ------------------------------

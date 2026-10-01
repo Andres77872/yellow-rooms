@@ -45,6 +45,15 @@ export const UI_CSS = `
 #ui .panel:not(.hidden) .card { animation:card-in .42s cubic-bezier(.16,1,.3,1) both; }
 @keyframes panel-fade { from { opacity:0; } }
 @keyframes card-in { from { opacity:0; transform:translateY(8px); } }
+/* loading card (UI.showLoading): cuts in, since a level build starts the
+   moment it has been presented and would freeze a fade at its first frame */
+#ui .panel.cut:not(.hidden), #ui .panel.cut:not(.hidden) .card { animation:none; }
+/* into play: the card fades off the new level's first frames (LEAVE_MS) */
+#ui .panel.leaving:not(.hidden) { animation:panel-out .6s ease-in both; pointer-events:none; }
+@keyframes panel-out { to { opacity:0; } }
+/* the boot screen (index.html) covers the page: keep the UI out of layout so
+   the title's arrival plays when it lifts (UI.setBooting) */
+#ui.booting { display:none; }
 
 /* ── typography ────────────────────────────────────────────────── */
 /* Sized so the 16-char tracked title always fits the 680px card:
@@ -160,6 +169,22 @@ export const UI_CSS = `
 #p-dead .jp-accent { color:rgba(224,88,74,.75); text-shadow:0 0 10px rgba(224,88,74,.3); }
 
 /* ── transition panel: no-clip glitch ──────────────────────────── */
+/* The boot screen's fluorescent tube, indeterminate: current running through
+   it. transform-only, so it keeps moving on the compositor while a level
+   build holds the main thread behind this card. */
+#ui .tube { position:relative; width:min(300px,64vw); height:4px; margin:2px 0;
+  background:rgba(232,207,122,.08); border:1px solid var(--line); border-radius:3px;
+  box-shadow:0 0 14px rgba(232,207,122,.12); }
+#ui .tube::before, #ui .tube::after { content:''; position:absolute; top:-5px; bottom:-5px;
+  width:3px; background:var(--gold-dim); border-radius:1px; }
+#ui .tube::before { left:-8px; }
+#ui .tube::after { right:-8px; }
+#ui .tube .run { position:absolute; inset:0; overflow:hidden; border-radius:2px; }
+#ui .tube i { position:absolute; top:0; bottom:0; left:0; width:34%;
+  background:linear-gradient(90deg, transparent, rgba(232,207,122,.95), #fff6d8,
+                             rgba(232,207,122,.95), transparent);
+  transform:translateX(-100%); animation:tube-run 1.6s cubic-bezier(.45,0,.55,1) infinite; }
+@keyframes tube-run { to { transform:translateX(300%); } }
 #p-trans .glitch { animation:glitch-jitter 2.8s steps(1,end) infinite; }
 #ui.reduce-flicker #p-trans .glitch { animation:none; }
 @keyframes glitch-jitter {
@@ -476,6 +501,7 @@ export const UI_CSS = `
 @media (prefers-reduced-motion: reduce) {
   #ui *, #ui *::before, #ui *::after {
     animation:none !important; transition:none !important; }
+  #ui .tube i { left:33%; transform:none; } /* a steady lit segment */
 }
 
 /* ── short landscape screens (phones): slim the HUD down ───────── */

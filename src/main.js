@@ -1,4 +1,13 @@
 import { Engine } from './core/Engine.js'
+import { BootLoader, painted, settleWithin } from './ui/bootLoader.js'
+
+// The boot screen (index.html) stays up until the title can be shown over a
+// drawn world: a GPU that never presents a frame still reaches the menu after
+// FIRST_FRAME_WAIT_MS, and the Blender models get ASSET_WAIT_MS beyond the
+// first frame before the title opens without them (chunks then swap their box
+// furniture in place when the models land, as before).
+const FIRST_FRAME_WAIT_MS = 10000
+const ASSET_WAIT_MS = 2500
 
 // Fatal-boot panel in the same anime-liminal language as the game UI. Styles
 // are inlined because the overlays.js stylesheet never mounts when the Engine
@@ -39,37 +48,62 @@ function hasWebGL2() {
   }
 }
 
-const app = document.getElementById('app')
-
-if (!hasWebGL2()) {
-  showFatal(
-    '「非対応」',
-    'REALITY UNAVAILABLE',
-    'THE YELLOW ROOMS needs WebGL2 and this browser or device does not provide it.<br/>Update your browser or enable hardware acceleration.'
-  )
-} else {
-  try {
-    const engine = new Engine(app)
-    engine.start()
-    // expose for debugging in the console
-    window.__game = engine
-  } catch (err) {
-    console.error('[yellow-rooms] engine failed to boot:', err)
-    if (err?.name === 'DeferredUnsupportedError') {
-      // capabilities.js: the GPU cannot allocate the deferred G-buffer
-      // (float colour attachments / multiple render targets).
-      showFatal(
-        '「描画不能」',
-        'RENDER FAILURE',
-        'This GPU cannot allocate the renderer\'s floating-point render targets.<br/>' +
-          'Update your graphics drivers, enable hardware acceleration, or try another browser.'
-      )
-    } else {
-      showFatal(
-        '「描画不能」',
-        'RENDER FAILURE',
-        'The renderer failed to start on this GPU.<br/>Update your graphics drivers or try another browser.'
-      )
-    }
+function showBootFailure(err) {
+  console.error('[yellow-rooms] engine failed to boot:', err)
+  if (err?.name === 'DeferredUnsupportedError') {
+    // capabilities.js: the GPU cannot allocate the deferred G-buffer
+    // (float colour attachments / multiple render targets).
+    showFatal(
+      '「描画不能」',
+      'RENDER FAILURE',
+      'This GPU cannot allocate the renderer\'s floating-point render targets.<br/>' +
+        'Update your graphics drivers, enable hardware acceleration, or try another browser.'
+    )
+  } else {
+    showFatal(
+      '「描画不能」',
+      'RENDER FAILURE',
+      'The renderer failed to start on this GPU.<br/>Update your graphics drivers or try another browser.'
+    )
   }
 }
+
+async function boot() {
+  const loader = new BootLoader(document.getElementById('boot'))
+  if (!hasWebGL2()) {
+    loader.remove()
+    showFatal(
+      '「非対応」',
+      'REALITY UNAVAILABLE',
+      'THE YELLOW ROOMS needs WebGL2 and this browser or device does not provide it.<br/>Update your browser or enable hardware acceleration.'
+    )
+    return
+  }
+
+  // Each stage paints its label before the work it names blocks the thread.
+  loader.stage('renderer')
+  await painted()
+  let engine
+  try {
+    engine = new Engine(document.getElementById('app'))
+    // expose for debugging in the console
+    window.__game = engine
+    // The title waits under the boot screen: its arrival (tubes powering on,
+    // the menu rising) plays when the screen lifts, not unseen behind it.
+    engine.ui.setBooting(true)
+    loader.stage('lights')
+    await painted()
+    engine.start()
+  } catch (err) {
+    loader.remove()
+    showBootFailure(err)
+    return
+  }
+  await settleWithin(engine.whenFirstFrame(), FIRST_FRAME_WAIT_MS)
+
+  loader.stage('furnish')
+  await settleWithin(engine.whenAssetsSettled(), ASSET_WAIT_MS)
+  await loader.finish(() => engine.ui.setBooting(false))
+}
+
+boot()

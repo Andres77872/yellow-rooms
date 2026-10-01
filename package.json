@@ -21,7 +21,9 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "three": "^0.185.0"
+    "three": "^0.185.1",
+    "three-gpu-pathtracer": "0.0.25",
+    "three-mesh-bvh": "0.9.15"
   },
   "devDependencies": {
     "@types/node": "^24.13.2",

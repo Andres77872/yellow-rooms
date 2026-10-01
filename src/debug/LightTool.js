@@ -124,7 +124,7 @@ const tipFor = (label) => (LIGHT_TIPS[label] ? { title: label, text: LIGHT_TIPS[
 // Pipeline order for the GPU pass-timing table (matches _pass names in
 // DeferredRenderer.render).
 const PASS_ORDER = [
-  'gbuffer', 'flashShadow', 'ssao', 'shadow', 'gtao', 'contact', 'occResolve', 'lighting', 'exposure',
+  'gbuffer', 'flashShadow', 'ssao', 'shadow', 'gtao', 'contact', 'occResolve', 'lighting', 'pathTrace', 'exposure',
   'volumetric', 'bloom', 'composite', 'outline', 'motionBlur', 'grade', 'fxaa', 'signal',
 ]
 

@@ -262,7 +262,14 @@ export function volFrag({ haze = false } = {}) {
             vec3 toL = gl.pos - Sw;
             float dl = length(toL);
             float vis = gl.vis;
-            if (k < uTraceLights && gl.partial && gl.sameFloor && t < uTraceDist) {
+            // Gate on the CHEAP weight before paying for a trace, like the
+            // fallback below: flicker x attenuation bounds w from above (the
+            // traced vis and the emitter factor are both <= 1), so a sample
+            // it rejects would have been dropped at the epsilon anyway and
+            // the image is unchanged. List entries whose fixture has faded
+            // out at this step no longer pay for a wall trace.
+            bool worth = gl.flicker * lampAtt(dl, uLampRange) > ${glslFloat(VOL_CONTRIB_EPS)};
+            if (worth && k < uTraceLights && gl.partial && gl.sameFloor && t < uTraceDist) {
               bool fresh = k == 0 ? tCell0 == cell : tCell1 == cell;
               if (traceStep || !fresh) {
                 // The pass's only gridTrace call site.
