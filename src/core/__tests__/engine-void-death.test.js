@@ -99,6 +99,8 @@ vi.mock('../../world/ChunkManager.js', () => ({
         this.exit = { cx, cy, cz, lx, lz }
       })
       this.reset = vi.fn()
+      this.setSpawn = vi.fn()
+      this.upgradeFurnitureModels = vi.fn()
       this.setRenderDetailProfile = vi.fn()
       this.updateVisibility = vi.fn()
       this.update = vi.fn()
@@ -235,6 +237,7 @@ vi.mock('../DebugOverlay.js', () => ({
   DebugOverlay: class {
     constructor() {
       this.update = vi.fn()
+      this.setMode = vi.fn()
       this.dispose = vi.fn()
     }
   },

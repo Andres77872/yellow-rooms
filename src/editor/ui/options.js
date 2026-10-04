@@ -1,6 +1,7 @@
 import { applyTip } from '../../debug/widgets.js'
 import { roomRoleLabel } from '../../debug/mapInspect.js'
 import { SPACE_ROLE_NONE } from '../../world/mapTypes.js'
+import { PROP_NAMES } from '../../world/props/index.js'
 
 // Shared panel controls.
 
@@ -10,6 +11,8 @@ export const FURN_NAMES = {
   12: 'bed', 13: 'nightstand', 14: 'wardrobe', 15: 'toilet', 16: 'sink',
   17: 'tub', 18: 'counter', 19: 'stove', 20: 'fridge', 21: 'tv',
   22: 'armchair', 23: 'washer',
+  // Liminal-map prop packs (world/props), after the furniture in id order.
+  ...PROP_NAMES,
 }
 
 export const ROLE_OPTIONS = [

@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { Preview3D, applyPreviewPanelLook } from '../ui/Preview3D.js'
 import { PANEL_GLOW } from '../../world/constants.js'
 import { LOOK_ORDER, LOOK_PROFILES } from '../../render/lookProfile.js'
+import { WebGLGeometries } from 'three/src/renderers/webgl/WebGLGeometries.js'
 
 // The look preview has no frame loop, so the look's fixture brightness and
 // troffer face (which the game sets every frame in Engine._updateFlicker)
@@ -61,5 +62,43 @@ describe('editor look preview panel', () => {
     p.render()
     expect(materials.panel.uniforms.uIntensity.value).toBeCloseTo(0.92 * PANEL_GLOW * lights(to).panelGlow, 9)
     expect(materials.panel.uniforms.uPanelPattern.value).toBe(lights(to).panelPattern)
+  })
+})
+
+// The model library is shared by every preview; each preview's renderer adds
+// a 'dispose' listener to a library geometry the first time it draws it, and
+// that listener holds the renderer's GL context and buffers.
+describe('editor preview dispose', () => {
+  it("releases the shared models' hold on its renderer", () => {
+    const shared = new THREE.BoxGeometry()
+    const freed = []
+    // three's own per-renderer geometry tracker, on a stub context.
+    const gl = {}
+    const attributes = { remove: (a) => freed.push(a) }
+    const tracker = WebGLGeometries(gl, attributes, { memory: { geometries: 0 } }, { releaseStatesOfGeometry() {} })
+    tracker.get(new THREE.Object3D(), shared) // the renderer's first draw
+    expect(shared._listeners.dispose).toHaveLength(1)
+    const p = Object.create(Preview3D.prototype)
+    let rendererDisposed = false
+    Object.assign(p, {
+      built: new Map(),
+      game: null,
+      geom: {},
+      materials: {},
+      models: { geometries: new Map([['desk', shared]]) },
+      renderer: {
+        dispose: () => {
+          // The geometries are released before the context goes.
+          expect(shared._listeners.dispose ?? []).toHaveLength(0)
+          rendererDisposed = true
+        },
+        domElement: { remove() {} },
+      },
+    })
+    p.dispose()
+    expect(rendererDisposed).toBe(true)
+    expect(freed).toContain(shared.attributes.position)
+    // The CPU data stays in the library for the next preview.
+    expect(shared.attributes.position.count).toBeGreaterThan(0)
   })
 })

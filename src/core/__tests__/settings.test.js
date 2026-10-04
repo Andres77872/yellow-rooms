@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   Settings,
   DEFAULTS,
+  FPS_MONITOR_MODES,
   FRAME_LIMITS,
   PATH_TRACER_MODES,
   SENS_DEFAULT,
@@ -259,5 +260,57 @@ describe('frame rate limit setting', () => {
   it('is not a graphics key: presets never touch it', () => {
     expect(GRAPHICS_KEYS).not.toContain('frameLimit')
     for (const preset of Object.values(GRAPHICS_PRESETS)) expect('frameLimit' in preset).toBe(false)
+  })
+})
+
+describe('FPS monitor setting', () => {
+  beforeEach(() => vi.unstubAllGlobals())
+
+  it('is off by default and persists any mode', () => {
+    expect(DEFAULTS.fpsMonitor).toBe('off')
+    const store = stubStorage()
+    const s = new Settings()
+    expect(s.get('fpsMonitor')).toBe('off')
+    for (const m of FPS_MONITOR_MODES) expect(s.set('fpsMonitor', m)).toBe(m)
+    expect(saved(store).fpsMonitor).toBe('stats')
+    expect(new Settings().get('fpsMonitor')).toBe('stats')
+  })
+
+  it('coerces junk (old booleans, unknown modes) back to off', () => {
+    stubStorage({ fpsMonitor: true })
+    const s = new Settings()
+    expect(s.get('fpsMonitor')).toBe('off')
+    expect(s.set('fpsMonitor', 'full')).toBe('off')
+  })
+
+  it('is not a graphics key: presets never touch it', () => {
+    expect(GRAPHICS_KEYS).not.toContain('fpsMonitor')
+    for (const preset of Object.values(GRAPHICS_PRESETS)) expect('fpsMonitor' in preset).toBe(false)
+  })
+})
+
+describe('Experimental maps setting', () => {
+  beforeEach(() => vi.unstubAllGlobals())
+
+  it('is off by default and persists the opt-in', () => {
+    expect(DEFAULTS.experimentalMaps).toBe(false)
+    const store = stubStorage()
+    const s = new Settings()
+    expect(s.get('experimentalMaps')).toBe(false)
+    expect(s.set('experimentalMaps', true)).toBe(true)
+    expect(saved(store).experimentalMaps).toBe(true)
+    expect(new Settings().get('experimentalMaps')).toBe(true)
+  })
+
+  it('coerces junk back to off', () => {
+    stubStorage({ experimentalMaps: 'yes' })
+    const s = new Settings()
+    expect(s.get('experimentalMaps')).toBe(false)
+    expect(s.set('experimentalMaps', 1)).toBe(false)
+  })
+
+  it('is not a graphics key: presets never touch it', () => {
+    expect(GRAPHICS_KEYS).not.toContain('experimentalMaps')
+    for (const preset of Object.values(GRAPHICS_PRESETS)) expect('experimentalMaps' in preset).toBe(false)
   })
 })

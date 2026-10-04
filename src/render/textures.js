@@ -1,6 +1,7 @@
 import * as THREE from 'three'
-import { hashStr } from '../world/core/hash.js'
 import { surfaceStyle } from './surfaces.js'
+import { DESIGN, canvas, rand, seedTextureNoise, softBlots, speckle, textureSeed, wallGradient } from './texturePaint.js'
+import { CEILING_STYLES, FLOOR_STYLES, WALL_STYLES } from './textureStyles.js'
 
 // All surface albedo is generated procedurally on a <canvas> — zero asset
 // files. Anime-backrooms art direction: CLEAN flat fields with sparse, soft
@@ -13,38 +14,9 @@ import { surfaceStyle } from './surfaces.js'
 // family renders its own surface language: office carpet/wallpaper/tile,
 // sewer concrete/brick/vault, tower tile/panel, lattice deck/steel.
 
-function canvas(size = 256) {
-  const c = document.createElement('canvas')
-  c.width = c.height = size
-  return c
-}
-
-// Seeded texture noise (engine-improvement S0). Every generator used to draw
-// from Math.random(), so the same seed and view produced different pixels on
-// each page load and no screenshot could be compared against another. The
-// stream is now keyed by the surface slot and its palette spec: a family's
-// carpet is identical on every boot, while two families (or the floor and
-// ceiling of one family) still get independent speckle.
-function mulberry32(seed) {
-  let a = seed >>> 0
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0
-    let t = a
-    t = Math.imul(t ^ (t >>> 15), t | 1)
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
-
-let rand = mulberry32(1)
-
-export function textureSeed(slot, spec) {
-  return hashStr(`${slot}|${spec?.style ?? ''}|${spec?.base ?? ''}`)
-}
-
-function seedTextureNoise(slot, spec) {
-  rand = mulberry32(textureSeed(slot, spec))
-}
+// Painting kit (seeded noise, speckle, blots, wall gradient) is shared with
+// the variant styles: texturePaint.js.
+export { textureSeed }
 
 function finish(c, repeat, aniso) {
   const tex = new THREE.CanvasTexture(c)
@@ -54,67 +26,6 @@ function finish(c, repeat, aniso) {
   tex.anisotropy = aniso
   tex.needsUpdate = true
   return tex
-}
-
-// Helper: seeded speckle (visual only, not gameplay; see seedTextureNoise).
-function speckle(ctx, size, count, colors, min, max) {
-  for (let i = 0; i < count; i++) {
-    ctx.fillStyle = colors[(rand() * colors.length) | 0]
-    const r = min + rand() * (max - min)
-    ctx.globalAlpha = 0.25 + rand() * 0.5
-    ctx.beginPath()
-    ctx.arc(rand() * size, rand() * size, r, 0, Math.PI * 2)
-    ctx.fill()
-  }
-  ctx.globalAlpha = 1
-}
-
-// Soft painted wear: feathered, slightly elongated blots (radial gradients,
-// low alpha) instead of hard discs — at the new darker exposure the old
-// crisp stains read as polka dots rather than traffic wear. Each blot is also
-// drawn at its wrapped offsets, so one crossing the tile edge never leaves a
-// seam in the repeat.
-function softBlots(ctx, size, count, colors, min, max, alpha = 0.22) {
-  for (let i = 0; i < count; i++) {
-    const color = colors[(rand() * colors.length) | 0]
-    const r = min + rand() * (max - min)
-    const x = rand() * size
-    const y = rand() * size
-    const stretch = 1 + rand() * 0.8
-    const angle = rand() * Math.PI
-    ctx.globalAlpha = alpha * (0.5 + rand() * 0.5)
-    for (const ox of [-size, 0, size]) {
-      for (const oy of [-size, 0, size]) {
-        const cx = x + ox
-        const cy = y + oy
-        if (cx + r * stretch < 0 || cx - r * stretch > size || cy + r * stretch < 0 || cy - r * stretch > size) continue
-        ctx.save()
-        ctx.translate(cx, cy)
-        ctx.rotate(angle)
-        ctx.scale(stretch, 1)
-        const g = ctx.createRadialGradient(0, 0, 0, 0, 0, r)
-        g.addColorStop(0, color)
-        g.addColorStop(1, 'rgba(0,0,0,0)')
-        ctx.fillStyle = g
-        ctx.beginPath()
-        ctx.arc(0, 0, r, 0, Math.PI * 2)
-        ctx.fill()
-        ctx.restore()
-      }
-    }
-  }
-  ctx.globalAlpha = 1
-}
-
-// Soft painted top-light / floor-shade vertical gradient (background-art
-// shading, not grime) shared by every wall style.
-function wallGradient(ctx, s, spec) {
-  const g = ctx.createLinearGradient(0, 0, 0, s)
-  g.addColorStop(0, spec.topLight ?? 'rgba(255,255,255,0.10)')
-  g.addColorStop(0.6, 'rgba(0,0,0,0)')
-  g.addColorStop(1, spec.floorShade ?? 'rgba(0,0,0,0.22)')
-  ctx.fillStyle = g
-  ctx.fillRect(0, 0, s, s)
 }
 
 // ---------------------------------------------------------------------------
@@ -161,10 +72,13 @@ function floorTile(ctx, s, spec) {
   ctx.lineWidth = 3
   ctx.strokeRect(0, 0, s, s)
   ctx.beginPath()
-  ctx.moveTo(s / 2, 0)
-  ctx.lineTo(s / 2, s)
-  ctx.moveTo(0, s / 2)
-  ctx.lineTo(s, s / 2)
+  const n = spec.tiles ?? 2
+  for (let i = 1; i < n; i++) {
+    ctx.moveTo((s * i) / n, 0)
+    ctx.lineTo((s * i) / n, s)
+    ctx.moveTo(0, (s * i) / n)
+    ctx.lineTo(s, (s * i) / n)
+  }
   ctx.stroke()
 }
 
@@ -185,18 +99,17 @@ function floorDeck(ctx, s, spec) {
   ctx.globalAlpha = 1
 }
 
-export function floorTexture(aniso, spec) {
-  const s = 256
-  const c = canvas(s)
-  const ctx = c.getContext('2d')
-  seedTextureNoise('floor', spec)
-  ctx.fillStyle = spec.base
-  ctx.fillRect(0, 0, s, s)
+function paintFloor(ctx, s, spec) {
+  const variant = FLOOR_STYLES[spec.style]
+  if (variant) return variant(ctx, s, spec)
   if (spec.style === 'concrete') floorConcrete(ctx, s, spec)
   else if (spec.style === 'tile') floorTile(ctx, s, spec)
   else if (spec.style === 'deck') floorDeck(ctx, s, spec)
   else floorCarpet(ctx, s, spec)
-  return finish(c, 1, aniso)
+}
+
+export function floorTexture(aniso, spec, size = DESIGN) {
+  return finish(paintSurfaceCanvas('floor', spec, size), 1, aniso)
 }
 
 // ---------------------------------------------------------------------------
@@ -285,18 +198,17 @@ function wallSteel(ctx, s, spec) {
   speckle(ctx, s, 60, spec.flecks, 0.5, 1.4)
 }
 
-export function wallTexture(aniso, spec) {
-  const s = 256
-  const c = canvas(s)
-  const ctx = c.getContext('2d')
-  seedTextureNoise('wall', spec)
-  ctx.fillStyle = spec.base
-  ctx.fillRect(0, 0, s, s)
+function paintWall(ctx, s, spec) {
+  const variant = WALL_STYLES[spec.style]
+  if (variant) return variant(ctx, s, spec)
   if (spec.style === 'brick') wallBrick(ctx, s, spec)
   else if (spec.style === 'panel') wallPanel(ctx, s, spec)
   else if (spec.style === 'steel') wallSteel(ctx, s, spec)
   else wallWallpaper(ctx, s, spec)
-  return finish(c, 1, aniso)
+}
+
+export function wallTexture(aniso, spec, size = DESIGN) {
+  return finish(paintSurfaceCanvas('wall', spec, size), 1, aniso)
 }
 
 // ---------------------------------------------------------------------------
@@ -341,17 +253,32 @@ function ceilingDeck(ctx, s, spec) {
   ctx.globalAlpha = 1
 }
 
-export function ceilingTexture(aniso, spec) {
-  const s = 256
-  const c = canvas(s)
-  const ctx = c.getContext('2d')
-  seedTextureNoise('ceiling', spec)
-  ctx.fillStyle = spec.base
-  ctx.fillRect(0, 0, s, s)
+function paintCeiling(ctx, s, spec) {
+  const variant = CEILING_STYLES[spec.style]
+  if (variant) return variant(ctx, s, spec)
   if (spec.style === 'vault') ceilingVault(ctx, s, spec)
   else if (spec.style === 'deck') ceilingDeck(ctx, s, spec)
   else ceilingTile(ctx, s, spec)
-  return finish(c, 1, aniso)
+}
+
+export function ceilingTexture(aniso, spec, size = DESIGN) {
+  return finish(paintSurfaceCanvas('ceiling', spec, size), 1, aniso)
+}
+
+const PAINTERS = { floor: paintFloor, wall: paintWall, ceiling: paintCeiling }
+
+// Paint one surface recipe (a familyPalette spec or a world surface-set
+// layer) onto a fresh `size`^2 canvas. Painters work in the 256-unit design
+// space, so a 512 canvas is the same pattern at twice the texel density.
+export function paintSurfaceCanvas(slot, spec, size = DESIGN) {
+  const c = canvas(size)
+  const ctx = c.getContext('2d')
+  seedTextureNoise(slot, spec)
+  if (size !== DESIGN) ctx.scale(size / DESIGN, size / DESIGN)
+  ctx.fillStyle = spec.base
+  ctx.fillRect(0, 0, DESIGN, DESIGN)
+  PAINTERS[slot](ctx, DESIGN, spec)
+  return c
 }
 
 // ---------------------------------------------------------------------------
@@ -369,100 +296,9 @@ export function ceilingTexture(aniso, spec) {
 // Rows are written bottom-up so texel (0,0) matches the flipY canvas albedo.
 export function surfaceDetailTexture(albedo, spec) {
   const src = albedo?.image
-  const size = src?.width ?? 0
-  const ctx = src?.getContext?.('2d')
-  if (!size || !ctx) return null
-  const style = surfaceStyle(spec?.style)
-  const px = ctx.getImageData(0, 0, size, size).data
-  const n = size * size
-  // Luminance in data-row order (row 0 = bottom = v 0).
-  const lum = new Float32Array(n)
-  for (let y = 0; y < size; y++) {
-    const srcRow = (size - 1 - y) * size
-    for (let x = 0; x < size; x++) {
-      const i = (srcRow + x) * 4
-      lum[y * size + x] = (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255
-    }
-  }
-  const wrap = (v) => (v + size) % size
-  // Separable 3-tap blur twice: removes single-pixel speckle spikes that would
-  // otherwise shimmer as normal-map noise.
-  const tmp = new Float32Array(n)
-  const blur = (from, to, dx, dy) => {
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        to[y * size + x] =
-          0.25 * from[wrap(y - dy) * size + wrap(x - dx)] +
-          0.5 * from[y * size + x] +
-          0.25 * from[wrap(y + dy) * size + wrap(x + dx)]
-      }
-    }
-  }
-  const h = new Float32Array(n)
-  blur(lum, tmp, 1, 0)
-  blur(tmp, h, 0, 1)
-  blur(h, tmp, 1, 0)
-  blur(tmp, h, 0, 1)
-  // High-pass: the albedo also carries PAINTED low-frequency shading (the
-  // wallpaper's top-light/floor-shade gradient, soft stain blots). Read as
-  // height, those become per-tile slopes that tilt whole walls and stripe
-  // the screen-space AO/contact passes with the tile repeat. Subtracting a
-  // wide wrapped box blur keeps only local relief — seams, grout, mortar,
-  // rivets, fibre speckle.
-  const R = 12
-  const wide = new Float32Array(n)
-  // Sliding-window box sum along rows (dx) or columns (dy): O(1) per texel.
-  const boxPass = (from, to, horizontal) => {
-    const at = (line, i) => (horizontal ? line * size + wrap(i) : wrap(i) * size + line)
-    for (let line = 0; line < size; line++) {
-      let acc = 0
-      for (let k = -R; k <= R; k++) acc += from[at(line, k)]
-      for (let i = 0; i < size; i++) {
-        to[at(line, i)] = acc / (2 * R + 1)
-        acc += from[at(line, i + R + 1)] - from[at(line, i - R)]
-      }
-    }
-  }
-  boxPass(h, tmp, true)
-  boxPass(tmp, wide, false)
-  for (let i = 0; i < n; i++) h[i] -= wide[i]
-  let lo = Infinity
-  let hi = -Infinity
-  let mean = 0
-  for (let i = 0; i < n; i++) {
-    lo = Math.min(lo, h[i])
-    hi = Math.max(hi, h[i])
-    mean += h[i]
-  }
-  mean /= n
-  const span = Math.max(hi - lo, 1e-4)
-  const data = new Uint8Array(n * 4)
-  const k = style.normalStrength * 6
-  const r0 = style.roughness
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const i = y * size + x
-      const dhdu = (h[y * size + wrap(x + 1)] - h[y * size + wrap(x - 1)]) * 0.5
-      const dhdv = (h[wrap(y + 1) * size + x] - h[wrap(y - 1) * size + x]) * 0.5
-      let nx = -dhdu * k
-      let ny = -dhdv * k
-      const inv = 1 / Math.sqrt(nx * nx + ny * ny + 1)
-      nx *= inv
-      ny *= inv
-      // Relative height: 0 in the deepest recess, 1 on the proudest face.
-      const rel = (h[i] - lo) / span
-      const below = Math.max(0, (mean - h[i]) / span) * 2
-      const rough = r0 +
-        style.lowRoughness * Math.min(1, below) +
-        style.roughnessVar * (rel - 0.5) * 2 * -1
-      const cavity = 1 - style.cavity * Math.min(1, below)
-      const o = i * 4
-      data[o] = Math.round((nx * 0.5 + 0.5) * 255)
-      data[o + 1] = Math.round((ny * 0.5 + 0.5) * 255)
-      data[o + 2] = Math.round(Math.min(1, Math.max(0.045, rough)) * 255)
-      data[o + 3] = Math.round(Math.min(1, Math.max(0, cavity)) * 255)
-    }
-  }
+  const data = surfaceDetailData(src, spec)
+  if (!data) return null
+  const size = src.width
   const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat, THREE.UnsignedByteType)
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping
   tex.colorSpace = THREE.NoColorSpace
@@ -472,4 +308,131 @@ export function surfaceDetailTexture(albedo, spec) {
   tex.anisotropy = albedo.anisotropy ?? 1
   tex.needsUpdate = true
   return tex
+}
+
+// The detail texels of one painted surface canvas (RGBA8, rows bottom-up).
+// Kernel radii and the height-to-slope gain scale with the canvas size, so a
+// 512 canvas yields the same physical relief as the 256 design.
+export function surfaceDetailData(src, spec, pixels = null) {
+  const size = src?.width ?? 0
+  const ctx = src?.getContext?.('2d')
+  if (!size || !ctx) return null
+  const style = surfaceStyle(spec?.style)
+  const px = pixels ?? ctx.getImageData(0, 0, size, size).data
+  const n = size * size
+  const scale = size / DESIGN
+  // Luminance in data-row order (row 0 = bottom = v 0).
+  const lum = new Float32Array(n)
+  for (let y = 0; y < size; y++) {
+    const srcRow = (size - 1 - y) * size
+    for (let x = 0; x < size; x++) {
+      const i = (srcRow + x) * 4
+      lum[y * size + x] = (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255
+    }
+  }
+  // Wrapped neighbour tables: the inner loops index through these instead of
+  // calling a modulo closure per texel (the detail pass dominated the cost
+  // of painting a world's surface set).
+  const step = Math.max(1, Math.round(scale))
+  const prev = new Int32Array(size)
+  const next = new Int32Array(size)
+  const prev1 = new Int32Array(size)
+  const next1 = new Int32Array(size)
+  for (let i = 0; i < size; i++) {
+    prev[i] = (i - step + size) % size
+    next[i] = (i + step) % size
+    prev1[i] = (i - 1 + size) % size
+    next1[i] = (i + 1) % size
+  }
+  // Separable 3-tap blur twice: removes single-pixel speckle spikes that would
+  // otherwise shimmer as normal-map noise.
+  const tmp = new Float32Array(n)
+  const blurX = (from, to) => {
+    for (let y = 0; y < size; y++) {
+      const r = y * size
+      for (let x = 0; x < size; x++) to[r + x] = 0.25 * from[r + prev[x]] + 0.5 * from[r + x] + 0.25 * from[r + next[x]]
+    }
+  }
+  const blurY = (from, to) => {
+    for (let y = 0; y < size; y++) {
+      const r = y * size
+      const rp = prev[y] * size
+      const rn = next[y] * size
+      for (let x = 0; x < size; x++) to[r + x] = 0.25 * from[rp + x] + 0.5 * from[r + x] + 0.25 * from[rn + x]
+    }
+  }
+  const h = new Float32Array(n)
+  blurX(lum, tmp)
+  blurY(tmp, h)
+  blurX(h, tmp)
+  blurY(tmp, h)
+  // High-pass: the albedo also carries PAINTED low-frequency shading (the
+  // wallpaper's top-light/floor-shade gradient, soft stain blots). Read as
+  // height, those become per-tile slopes that tilt whole walls and stripe
+  // the screen-space AO/contact passes with the tile repeat. Subtracting a
+  // wide wrapped box blur keeps only local relief — seams, grout, mortar,
+  // rivets, fibre speckle.
+  const R = Math.round(12 * scale)
+  const wide = new Float32Array(n)
+  const norm = 1 / (2 * R + 1)
+  // Sliding-window box sums (rows, then columns): O(1) per texel.
+  for (let y = 0; y < size; y++) {
+    const r = y * size
+    let acc = 0
+    for (let k = -R; k <= R; k++) acc += h[r + ((k + size) % size)]
+    for (let x = 0; x < size; x++) {
+      tmp[r + x] = acc * norm
+      acc += h[r + ((x + R + 1) % size)] - h[r + ((x - R + size) % size)]
+    }
+  }
+  for (let x = 0; x < size; x++) {
+    let acc = 0
+    for (let k = -R; k <= R; k++) acc += tmp[((k + size) % size) * size + x]
+    for (let y = 0; y < size; y++) {
+      wide[y * size + x] = acc * norm
+      acc += tmp[((y + R + 1) % size) * size + x] - tmp[((y - R + size) % size) * size + x]
+    }
+  }
+  let lo = Infinity
+  let hi = -Infinity
+  let mean = 0
+  for (let i = 0; i < n; i++) {
+    const v = h[i] - wide[i]
+    h[i] = v
+    if (v < lo) lo = v
+    if (v > hi) hi = v
+    mean += v
+  }
+  mean /= n
+  const span = Math.max(hi - lo, 1e-4)
+  const data = new Uint8Array(n * 4)
+  const k = style.normalStrength * 6 * scale
+  const r0 = style.roughness
+  const invSpan = 1 / span
+  for (let y = 0; y < size; y++) {
+    const r = y * size
+    const rp = prev1[y] * size
+    const rn = next1[y] * size
+    for (let x = 0; x < size; x++) {
+      const i = r + x
+      const dhdu = (h[r + next1[x]] - h[r + prev1[x]]) * 0.5
+      const dhdv = (h[rn + x] - h[rp + x]) * 0.5
+      let nx = -dhdu * k
+      let ny = -dhdv * k
+      const inv = 1 / Math.sqrt(nx * nx + ny * ny + 1)
+      nx *= inv
+      ny *= inv
+      // Relative height: 0 in the deepest recess, 1 on the proudest face.
+      const rel = (h[i] - lo) * invSpan
+      const below = Math.min(1, Math.max(0, (mean - h[i]) * invSpan) * 2)
+      const rough = r0 + style.lowRoughness * below - style.roughnessVar * (rel - 0.5) * 2
+      const cavity = 1 - style.cavity * below
+      const o = i * 4
+      data[o] = (nx * 0.5 + 0.5) * 255 + 0.5
+      data[o + 1] = (ny * 0.5 + 0.5) * 255 + 0.5
+      data[o + 2] = Math.min(1, Math.max(0.045, rough)) * 255 + 0.5
+      data[o + 3] = Math.min(1, Math.max(0, cavity)) * 255 + 0.5
+    }
+  }
+  return data
 }

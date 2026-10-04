@@ -12,6 +12,7 @@ import {
 import {
   CELL,
   LAMP_FLICKER_AMP,
+  LAMP_BAD_CHANCE,
   LAMP_BAD_LO,
   LAMP_BAD_RATE,
   LAMP_SAFE_BAD_LO,
@@ -101,6 +102,32 @@ describe('lampCharacter', () => {
         expect(p).toEqual(t)
       }
     }
+  })
+
+  // In the game the bad answer is decided once per fixture from the wear of
+  // its room and circuit (lampIsBad, see lamp-decay.test.js) and handed to
+  // every consumer; the position lottery is only the no-context fallback.
+  it('an explicit bad answer overrides the position lottery everywhere', () => {
+    const [gx, gz, gcy] = SPOTS.find(([x, z, cy]) => !isBadTube(x, z, cy))
+    const [bx, bz, bcy] = badTubes(1)[0]
+    // Defaults are the old flat lottery; the odds argument decides otherwise.
+    expect(isBadTube(gx, gz, gcy, LAMP_BAD_CHANCE)).toBe(false)
+    expect(isBadTube(gx, gz, gcy, 1)).toBe(true)
+    expect(isBadTube(bx, bz, bcy, 0)).toBe(false)
+    // A lottery-good spot tagged bad strobes; a lottery-bad spot tagged good
+    // breathes like any healthy tube.
+    const strobe = []
+    for (let t = 0; t < 3; t += 0.061) {
+      strobe.push(lampFlicker(gx, gz, gcy, t, FLICKER_FULL, true))
+      const calm = lampFlicker(bx, bz, bcy, t, FLICKER_FULL, false)
+      expect(calm).toBeGreaterThanOrEqual(1 - LAMP_FLICKER_AMP - 1e-12)
+      expect(calm).toBeLessThanOrEqual(1)
+    }
+    expect(Math.min(...strobe)).toBeGreaterThanOrEqual(LAMP_BAD_LO - 1e-12)
+    expect(Math.max(...strobe) - Math.min(...strobe)).toBeGreaterThan(0.05)
+    // The panel browns with the same answer.
+    expect(lampPanelTint(gx, gz, gcy, [0, 0, 0], 0, true)[0]).toBeLessThan(0.5)
+    expect(lampPanelTint(bx, bz, bcy, [0, 0, 0], 0, false)).toEqual(lampTint(bx, bz, bcy, [0, 0, 0]))
   })
 })
 
@@ -238,6 +265,16 @@ describe('reduce-flicker profile (photosensitivity)', () => {
       worst = Math.max(worst, maxFlashesPerSecond(s, 0.1))
     }
     expect(worst).toBeGreaterThan(3)
+  })
+
+  it('a tube tagged bad by wear obeys the same caps as a lottery-bad one', () => {
+    const good = SPOTS.filter(([x, z, cy]) => !isBadTube(x, z, cy)).slice(0, 8)
+    for (const [x, z, cy] of good) {
+      const s = trace((t) => lampFlicker(x, z, cy, t, FLICKER_SAFE, true), 12)
+      expect(maxStepsPerSecond(s)).toBeLessThanOrEqual(LAMP_SAFE_BAD_RATE)
+      expect(swing(s)).toBeLessThan(0.1)
+      expect(maxFlashesPerSecond(s, 0.1)).toBe(0)
+    }
   })
 
   it('healthy tubes are untouched by the profile', () => {

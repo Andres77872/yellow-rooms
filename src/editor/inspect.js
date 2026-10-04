@@ -93,8 +93,10 @@ export function inspectCell(source, gx, cy, gz) {
 
   const lamp = d.lamps.find((l) => l.lx === lx && l.lz === lz)
   if (lamp) lines.push(`lamp ${lamp.lit ? 'lit' : 'dead'}`)
-  const furn = d.furniture.find((f) => f.lx === lx && f.lz === lz)
-  if (furn) lines.push(`furniture kind ${furn.kind} · ${furn.w.toFixed(2)}×${furn.d.toFixed(2)} · facing ${furn.facing}`)
+  // A cell may hold several records (stacked pieces): one line each.
+  const furn = d.furniture.filter((f) => f.lx === lx && f.lz === lz)
+  if (furn.length > 1) lines.push(`furniture ${furn.length} pieces (stacked)`)
+  for (const f of furn) lines.push(`${furn.length > 1 ? '  ' : ''}furniture kind ${f.kind} · ${f.w.toFixed(2)}×${f.d.toFixed(2)} · facing ${f.facing}${furn.length > 1 ? ` · at ${f.x.toFixed(2)},${f.z.toFixed(2)}` : ''}`)
   if (d.exit && d.exit.lx === lx && d.exit.lz === lz) lines.push('EXIT')
 
   // Chunk-level descriptors.

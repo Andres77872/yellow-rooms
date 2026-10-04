@@ -1,20 +1,16 @@
-import { CELL, CHUNK } from '../world/constants.js'
 import {
   CELL_CORRIDOR,
   CELL_LOBBY,
   CELL_OPEN,
-  CELL_ROOM,
-  COLUMN_STANDARD,
+  FACING,
+  FloorPlan,
   PASSAGE_DOOR,
-  PASSAGE_OPEN,
-  PASSAGE_WALL,
   PASSAGE_WIDE,
   SPACE_ROLE_NONE,
   SPACE_ROLE_OFFICE,
   SPACE_ROLE_STORAGE,
-} from '../world/mapTypes.js'
-import { hash3i } from '../world/core/hash.js'
-import { PIECE_DIMS } from '../world/rooms/furnish.js'
+  rng,
+} from './kinds/floorPlan.js'
 import {
   FURN_BED,
   FURN_CABINET,
@@ -31,6 +27,7 @@ import {
   stampStairwell,
 } from '../world/structures/authored.js'
 import { seedFromText } from './EditorMap.js'
+import { LIMINAL_KINDS } from './kinds/index.js'
 
 // Prototype map kinds — the "kind lab". Each builds a complete, finite,
 // deterministic map (seed → bytes) into an editor document from the same
@@ -56,131 +53,8 @@ import { seedFromText } from './EditorMap.js'
 // plan does not open carries COLUMN_STANDARD and edges between the open plan
 // and mass are walls.
 
-const FACING = { S: 0, N: 1, E: 2, W: 3 } // piece fronts: +z, −z, +x, −x
-const WALL_TO_FRONT = { N: FACING.S, S: FACING.N, W: FACING.E, E: FACING.W }
-const THICK = 0.16
-
-// --- floor plan compiler ------------------------------------------------------
-
-class FloorPlan {
-  constructor(region) {
-    this.region = region // global cells {x0, z0, x1, z1}
-    this.cells = new Map() // 'gx,gz' -> {kind, spaceId, role}
-    this.edges = new Map() // 'v|h:gx,gz' -> {wall, passage}
-    this.lamps = []
-    this.pieces = []
-    this.cols = []
-  }
-
-  open(gx, gz, kind = CELL_CORRIDOR, spaceId = 0, role = SPACE_ROLE_NONE) {
-    this.cells.set(`${gx},${gz}`, { kind, spaceId, role })
-  }
-
-  rect(r, kind = CELL_CORRIDOR, spaceId = 0, role = SPACE_ROLE_NONE) {
-    for (let gz = r.z0; gz <= r.z1; gz++) for (let gx = r.x0; gx <= r.x1; gx++) this.open(gx, gz, kind, spaceId, role)
-  }
-
-  has(gx, gz) {
-    return this.cells.has(`${gx},${gz}`)
-  }
-
-  edge(axis, gx, gz, wall, passage) {
-    this.edges.set(`${axis}:${gx},${gz}`, { wall, passage })
-  }
-
-  // A walled room with one or more openings: `doors` are {axis, gx, gz,
-  // passage?} edges on its perimeter.
-  room(r, { spaceId, role = SPACE_ROLE_NONE, doors = [], lamp = null }) {
-    this.rect(r, CELL_ROOM, spaceId, role)
-    for (let gz = r.z0; gz <= r.z1; gz++) {
-      this.edge('v', r.x0, gz, 1, PASSAGE_WALL)
-      this.edge('v', r.x1 + 1, gz, 1, PASSAGE_WALL)
-    }
-    for (let gx = r.x0; gx <= r.x1; gx++) {
-      this.edge('h', gx, r.z0, 1, PASSAGE_WALL)
-      this.edge('h', gx, r.z1 + 1, 1, PASSAGE_WALL)
-    }
-    for (const d of doors) this.edge(d.axis, d.gx, d.gz, 0, d.passage ?? PASSAGE_DOOR)
-    if (lamp !== null) this.lamps.push({ gx: Math.floor((r.x0 + r.x1) / 2), gz: Math.floor((r.z0 + r.z1) / 2), lit: lamp })
-  }
-
-  lamp(gx, gz, lit = true) {
-    this.lamps.push({ gx, gz, lit })
-  }
-
-  column(gx, gz) {
-    this.cols.push({ gx, gz })
-  }
-
-  // A piece centred in its cell, or hugging the named wall (N/S/E/W) with
-  // its front facing away from it.
-  piece(gx, gz, kind, { wall = null, facing = FACING.S } = {}) {
-    const front = wall ? WALL_TO_FRONT[wall] : facing
-    this.pieces.push({ gx, gz, kind, front, wall })
-  }
-
-  // Every cell of every chunk the region touches is written (unused cells
-  // become mass), and an edge is written only where it borders the plan, so
-  // compiling never materializes a stray neighbour chunk.
-  compile(map, cy) {
-    const x0 = Math.floor(this.region.x0 / CHUNK) * CHUNK
-    const z0 = Math.floor(this.region.z0 / CHUNK) * CHUNK
-    const x1 = (Math.floor(this.region.x1 / CHUNK) + 1) * CHUNK - 1
-    const z1 = (Math.floor(this.region.z1 / CHUNK) + 1) * CHUNK - 1
-    for (let gz = z0; gz <= z1; gz++) {
-      for (let gx = x0; gx <= x1; gx++) {
-        const c = this.cells.get(`${gx},${gz}`)
-        if (c) map.setCell(gx, cy, gz, { kind: c.kind, spaceId: c.spaceId, role: c.role, col: 0 })
-        else map.setCell(gx, cy, gz, { kind: CELL_OPEN, spaceId: 0, role: SPACE_ROLE_NONE, col: COLUMN_STANDARD })
-      }
-    }
-    const setEdge = (axis, gx, gz, a, b) => {
-      const explicit = this.edges.get(`${axis}:${gx},${gz}`)
-      let wall
-      let passage
-      if (!a && !b) {
-        // Inside the mass: clear only lines this region's chunks own.
-        const owner = axis === 'v' ? gx <= x1 : gz <= z1
-        if (!owner) return
-        ;[wall, passage] = [0, PASSAGE_OPEN]
-      } else if (explicit) ({ wall, passage } = explicit)
-      else if (a && b) [wall, passage] = [0, PASSAGE_OPEN]
-      else [wall, passage] = [1, PASSAGE_WALL]
-      if (axis === 'v') map.setWallV(gx, cy, gz, wall, passage)
-      else map.setWallH(gx, cy, gz, wall, passage)
-    }
-    for (let gz = z0; gz <= z1; gz++) {
-      for (let gx = x0; gx <= x1 + 1; gx++) setEdge('v', gx, gz, this.has(gx - 1, gz), this.has(gx, gz))
-    }
-    for (let gz = z0; gz <= z1 + 1; gz++) {
-      for (let gx = x0; gx <= x1; gx++) setEdge('h', gx, gz, this.has(gx, gz - 1), this.has(gx, gz))
-    }
-    for (const { gx, gz } of this.cols) map.setCell(gx, cy, gz, { col: COLUMN_STANDARD })
-    for (const { gx, gz, lit } of this.lamps) map.setLamp(gx, cy, gz, lit)
-    for (const p of this.pieces) addPiece(map, cy, p)
-  }
-}
-
-function addPiece(map, cy, { gx, gz, kind, front, wall }) {
-  if (map.cellAt(gx, cy, gz).col) return
-  const [w0, d0] = PIECE_DIMS[kind] ?? [1, 1]
-  const alongX = front === FACING.E || front === FACING.W
-  const w = alongX ? d0 : w0
-  const d = alongX ? w0 : d0
-  let x = (map.cellLocal(gx) + 0.5) * CELL
-  let z = (map.cellLocal(gz) + 0.5) * CELL
-  if (wall) {
-    const depth = alongX ? w : d
-    const off = CELL / 2 - THICK / 2 - depth / 2 - 0.06
-    if (wall === 'N') z -= off
-    if (wall === 'S') z += off
-    if (wall === 'W') x -= off
-    if (wall === 'E') x += off
-  }
-  map.addFurniture(gx, cy, gz, { kind, x, z, w, d, facing: front })
-}
-
-const rng = (seed, salt) => (a, b = 0) => hash3i((seed ^ salt) | 0, a | 0, b | 0, 0x51) >>> 0
+// The plan compiler and its helpers live in kinds/floorPlan.js, shared with
+// the kinds under kinds/.
 
 // --- underpass (The Exit 8) -----------------------------------------------------
 
@@ -480,17 +354,31 @@ export const PROTOTYPE_KINDS = Object.freeze([
   { id: 'mall', label: 'dead mall', family: 'hotel', floors: 3, build: buildMall },
   { id: 'hospital', label: 'hospital ward', family: 'tower', floors: 1, build: buildHospital },
   { id: 'school', label: 'school at night', family: 'office', floors: 2, build: buildSchool },
+  // Appended, never prepended: index 0 is the editor's default kind.
+  ...LIMINAL_KINDS,
 ])
 
 // Build a prototype kind into `map` (cleared first) as one undoable step.
-export function generatePrototype(map, kindId, { seed = 'lobby', ...options } = {}) {
+export function generatePrototype(map, kindId, options = {}) {
   const kind = PROTOTYPE_KINDS.find((k) => k.id === kindId)
   if (!kind) return { ok: false, error: `unknown prototype ${kindId}` }
+  return buildKind(map, kind, options)
+}
+
+// The same for a kind object that need not be registered (tests' scratch
+// kinds).
+export function buildKind(map, kind, { seed = 'lobby', ...options } = {}) {
   const numericSeed = seedFromText(seed)
   let result = null
   map.mutate(() => {
     map.clearAll()
+    // clearAll keeps the room counter; a regenerated kind must number (and so
+    // furnish) its createRoom rooms exactly as on a fresh document.
+    map.nextRoomId = 1
     map.meta.family = kind.family
+    // The kind's render palette (world/familyPalette.js MAP_PALETTES), or
+    // null for the family's own.
+    map.meta.palette = kind.palette ?? null
     map.meta.seed = numericSeed
     map.meta.name = `${kind.id}-${seed}`
     result = kind.build(map, numericSeed, options)

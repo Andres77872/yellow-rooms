@@ -1,5 +1,5 @@
 import { button, section, segmented, textBlock } from '../../debug/widgets.js'
-import { MAP_FAMILY_ORDER } from '../../world/mapFamily.js'
+import { LEGACY_FAMILIES } from '../../world/families/registry.js'
 import { FAMILY_CATALOG_PROFILES } from '../../world/config.js'
 import { familyCatalog } from '../catalogLab.js'
 import { h, keyedRender, placeholderRow, sectionOpts } from './dom.js'
@@ -30,7 +30,8 @@ export function buildCatalogPanel(app) {
     'Every structure type each map family generates (v26): landmarks plus procedural small / medium / large volumes. Find one in the world, or stamp it into the document.'))
   root.appendChild(sec.el)
 
-  const families = MAP_FAMILY_ORDER
+  // Building families only: the liminal ones are editor kinds (spec §11.4).
+  const families = LEGACY_FAMILIES
   const familyPick = segmented({
     labels: families.map(familyLabel),
     value: 0,

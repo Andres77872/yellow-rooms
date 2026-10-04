@@ -552,8 +552,11 @@ export function auditLayeredPatch(dataAt, X0, Y0, Z0, NX, NY, NZ) {
 
     // A window/rail without a descriptor for this floor's visible surface is
     // categorically stray. In particular, the bottom hall has `up` but no
-    // `down`, and must remain completely window/rail-free.
+    // `down`, and must remain completely window/rail-free. An editor kind that
+    // placed its features on purpose opts its chunk out (authoredFeatures);
+    // the atrium base-floor rule below still applies to it.
     if (
+      data.authoredFeatures === true ||
       data.structureDown ||
       (data.mapFamily === MAP_FAMILY_TOWER &&
         data.structure?.kind === 'towerSkybridge') ||

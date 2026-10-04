@@ -1,7 +1,9 @@
 # Documentation
 
 Last verified on 2026-09-26 against `WORLD_GEN_VERSION = 26` and the current
-editor/rendering sources.
+editor/rendering sources. The map editor, liminal-horror, lighting and
+furniture entries were updated on 2026-10-02 (`WORLD_GEN_VERSION = 28`) for
+the twelve liminal kind-lab prototypes and their prop packs.
 
 ## Current reference
 
@@ -28,18 +30,23 @@ editor/rendering sources.
   small / medium / large volumes), room and structure layers, cache/runtime
   behavior, audits, and current follow-ups.
 - [Lighting & Rendering Pipeline](lighting-pipeline.md) — deferred passes,
-  render-target lifetimes, lamp-field behavior, graphics/detail tiers,
-  frame-wide instrumentation, and render-scene benchmark scope.
+  render-target lifetimes, lamp-field behavior, authored lamp tints and
+  per-map palettes, graphics/detail tiers, frame-wide instrumentation, and
+  render-scene benchmark scope.
 - [Map Editor](map-editor.md) — editor routes, the reworked shell (tabs,
   tool rail, command palette, tooltips on every control, shortcut sheet), the
   structure catalog browser (find / stamp every family's types), document
   semantics, tools,
   multilevel structure review (section view, audits, drift, protection),
   authored structure templates, explore/debug mode, simulations and the
-  liminal report, the kind lab, the 2026-09-26 structure review findings, and
-  the version-1 `.yrmap` binary layout.
+  liminal report, the kind lab (17 prototype kinds; how to write one; the
+  FloorPlan helpers; per-map palettes, level labels, lamp tints, props and
+  stacked furniture cells), the 2026-09-26 structure review findings, and
+  the version-1 `.yrmap` binary layout with its optional sections.
 - [Furniture asset pipeline](furniture-pipeline.md) — Blender → GLB build for
-  the collision-real furniture kinds and the box-builder fallback contract.
+  the collision-real furniture kinds and the box-builder fallback contract,
+  the generic pack builder (`build_pack.py`, manifest schema 1), and the
+  twelve prop packs of the liminal kind-lab maps (registry, loaders, tests).
 - [Enemy asset pipeline](enemy-pipeline.md) — Blender → GLB build for the
   Stalker, Pursuer, and Husk figures: analytic skinning, authored clips, the
   AI-driven animator, and the capsule-fallback contract.
@@ -55,7 +62,13 @@ editor/rendering sources.
   properties, horror layout rules, metrics measured per family, the lighting
   lab, prototype map kinds, ranked generator recommendations, and the v26
   structure catalog with its verticality rules and measured family
-  distinctness).
+  distinctness). The 2026-10-02 update adds measured rows for the twelve
+  liminal kind-lab prototypes and their gaps against each map document's
+  targets.
+- [Liminal maps research](liminal_maps/README.md) — 2026-10-01 research on
+  twelve new map types (one document each), the shared engine systems they
+  need, anomalies and threats, alternates, and the Blender production plan
+  and asset manifest. All twelve now exist as editor kind-lab prototypes.
 - [Interior architecture and dressing review](design-review.md) — the v14–v15
   implementation record, with a source-path and feature-status map for v24.
 

@@ -330,8 +330,8 @@ function applyWing(map, part, cy) {
       const pieces = []
       for (let gz = r.rect.z0; gz <= r.rect.z1; gz++) {
         for (let gx = r.rect.x0; gx <= r.rect.x1; gx++) {
-          const found = map.furnitureAt(gx, cy, gz)
-          if (found) pieces.push({ dx: gx - r.rect.x0, dz: gz - r.rect.z0, rec: { ...found.rec } })
+          // Every record of a stacked cell, so the copies stay exact.
+          for (const { rec } of map.furnitureListAt(gx, cy, gz)) pieces.push({ dx: gx - r.rect.x0, dz: gz - r.rect.z0, rec: { ...rec } })
         }
       }
       templates.set(r.side, { rect: r.rect, pieces })

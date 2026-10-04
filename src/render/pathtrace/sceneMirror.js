@@ -68,7 +68,7 @@ export function chunkItems(root, geometryId, materialId) {
   const transfer = []
   const geometries = new Set()
   root.traverse((node) => {
-    if (!node.isMesh || node.isSkinnedMesh || !visibleBelow(node, root)) return
+    if (!node.isMesh || node.isSkinnedMesh || node.userData.forwardOnly || !visibleBelow(node, root)) return
     const g = node.geometry
     const pos = g.attributes.position
     const count = node.isInstancedMesh ? node.count : 1
@@ -91,8 +91,11 @@ export function chunkItems(root, geometryId, materialId) {
     if (node.isInstancedMesh) {
       instanceMatrices = node.instanceMatrix.array.slice(0, count * 16)
       transfer.push(instanceMatrices.buffer)
-      if (node.instanceColor) {
-        instanceColors = Float32Array.from(node.instanceColor.array.subarray(0, count * 3))
+      // A batch whose instance colour is not an albedo (decal atlas cells)
+      // supplies its traced colours in userData.ptColors.
+      const colours = node.userData.ptColors ?? node.instanceColor?.array
+      if (colours) {
+        instanceColors = Float32Array.from(colours.subarray(0, count * 3))
         transfer.push(instanceColors.buffer)
       }
     }

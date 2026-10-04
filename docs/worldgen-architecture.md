@@ -677,6 +677,20 @@ historical `multilevel*` names** — those digests are pinned release evidence
 in `config.js` and must not drift on an internal rename
 (`scripts/audit-worldgen.mjs`).
 
+Two further fields belong to editor kind-lab documents
+([Map Editor — Kind lab](map-editor.md#kind-lab)). `levelLabel` is the
+string the LEVEL plates print in place of `storeyNumber(cy)`.
+`authoredFeatures` opts a chunk out of the audit's stray window/rail rule.
+The generator sets neither, and neither is digested. `data.furniture` may
+hold several records for one cell, each with its own AABB under one
+`COLUMN_FURNITURE`. World generation can produce such a cell too: the
+conference grammar (`furnishConference`) can stack two pieces. The editor's
+room builder sets `ctx.onePerCell` to refuse that; turning it on for world
+generation would change the goldens. `familyPalette(id)` also resolves the
+twelve `MAP_PALETTES` look palettes that those documents name in
+`map.meta.palette`. These palettes are a render choice only and leave
+`mapFamily` unchanged.
+
 ## Performance model
 
 Chunk builds are synchronous on the main thread, amortized at

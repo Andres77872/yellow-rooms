@@ -35,8 +35,12 @@ function partSet() {
     'stairs',
     'frames',
     'leaves',
+    'veneer',
+    'hardware',
     'props',
+    'decals',
     'signs',
+    'glass',
     'furniture',
     'litPanels',
     'deadPanels',
@@ -106,8 +110,12 @@ describe('Chunk child render detail', () => {
       'stairs',
       'frames',
       'leaves',
+      'veneer',
+      'hardware',
       'props',
+      'decals',
       'signs',
+      'glass',
       'furniture',
       'litPanels',
       'deadPanels',
@@ -134,9 +142,10 @@ describe('Chunk child render detail', () => {
     expect(chunk.setRenderDetail(RENDER_DETAIL_REDUCED)).toBe(true)
     expect(p.frames.visible).toBe(false)
     expect(p.props.visible).toBe(false)
+    expect(p.decals.visible).toBe(false) // plates go with what they hang on
+    expect(p.hardware.visible).toBe(false)
     expect(p.deadPanels.visible).toBe(false)
-    expect(p.leaves.visible).toBe(true)
-    expect(p.furniture.visible).toBe(true)
+    for (const key of ['leaves', 'veneer', 'glass', 'furniture']) expect(p[key].visible, key).toBe(true)
     for (const key of ['floor', 'ceiling', 'walls', 'stairs', 'signs', 'litPanels', 'exit']) {
       expect(p[key].visible, key).toBe(true)
     }
@@ -144,8 +153,7 @@ describe('Chunk child render detail', () => {
 
     expect(chunk.setRenderDetail(RENDER_DETAIL_REDUCED)).toBe(false)
     expect(chunk.setRenderDetail(RENDER_DETAIL_SHELL)).toBe(true)
-    expect(p.leaves.visible).toBe(false)
-    expect(p.furniture.visible).toBe(false)
+    for (const key of ['leaves', 'veneer', 'glass', 'furniture', 'decals']) expect(p[key].visible, key).toBe(false)
     for (const key of ['floor', 'ceiling', 'walls', 'stairs', 'signs', 'litPanels', 'exit']) {
       expect(p[key].visible, key).toBe(true)
     }
@@ -160,9 +168,14 @@ describe('Chunk child render detail', () => {
     expect(chunk.setRenderDetail(RENDER_DETAIL_REDUCED)).toBe(true)
     expect(chunk.renderParts.frames.visible).toBe(true)
     expect(chunk.renderParts.props.visible).toBe(false)
+    // The level plates go with their raised numerals, rails or not.
+    expect(chunk.renderParts.decals.visible).toBe(false)
 
     expect(chunk.setRenderDetail(RENDER_DETAIL_SHELL)).toBe(true)
     expect(chunk.renderParts.frames.visible).toBe(false)
+
+    expect(chunk.setRenderDetail(RENDER_DETAIL_FULL)).toBe(true)
+    for (const part of Object.values(chunk.renderParts)) expect(part.visible, part.name).toBe(true)
   })
 
   it('swaps detail batches to the sharp cube beyond the bevel ring, and back', () => {
@@ -181,6 +194,7 @@ describe('Chunk child render detail', () => {
     const detailMeshes = () => {
       const out = []
       mesh.group.traverse((o) => {
+        if (o.userData.keepGeometry) return
         if (o.geometry === geometry.detailUnit || o.geometry === geometry.detailUnitSharp) out.push(o)
       })
       return out
@@ -194,6 +208,12 @@ describe('Chunk child render detail', () => {
     expect(chunk.setBevelDetail(false)).toBe(false)
     expect(chunk.setBevelDetail(true)).toBe(true)
     for (const o of detailMeshes()) expect(o.geometry).toBe(geometry.detailUnit)
+    // Decal plates and glass panes stay on the sharp cube at every tier: the
+    // bevelled cube's face UVs would turn and mirror the printed image.
+    const pinned = new THREE.Mesh(geometry.detailUnitSharp, material)
+    pinned.userData.keepGeometry = true
+    chunk._swapDetailGeometry([pinned])
+    expect(pinned.geometry).toBe(geometry.detailUnitSharp)
 
     expect(bevelDetailForChunk(0, 0, 1, -1)).toBe(true)
     expect(bevelDetailForChunk(0, 0, 2, 0)).toBe(false)
@@ -204,7 +224,7 @@ describe('Chunk child render detail', () => {
 
   it('tolerates absent optional batches', () => {
     const chunk = detailChunk()
-    for (const key of ['frames', 'leaves', 'props', 'signs', 'furniture', 'litPanels', 'deadPanels', 'exit']) {
+    for (const key of ['frames', 'leaves', 'veneer', 'hardware', 'props', 'decals', 'signs', 'glass', 'furniture', 'litPanels', 'deadPanels', 'exit']) {
       chunk.renderParts[key] = null
     }
     expect(() => chunk.setRenderDetail(RENDER_DETAIL_SHELL)).not.toThrow()

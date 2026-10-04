@@ -17,7 +17,7 @@ import * as THREE from 'three'
 import { ChunkManager } from '../src/world/ChunkManager.js'
 import { createGeometries, disposeGeometries } from '../src/render/geometries.js'
 import { hashStr } from '../src/world/core/hash.js'
-import { MAP_FAMILY_ORDER, worldConfigForFamilyOrOffice } from '../src/world/mapFamily.js'
+import { worldConfigForFamilyOrOffice } from '../src/world/mapFamily.js'
 import {
   LIGHT_RANGE,
   SPAWN_WORLD,
@@ -26,6 +26,11 @@ import {
   layerY,
 } from '../src/world/constants.js'
 import { GRID_SCHEMA_VERSION } from '../src/world/lightGrid/gridSpec.js'
+import { familiesWith } from '../src/world/families/registry.js'
+
+// Benchmarks iterate the building families only (spec §11.4); the liminal
+// families are benchmarked through benchmark-map-families --family <id>.
+const BUILDING_FAMILIES = familiesWith('buildingMatrices')
 
 function parseArgs(argv) {
   const out = { family: 'office', seed: 'engine-improvement', json: false }
@@ -143,7 +148,7 @@ function measure(family, seedText) {
 }
 
 const args = parseArgs(process.argv.slice(2))
-const families = args.family === 'all' ? MAP_FAMILY_ORDER : [args.family]
+const families = args.family === 'all' ? BUILDING_FAMILIES : [args.family]
 const reports = families.map((f) => measure(f, args.seed))
 if (args.json) {
   console.log(JSON.stringify(reports, null, 2))

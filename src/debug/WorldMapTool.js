@@ -9,7 +9,6 @@ import {
   COL_HALF,
   MONUMENTAL_COL_HALF,
   FOV,
-  SPAWN_WORLD,
   chunkKey3,
   worldToCell,
 } from '../world/constants.js'
@@ -25,7 +24,6 @@ import {
 } from '../world/mapTypes.js'
 import {
   describeCell,
-  exploreConfigForFamily,
   formatFamilyCounts,
   formatFamilyFailureSummary,
   formatLatticeMetrics,
@@ -38,16 +36,30 @@ import {
   collectRoomLabels,
   structureAtCell,
 } from './mapInspect.js'
-import { MAP_FAMILY_ORDER } from '../world/mapFamily.js'
+import { DEFAULT_WORLD_CONFIG } from '../world/config.js'
+import { selectableFamilies } from '../world/families/select.js'
+import { familySpawn } from '../world/families/hooks.js'
+import { worldConfigForFamilyOrOffice } from '../world/mapFamily.js'
 import { makeView, paintCellOverlays, paintRoomLabels, paintSewerGraph, paintStructures } from './familyOverlays.js'
 
 // The historical helper exports moved to mapInspect.js; re-export so existing
 // imports (tests, DebugMode) keep working.
 export { multilevelAuditBox, structureAtCell, formatMultilevelStructure, formatMultilevelAudit } from './mapInspect.js'
 
+// EXPLORE family picker: the families the shipped config lets a player pick
+// (spec §11.4); the running game's own family is drawn in LIVE either way.
+const PREVIEW_FAMILIES = selectableFamilies(DEFAULT_WORLD_CONFIG)
+
+// EXPLORE family + config, resolved together: a family the shipped config
+// cannot select (e.g. a DEV forced liminal world) previews as office, and the
+// picker, cache keys and integrity readout say office too.
+export function resolveExploreFamily(family) {
+  const r = worldConfigForFamilyOrOffice(family)
+  return { family: r.family, config: r.config }
+}
+
 const LOGW = 322
 const LOGH = 322
-const SPAWN = SPAWN_WORLD
 
 // World-gen top-down map for the thin-wall model, one floor (v13 layer) at a
 // time. Draws wall edges, columns, border openings, lamps (lit/dead), stair
@@ -60,7 +72,8 @@ export class WorldMapTool {
     this.engine = engine
     this.dbg = dbg
     this.source = 0 // 0 = LIVE, 1 = EXPLORE
-    this.view = { cx: SPAWN, cz: SPAWN, scale: 2.4 }
+    const spawn = familySpawn(engine.cm?.config, engine.cm?.seed ?? 0)
+    this.view = { cx: spawn.x, cz: spawn.z, scale: 2.4 }
     this.validate = false
     this.seams = false // seam-openness / continuity overlay
     this.previewSeed = engine.cm.seed
@@ -69,8 +82,9 @@ export class WorldMapTool {
     this.followFloor = true // track engine.controller.floor each update
     // EXPLORE-mode family preview. LIVE always renders whatever the engine's
     // ChunkManager generated; the selector only steers regeneration.
-    this.family = engine.state.mapFamily ?? 'office'
-    this._exploreConfig = exploreConfigForFamily(this.family)
+    const explore = resolveExploreFamily(engine.state.mapFamily ?? 'office')
+    this.family = explore.family
+    this._exploreConfig = explore.config
     this.fillMode = 'zones' // zones | spaceId | role | owner | none
     this.showFamilyStructures = true
     this.showRoomLabels = true // room-type text over named rooms
@@ -145,14 +159,14 @@ export class WorldMapTool {
     famLab.textContent = 'family'
     famRow.appendChild(famLab)
     this._familySeg = segmented({
-      labels: [...MAP_FAMILY_ORDER],
-      value: Math.max(0, MAP_FAMILY_ORDER.indexOf(this.family)),
-      tips: MAP_FAMILY_ORDER.map((family) => ({
+      labels: [...PREVIEW_FAMILIES],
+      value: Math.max(0, PREVIEW_FAMILIES.indexOf(this.family)),
+      tips: PREVIEW_FAMILIES.map((family) => ({
         title: `family: ${family}`,
         text: `Preview the ${family} map family in EXPLORE (its own generator config and structure catalog). Does not change the running game.`,
       })),
       ariaLabel: 'preview map family',
-      onPick: (i) => this._setFamily(MAP_FAMILY_ORDER[i]),
+      onPick: (i) => this._setFamily(PREVIEW_FAMILIES[i]),
     })
     famRow.appendChild(this._familySeg.el)
     this._seedRow.el.appendChild(famRow)
@@ -298,7 +312,7 @@ export class WorldMapTool {
         button({
           label: 'spawn',
           tip: 'Center the map on the world spawn point.',
-          onClick: () => ((this.view.cx = SPAWN), (this.view.cz = SPAWN)),
+          onClick: () => this._centerOnSpawn(),
         }),
       ]).el
     )
@@ -358,8 +372,9 @@ export class WorldMapTool {
 
   _setFamily(family) {
     if (family === this.family) return
-    this.family = family
-    this._exploreConfig = exploreConfigForFamily(family)
+    const explore = resolveExploreFamily(family)
+    this.family = explore.family
+    this._exploreConfig = explore.config
     this._gen.clear()
     this._integrityCache = { key: '', value: null }
     this._pinned = null
@@ -376,6 +391,15 @@ export class WorldMapTool {
     this.level = this.engine.state.level
     this._seedInput.value = this.engine.state.seedText || 'lobby'
     this._gen.clear()
+  }
+
+  // The drawn world's spawn (families/hooks.js familySpawn): the legacy hub
+  // for the building families, the family's spawn hook for a liminal one.
+  _centerOnSpawn() {
+    const seed = this.source === 0 ? this.engine.cm.seed : this.previewSeed
+    const sp = familySpawn(this._activeConfig(), seed)
+    this.view.cx = sp.x
+    this.view.cz = sp.z
   }
 
   _recenter() {

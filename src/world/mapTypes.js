@@ -92,6 +92,11 @@ export const isPassageOpen = (kind) => kind !== PASSAGE_WALL
 // map-family decision (rooms/catalog.js), so an office floor and a tower
 // floor read as different institutions. Ordinary rooms keep SPACE_ROLE_NONE
 // and furnish generically.
+// What kind of space a planned cell belongs to (ChunkData.spaceClass).
+export const SPACE_CLASS_UNKNOWN = 0
+export const SPACE_CLASS_CIRCULATION = 1
+export const SPACE_CLASS_ROOM = 2
+
 export const SPACE_ROLE_NONE = 0
 export const SPACE_ROLE_MEETING = 1
 export const SPACE_ROLE_BREAK = 2

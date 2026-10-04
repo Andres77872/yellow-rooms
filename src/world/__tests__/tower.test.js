@@ -10,6 +10,7 @@ import {
   WALL_RAIL,
 } from '../mapTypes.js'
 import { collectInteriorDressing, PROP_TINT, SIGN_TINT } from '../objects/dressing/index.js'
+import { ACCENT_CYCLE } from '../objects/dressing/palette.js'
 import { structureAt } from '../structures/contract.js'
 
 const FIXED_SEEDS = Object.freeze([0x5a17, 0x7157, 0xc0ffee])
@@ -508,10 +509,12 @@ describe('bounded canonical Tower/skybridge generation', () => {
         byKind.clock,
         PROP_TINT.clock
       )).toBe(true)
+      // The bridge-approach accent wears the storey's landmark colour, not
+      // exit green: that marks the escape route only.
       expect(dressingHasSocketTint(
         dataFor(byKind.litAccent),
         byKind.litAccent,
-        SIGN_TINT.exit
+        ACCENT_CYCLE[((byKind.litAccent.cy % ACCENT_CYCLE.length) + ACCENT_CYCLE.length) % ACCENT_CYCLE.length]
       )).toBe(true)
 
       expect(socketEdge(dataFor(byKind.door), byKind.door)).toEqual({

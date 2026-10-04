@@ -22,6 +22,7 @@ import {
   SPACE_ROLE_SERVER,
   SPACE_ROLE_STORAGE,
 } from '../mapTypes.js'
+import { byFamily } from '../families/registry.js'
 
 // The room catalog (v23): one declarative source of truth for what a "named
 // room" is. Three layers of vocabulary live here:
@@ -526,7 +527,7 @@ export const SEWER_CHAMBER_CATALOG = deepFreeze({
 // office default the rest of the generation stack assumes.
 export function roomCatalogFor(config) {
   const family = config?.mapFamily?.selected
-  return FAMILY_ROOM_CATALOGS[family] ?? FAMILY_ROOM_CATALOGS[MAP_FAMILY_OFFICE]
+  return byFamily(FAMILY_ROOM_CATALOGS, family)
 }
 
 export function roomTypeFor(role) {

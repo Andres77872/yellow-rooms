@@ -24,6 +24,7 @@ import {
   FURN_ARMCHAIR,
   FURN_WASHER,
 } from '../../furniture.js'
+import { PROP_PROXIES } from '../../props/index.js'
 
 // Furniture shadow proxies (P8) — at most two axis-aligned boxes per kind
 // that stand in for the rendered piece when the renderer casts exact analytic
@@ -189,14 +190,16 @@ export const OCC_MAX_H = Math.max(
 
 // Append the chunk-local world AABBs { x0, x1, y0, y1, z0, z1, t } of
 // placement record `f` (kind, x, z, facing, lx, lz) to `out`; returns how
-// many were appended (0 for an unknown kind). u/v map through the facing
+// many were appended (0 for an unknown kind). Prop-pack kinds (world/props)
+// fall back to PROP_PROXIES: the same box contract, kept out of this table
+// and OCC_MAX_H so the furniture suite stays exact. u/v map through the facing
 // frame of objects/furniture/frame.js — 0=+z 1=-z 2=+x 3=-x, the same
 // rotation mesh.js applies to the GLB instance — and every box is clamped to
 // the piece's own cell [lx*CELL, (lx+1)*CELL] x [lz*CELL, (lz+1)*CELL], so a
 // proxy can never shadow a neighbouring cell's occupancy slot. y is metres
 // above the piece's floor (the chunk layer's floor, like the GLB instance).
 export function furnitureProxyBoxes(f, out) {
-  const boxes = FURNITURE_PROXIES[f.kind]
+  const boxes = FURNITURE_PROXIES[f.kind] ?? PROP_PROXIES[f.kind]
   if (!boxes) return 0
   // Records always carry their cell (furnish.js addPiece, the editor, the
   // .yrmap reader); the fallback derives it from the centre like placement.

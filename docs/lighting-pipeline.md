@@ -14,6 +14,9 @@ the shadow, occlusion, tier and look rework (occlusion v2, emitter-source
 fixtures, furniture and capsule shadows, flashlight PCSS, shafts v1, quality
 tiers v2, look schema v2): see
 [engine-improvement/14-shadows-quality-style.md](engine-improvement/14-shadows-quality-style.md).
+**Updated 2026-10-02** for authored per-lamp tints and per-map palettes, both
+used by the editor's kind-lab maps: see
+[Authored lamp tint and map palettes](#authored-lamp-tint-and-map-palettes).
 
 The game renders through a custom deferred pipeline (`src/render/DeferredRenderer.js`).
 There are **no three.js lights**. Ceiling fixtures are shaded from the
@@ -238,6 +241,49 @@ capture can never persist a switch-off of a player's photosensitivity setting.
 counter on both profiles), `render/__tests__/reduce-flicker.test.js`,
 `core/__tests__/engine-flicker.test.js`.
 
+## Authored lamp tint and map palettes
+
+Both exist for the editor's kind-lab maps
+([Map Editor — Kind lab](map-editor.md#kind-lab)). The generator never
+writes either one, so world-gen bytes and digests do not change.
+
+**Per-lamp tint.** A lamp record is `{ lx, lz, lit, tint? }`. `tint` is an
+integer `0xRRGGBB`, and each channel divided by 255 is a **linear**
+multiplier on the fixture's computed colour, with no sRGB decode: `0xffffff`
+is an exact identity and `0x808080` halves the light. Without a `tint`, a
+lamp behaves exactly as before. One helper, `applyLampRecordTint(out, tint)`
+in `world/lampCharacter.js`, folds the tint in after
+`lampTint` / `lampPanelTint`, so every path agrees:
+
+- `world/mesh.js` tags the lamp candidate with `v.tint` (next to `role` and
+  `bad`) and tints the panel's instance colour, so a tinted fixture's panel
+  reads in the same colour as its pool;
+- `render/LightField.js` multiplies the per-fixture `uLampChar` rgb of the
+  fallback lamp set;
+- `world/lightGrid/LightGrid.js` multiplies the lamp texel's rgb on the GPU
+  grid (still clamped to a byte after `TINT_SCALE`);
+- `render/pathtrace/proxyScene.js` multiplies the proxy area lights' colour.
+
+Kinds set tints through `FloorPlan.lamp(gx, gz, lit, tint)` or
+`EditorMap.setLamp(..., tint)`. The `.yrmap` extras section saves them.
+`world/__tests__/lamp-tint.test.js` checks that white builds bit-for-bit the
+untinted colours in every path, and that a red tint changes only the tinted
+lamp.
+
+**Map palettes.** `MAP_PALETTES` in `world/familyPalette.js` adds twelve
+look palettes, one per liminal kind (`stairwellConcrete` … `funhouseNeon`).
+They have the same shape as the family palettes: floor, wall and ceiling
+surfaces, trim and panel colours, fog, ambient, rim, grade and exposure.
+They use only the existing surface painters, so the renderer needed no new
+code. `familyPalette(id)` resolves a family id first,
+then a map palette id, and falls back to Office. A document chooses one
+through `map.meta.palette`. The editor's 3D preview keys materials and
+`DeferredRenderer.applyPalette` on `meta.palette ?? meta.family`. The game
+still applies its family's palette. A palette is a render choice only: the
+chunks keep their real `mapFamily`. `world/__tests__/map-palettes.test.js`
+checks the shape, the painter styles, and that colours, grade, fog and
+exposure stay in range.
+
 ## Runtime graphics quality (`core/graphics.js`)
 
 > **Tiers v2 (2026-09-26).** Presets are `low / medium / high / ultra /
@@ -371,8 +417,8 @@ The title and pause phases continue receiving RAF callbacks, camera/flicker
 updates, and immediate input every display refresh, but submit the full deferred
 pipeline on a deadline capped at 30 FPS. This halves menu GPU work on 60 Hz
 displays and removes 75–79% on 120–144 Hz displays. Gameplay, transitions,
-death effects, the F2 toolbox, and the backquote performance overlay bypass the
-cap. Resize and settings changes invalidate the deadline so the next RAF always
+death effects and the F2 toolbox bypass the cap; the FPS monitor (backquote /
+Settings) does not, and reads the capped rate. Resize and settings changes invalidate the deadline so the next RAF always
 draws, and skipped callbacks deliberately retain the previous completed
 `renderer.info` aggregate.
 

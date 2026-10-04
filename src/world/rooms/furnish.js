@@ -47,6 +47,7 @@ import {
 import { hash2i } from '../core/hash.js'
 import { COLUMN_FURNITURE } from '../mapTypes.js'
 import { countChunkComponents } from '../topology.js'
+import { PROP_DIMS } from '../props/index.js'
 import {
   FURN_DESK,
   FURN_CHAIR,
@@ -107,13 +108,23 @@ const roll = (salt, gx, gz) => hash2i(salt | 0, gx, gz) / 4294967296
 const spaceRoll = (salt, space, k = 0) =>
   hash2i((salt | 0) ^ 0x2f0a, space.id | 0, k | 0) / 4294967296
 
-// The four grid edges of a cell, as {passage, wall} byte readers.
-export function cellEdges(data, x, z) {
+// The four grid edges of a cell, as {passage, wall} byte readers. The east
+// edge of x=CHUNK-1 and the south edge of z=CHUNK-1 belong to the next chunk:
+// without `outer` they read as a solid wall (world generation never furnishes
+// that close to the border); `outer(axis, x, z)` -> {wall, passage} resolves
+// them for callers that furnish up to the seam (the editor's room builder).
+export function cellEdges(data, x, z, outer = null) {
+  const east = x + 1 < CHUNK
+    ? { wall: data.vAt(x + 1, z), passage: data.passageVAt(x + 1, z) }
+    : outer ? outer('v', x + 1, z) : { wall: 1, passage: 0 }
+  const south = z + 1 < CHUNK
+    ? { wall: data.hAt(x, z + 1), passage: data.passageHAt(x, z + 1) }
+    : outer ? outer('h', x, z + 1) : { wall: 1, passage: 0 }
   return [
     { wall: data.vAt(x, z), passage: data.passageVAt(x, z), dir: 3 }, // west
-    { wall: x + 1 < CHUNK ? data.vAt(x + 1, z) : 1, passage: x + 1 < CHUNK ? data.passageVAt(x + 1, z) : 0, dir: 2 }, // east
+    { wall: east.wall, passage: east.passage, dir: 2 }, // east
     { wall: data.hAt(x, z), passage: data.passageHAt(x, z), dir: 1 }, // north
-    { wall: z + 1 < CHUNK ? data.hAt(x, z + 1) : 1, passage: z + 1 < CHUNK ? data.passageHAt(x, z + 1) : 0, dir: 0 }, // south
+    { wall: south.wall, passage: south.passage, dir: 0 }, // south
   ]
 }
 
@@ -129,9 +140,13 @@ function wallHugCentre(x, z, dirFromWall, depth) {
 // The per-piece check (a single CHUNK² flood fill) replaces the old
 // place-then-rollback pass: a piece that would sever its room is simply
 // refused and the grammar walks on to the next candidate cell, so an anchor
-// lands wherever ANY non-severing cell exists.
+// lands wherever ANY non-severing cell exists. Every op shares one candidate
+// list, so with `ctx.onePerCell` (the editor's room builder) a cell an earlier
+// op already filled is refused too (a kitchen's table never lands on its
+// stove); world generation leaves it off so its goldens stay byte-identical.
 function addPiece(ctx, kind, x, z, facing, w, d, px, pz) {
   const { data, added, baseline } = ctx
+  if (ctx.onePerCell && data.colAt(x, z)) return false
   data.setCol(x, z, COLUMN_FURNITURE)
   if (countChunkComponents(data, true) > baseline) {
     data.setCol(x, z, 0)
@@ -201,7 +216,7 @@ function furnishWorkstations(ctx, space, candidates) {
   const { data } = ctx
   const wallCells = []
   for (const c of candidates) {
-    const edges = cellEdges(data, c.lx, c.lz)
+    const edges = cellEdges(data, c.lx, c.lz, ctx.outer)
     for (const e of edges) {
       if (e.wall !== 1) continue
       // The desk backs onto this wall and fronts the opposite way; the chair
@@ -247,6 +262,8 @@ function furnishWorkstations(ctx, space, candidates) {
 }
 
 // Piece footprints (unrotated), exported for editor-side manual placement.
+// Prop-pack kinds (world/props) join for explicit placement only: no grammar
+// names them, so random furnishing never reaches their entries.
 export const PIECE_DIMS = {
   [FURN_DESK]: [DESK_W, DESK_D],
   [FURN_CABINET]: [CABINET_W, CABINET_D],
@@ -269,6 +286,7 @@ export const PIECE_DIMS = {
   [FURN_TV]: [TV_W, TV_D],
   [FURN_ARMCHAIR]: [ARMCHAIR_W, ARMCHAIR_W],
   [FURN_WASHER]: [WASHER_W, WASHER_W],
+  ...PROP_DIMS,
 }
 
 // Wall-hugging run of one piece kind. The first `min` placements are the
@@ -280,7 +298,7 @@ function furnishRow(ctx, space, candidates, kind, opts) {
   const { data } = ctx
   const { min = 0, max = 1, chance = 0.5, salt } = opts
   const wallCells = candidates
-    .filter((c) => cellEdges(data, c.lx, c.lz).some((e) => e.wall === 1))
+    .filter((c) => cellEdges(data, c.lx, c.lz, ctx.outer).some((e) => e.wall === 1))
     .sort((a, b) => a.gz - b.gz || a.gx - b.gx)
   if (!wallCells.length) return 0
   const usedCells = new Set(ctx.added.map((f) => `${f.lx},${f.lz}`))
@@ -290,7 +308,7 @@ function furnishRow(ctx, space, candidates, kind, opts) {
     const c = wallCells[(start + n) % wallCells.length]
     if (usedCells.has(`${c.lx},${c.lz}`)) continue
     if (placed >= min && roll(salt, c.gx, c.gz) >= chance) continue
-    const edge = cellEdges(data, c.lx, c.lz).find((e) => e.wall === 1)
+    const edge = cellEdges(data, c.lx, c.lz, ctx.outer).find((e) => e.wall === 1)
     const front = edge.dir ^ 1 // pieces back onto the wall, front into the room
     const [dx] = DIR[front]
     const alongX = dx !== 0

@@ -99,6 +99,8 @@ vi.mock('../../world/ChunkManager.js', () => ({
       this.setSeed = vi.fn()
       this.setExit = vi.fn()
       this.reset = vi.fn()
+      this.setSpawn = vi.fn()
+      this.upgradeFurnitureModels = vi.fn()
       this.setRenderDetailProfile = vi.fn()
       this.updateVisibility = vi.fn()
       this.update = vi.fn()
@@ -222,6 +224,7 @@ vi.mock('../DebugOverlay.js', () => ({
   DebugOverlay: class {
     constructor() {
       this.update = vi.fn()
+      this.setMode = vi.fn()
       this.dispose = vi.fn()
     }
   },
@@ -589,5 +592,34 @@ describe('loading card before a level build', () => {
     expect(engine.ui.showTitle).toHaveBeenCalled()
     expect(engine.controller.unlock).toHaveBeenCalled()
     expect(engine._loading).toBe(false)
+  })
+})
+
+describe('backtick FPS monitor key', () => {
+  it('cycles the persisted setting off -> fps -> stats -> off in any phase and re-syncs the cards', () => {
+    const engine = createEngine()
+    expect(engine.settings.get('fpsMonitor')).toBe('off')
+    engine.debug.setMode.mockClear()
+
+    engine.state.phase = Phase.TITLE
+    fire('keydown', { code: 'Backquote' })
+    expect(engine.settings.get('fpsMonitor')).toBe('fps')
+    engine.state.phase = Phase.PAUSED
+    fire('keydown', { code: 'Backquote' })
+    expect(engine.settings.get('fpsMonitor')).toBe('stats')
+    engine.state.phase = Phase.PLAYING
+    fire('keydown', { code: 'Backquote' })
+    expect(engine.settings.get('fpsMonitor')).toBe('off')
+
+    expect(engine.debug.setMode.mock.calls.map(([m]) => m)).toEqual(['fps', 'stats', 'off'])
+    expect(engine.ui.refreshSettings).toHaveBeenCalledTimes(4) // boot + three presses
+  })
+
+  it('ignores auto-repeat and presses typed into a focused control', () => {
+    const engine = createEngine()
+    fire('keydown', { code: 'Backquote', repeat: true })
+    document.activeElement = { tagName: 'INPUT' }
+    fire('keydown', { code: 'Backquote' })
+    expect(engine.settings.get('fpsMonitor')).toBe('off')
   })
 })

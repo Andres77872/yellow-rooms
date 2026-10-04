@@ -9,6 +9,9 @@
 #
 # Optional positional args after `--`:
 #   -- <glbOutDir> <blendOut> <previewPng>
+# The source .blend is opt-in (Blender never writes it byte-identically):
+# pass <blendOut>, or set YR_SAVE_BLEND=1 for assets-src/enemies.blend.
+# `-` skips a positional slot (e.g. `-- <glbOutDir> - <previewPng>`).
 #
 # Frame contract (same as the furniture pipeline):
 #   game local frame: u = width (x), v = depth (front toward +v), y = up,
@@ -42,8 +45,8 @@
 # loop phase in the game frame and keyed into NLA-stashed actions.
 #
 # The module is import-safe (no bpy side effects at import): main() wipes the
-# factory scene, builds, audits, exports, saves the source blend and renders a
-# contact sheet. The interactive MCP session execs this file and calls the
+# factory scene, builds, audits, exports, renders a contact sheet and (opt-in)
+# saves the source blend. The interactive MCP session execs this file and calls the
 # same functions without save_as_mainfile.
 
 import math
@@ -56,14 +59,18 @@ from mathutils import Euler, Quaternion, Vector
 
 SCRIPT = os.path.abspath(__file__)
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT)))
+sys.dont_write_bytecode = True  # no scripts/blender/__pycache__ in the tree
 if os.path.dirname(SCRIPT) not in sys.path:
     sys.path.insert(0, os.path.dirname(SCRIPT))
 import yr_shading  # noqa: E402  (shared painted-shading + GLB compaction)
 
 ARGV = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
-OUT_DIR = os.path.abspath(ARGV[0]) if len(ARGV) > 0 else os.path.join(REPO, "public", "models", "enemies")
-BLEND_OUT = os.path.abspath(ARGV[1]) if len(ARGV) > 1 else os.path.join(REPO, "assets-src", "enemies.blend")
-PREVIEW_OUT = os.path.abspath(ARGV[2]) if len(ARGV) > 2 else "/tmp/yr_enemies_preview.png"
+OUT_DIR = (os.path.abspath(ARGV[0]) if len(ARGV) > 0 and ARGV[0] != "-"
+           else os.path.join(REPO, "public", "models", "enemies"))
+BLEND_OUT = (os.path.abspath(ARGV[1]) if len(ARGV) > 1 and ARGV[1] != "-"
+             else os.path.join(REPO, "assets-src", "enemies.blend") if os.environ.get("YR_SAVE_BLEND") == "1"
+             else None)
+PREVIEW_OUT = os.path.abspath(ARGV[2]) if len(ARGV) > 2 and ARGV[2] != "-" else "/tmp/yr_enemies_preview.png"
 
 SCENE_NAME = "YR_ENEMIES_PREVIEW"
 TAU = math.tau
@@ -1441,7 +1448,6 @@ def gltf_selection_kwargs():
 
 def build_all():
     os.makedirs(OUT_DIR, exist_ok=True)
-    os.makedirs(os.path.dirname(BLEND_OUT), exist_ok=True)
     sel_kw = gltf_selection_kwargs()
     for scene in {bpy.context.scene, bpy.data.scenes.get(SCENE_NAME)} - {None}:
         scene.render.fps = FPS
@@ -1534,8 +1540,7 @@ def render_preview():
     scene.render.resolution_y = 900
     scene.render.filepath = PREVIEW_OUT
     scene.world = bpy.data.worlds.new("yr_enemy_world")
-    scene.world.use_nodes = True
-    bg = scene.world.node_tree.nodes.get("Background")
+    bg = yr_shading.ensure_nodes(scene.world).nodes.get("Background")
     bg.inputs[0].default_value = (0.55, 0.54, 0.48, 1.0)  # dim backrooms mustard-grey
     bg.inputs[1].default_value = 0.4
 
@@ -1574,8 +1579,7 @@ def render_preview():
     ground = bpy.data.objects.new("yr_enemy_ground", mesh)
     scene.collection.objects.link(ground)
     gm = bpy.data.materials.new("yr_enemy_ground")
-    gm.use_nodes = True
-    gm.node_tree.nodes.get("Principled BSDF").inputs["Base Color"].default_value = (0.3, 0.28, 0.24, 1)
+    yr_shading.ensure_nodes(gm).nodes.get("Principled BSDF").inputs["Base Color"].default_value = (0.3, 0.28, 0.24, 1)
     ground.data.materials.append(gm)
 
     bpy.ops.render.render(write_still=True, scene=scene.name)
@@ -1596,8 +1600,10 @@ def main():
     bpy.context.preferences.filepaths.save_version = 0
     if os.environ.get("YR_SKIP_PREVIEW") != "1":
         render_preview()
-    bpy.ops.wm.save_as_mainfile(filepath=BLEND_OUT, check_existing=False)
-    print(f"[yr] blend -> {BLEND_OUT}")
+    if BLEND_OUT:
+        os.makedirs(os.path.dirname(BLEND_OUT), exist_ok=True)
+        bpy.ops.wm.save_as_mainfile(filepath=BLEND_OUT, check_existing=False)
+        print(f"[yr] blend -> {BLEND_OUT}")
     print("[yr] done")
 
 

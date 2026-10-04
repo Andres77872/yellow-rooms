@@ -6,7 +6,9 @@ import { WALL_PLAIN,
   SEWER_MODULE_CHAMBER_LARGE,
   SEWER_MODULE_CHAMBER_SMALL,
 } from '../../mapTypes.js'
+import { SEWER_LARGE_PLATES, SEWER_SMALL_PLATES, decalCell, safetyCell, signCell, signPlates } from '../../decalKinds.js'
 import { SEWER_TINT, SEWER_SIGN } from './palette.js'
+import { DERELICT, plateFace, pushPlate, signagePlan } from './notices.js'
 
 // Sewer gallery dressing — replaces the office "designed building" layer for
 // the sewer family. Everything reads as buried infrastructure: pipe runs on
@@ -20,6 +22,8 @@ import { SEWER_TINT, SEWER_SIGN } from './palette.js'
 
 const PIPE_SALT = 0x51e0
 const PIPE2_SALT = 0x51e1
+const NOTICE_SALT = 0x51e2
+const PLATE_SALT = 0x51e3
 
 const PIPE_R = 0.13
 const PIPE_Y = 2.55
@@ -37,8 +41,9 @@ export function collectSewerDressing(data) {
   const trim = []
   const props = []
   const signs = []
+  const decals = []
   const descriptor = data.sewerDescriptor
-  if (!descriptor) return { trim, props, signs }
+  if (!descriptor) return { trim, props, signs, decals }
 
   // A pipe needs solid masonry: guard rails and glazing (catalog volumes,
   // v26) are closed for collision but have nothing to bolt a pipe to.
@@ -72,6 +77,31 @@ export function collectSewerDressing(data) {
     }
     if (main) emit(PIPE_R, PIPE_Y, SEWER_TINT.pipe)
     if (old) emit(PIPE2_R, PIPE2_Y, SEWER_TINT.pipeOld)
+  }
+
+  // Stencilled safety notices under the pipe runs: confined-space warnings
+  // down the galleries, authorised-only at the risers. The plant plates
+  // belong to the chambers (placeChamberHardware); a note nobody should
+  // have left turns up only where the galleries have gone derelict. Only on
+  // real masonry (notices.js plateFace): a gallery running on across the
+  // seam has no wall there for a notice, whatever the pipe runs assume.
+  const plan = signagePlan(data)
+  const notice = (vertical, line, cell, side) => {
+    if (!plateFace(data, plan, vertical, line, cell, side)) return
+    const gx = data.cx * CHUNK + (vertical ? line : cell)
+    const gz = data.cz * CHUNK + (vertical ? cell : line)
+    const lx = vertical ? line + (side > 0 ? 0 : -1) : cell
+    const lz = vertical ? cell : line + (side > 0 ? 0 : -1)
+    const r = roll(NOTICE_SALT ^ (side > 0 ? 0x11 : 0x22), gx, gz)
+    const v = roll(NOTICE_SALT ^ 0x33, gx, gz)
+    const plane = line * CELL
+    const along = (cell + 0.5) * CELL
+    if (r < 0.05) {
+      const id = plan.nearStair(lx, lz) ? 'authorized' : 'confinedSpace'
+      pushPlate(decals, null, vertical, plane, side, along, 1.5, 0.3, 0.4, safetyCell(id), { shade: 0.8, rough: 0.7 })
+    } else if (r < 0.065 && plan.ctxAt(lx, lz).decay >= DERELICT) {
+      pushPlate(decals, null, vertical, plane, side, along + v - 0.5, 1.4, 0.21, 0.28, decalCell('liminal', v), { t: 0.004, shade: 0.7, rough: 0.9 })
+    }
   }
 
   let trunkStep = 0
@@ -118,6 +148,10 @@ export function collectSewerDressing(data) {
       if (wallV(m.lx + 1, m.lz)) pipeAlongWall(true, m.lx + 1, m.lz, -1)
       if (wallH(m.lx, m.lz)) pipeAlongWall(false, m.lz, m.lx, 1)
       if (wallH(m.lx, m.lz + 1)) pipeAlongWall(false, m.lz + 1, m.lx, -1)
+      if (wallV(m.lx, m.lz)) notice(true, m.lx, m.lz, 1)
+      if (wallV(m.lx + 1, m.lz)) notice(true, m.lx + 1, m.lz, -1)
+      if (wallH(m.lx, m.lz)) notice(false, m.lz, m.lx, 1)
+      if (wallH(m.lx, m.lz + 1)) notice(false, m.lz + 1, m.lx, -1)
     }
   }
 
@@ -125,7 +159,8 @@ export function collectSewerDressing(data) {
   // detail in the small one — one high-salience landmark per chamber.
   for (const chamber of descriptor.chambers ?? []) {
     const wide = chamber.kind === SEWER_MODULE_CHAMBER_LARGE
-    placeChamberHardware(data, chamber, wide, props)
+    const face = placeChamberHardware(data, plan, chamber, wide, props)
+    if (face) chamberPlate(data, plan, chamber, wide, face, props, decals)
   }
 
   // Risers: painted hazard band + glowing way-out arrow at the working end of
@@ -133,19 +168,41 @@ export function collectSewerDressing(data) {
   if (data.stairUp) riserMarker(data.stairUp.landing, data.stairUp.dir, true, props, signs)
   if (data.stairDown) riserMarker(data.stairDown.exit, data.stairDown.dir, false, props, signs)
 
-  return { trim, props, signs }
+  return { trim, props, signs, decals }
+}
+
+// The chamber's plant plate beside its hardware: one name per chamber, keyed
+// by the chamber's stable space key and its anchor cell (two chambers can
+// share one landmark hall's key) — a valve station reads VALVE 4 or PUMP
+// ROOM on every visit, an access shaft ACCESS 2 or SUMP.
+function chamberPlate(data, plan, chamber, wide, face, props, decals) {
+  const anchor = chamber.anchor ?? { lx: chamber.x0, lz: chamber.z0 }
+  const ctx = plan.ctxAt(anchor.lx, anchor.lz)
+  const h = hash2i((PLATE_SALT ^ ctx.key) | 0, data.cx * CHUNK + anchor.lx, data.cz * CHUNK + anchor.lz)
+  const ids = wide ? SEWER_LARGE_PLATES : SEWER_SMALL_PLATES
+  const id = ids[h % ids.length]
+  const plate = signPlates(data.mapFamily).find((p) => p.id === id)
+  const cell = signCell(id, data.mapFamily)
+  if (!plate || cell < 0) return
+  const number = plate.numbered ? String(1 + ((h >>> 8) % 9)) : null
+  const plane = face.vertical ? face.px : face.pz
+  const along = (face.vertical ? face.pz : face.px) + 0.95
+  pushPlate(decals, props, face.vertical, plane, face.side, along, 1.85, 0.6, 0.2, cell, { shade: 0.75, rough: 0.6, number })
 }
 
 // Find the first closed wall on the chamber perimeter and mount the hardware
-// against its inner face.
-function placeChamberHardware(data, chamber, wide, props) {
+// against its inner face — the chunk's own wall data, seam lines included
+// (line 0 is this chunk's), so nothing bolts onto an open gallery mouth, and
+// never beside a riser's flight, whose steps fill the cell. Returns that face
+// (null when the chamber has none).
+function placeChamberHardware(data, plan, chamber, wide, props) {
   for (let lz = chamber.z0; lz <= chamber.z1; lz++) {
     for (let lx = chamber.x0; lx <= chamber.x1; lx++) {
       const centre = { x: (lx + 0.5) * CELL, z: (lz + 0.5) * CELL }
-      if (data.hasFloorHole(lx, lz)) continue
+      if (data.hasFloorHole(lx, lz) || plan.inFlight(lx, lz)) continue
       const faces = [
-        { closed: lx === 0 || (data.wallV[vIdx(lx, lz)] === 1 && data.wallFeatureV[vIdx(lx, lz)] === WALL_PLAIN), px: lx * CELL, pz: centre.z, vertical: true, side: 1 },
-        { closed: lz === 0 || (data.wallH[hIdx(lx, lz)] === 1 && data.wallFeatureH[hIdx(lx, lz)] === WALL_PLAIN), px: centre.x, pz: lz * CELL, vertical: false, side: 1 },
+        { closed: data.wallV[vIdx(lx, lz)] === 1 && data.wallFeatureV[vIdx(lx, lz)] === WALL_PLAIN, px: lx * CELL, pz: centre.z, vertical: true, side: 1 },
+        { closed: data.wallH[hIdx(lx, lz)] === 1 && data.wallFeatureH[hIdx(lx, lz)] === WALL_PLAIN, px: centre.x, pz: lz * CELL, vertical: false, side: 1 },
       ]
       for (const f of faces) {
         if (!f.closed) continue
@@ -177,10 +234,11 @@ function placeChamberHardware(data, chamber, wide, props) {
             })
           }
         }
-        return
+        return f
       }
     }
   }
+  return null
 }
 
 function riserMarker(cell, dir, up, props, signs) {

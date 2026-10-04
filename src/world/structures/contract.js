@@ -14,6 +14,8 @@ import {
   MAP_FAMILY_TOWER,
 } from '../mapTypes.js'
 import { multilevelStructureAt } from './multilevel.js'
+import { LIMINAL_FAMILY_IDS } from '../families/ids.js'
+import { familyPlanner } from '../families/planners.js'
 import { TOWER_STRUCTURE_KIND, towerStructureAt } from './tower.js'
 import {
   CATALOG_KINDS,
@@ -81,7 +83,9 @@ function primaryStructureAt(family, profile, seed, cx, cz, cy, config) {
       ? towerStructureAt(seed, cx, cz, cy, profile) ?? noStructure(family, cy)
       : family === MAP_FAMILY_LATTICE
         ? latticeStructureAt(seed, cx, cz, cy, profile) ?? noStructure(family, cy)
-    : noStructure(family, cy)
+    // Liminal families: their own pure planner (families/<id>/structures.js,
+    // spec §7.2). familyPlanner is null for Sewer, which keeps noStructure.
+    : familyPlanner(family)?.structureAt(seed, cx, cz, cy, profile, config) ?? noStructure(family, cy)
 }
 
 // One descriptor per (chunk, storey). The landmark planner has precedence;
@@ -670,7 +674,7 @@ function catalogPolicy(family) {
 }
 
 export const CATALOG_STRUCTURE_ADAPTERS = Object.freeze(Object.fromEntries(
-  [MAP_FAMILY_OFFICE, MAP_FAMILY_HOTEL, MAP_FAMILY_SEWER, MAP_FAMILY_TOWER, MAP_FAMILY_LATTICE]
+  [MAP_FAMILY_OFFICE, MAP_FAMILY_HOTEL, MAP_FAMILY_SEWER, MAP_FAMILY_TOWER, MAP_FAMILY_LATTICE, ...LIMINAL_FAMILY_IDS]
     .map((family) => [CATALOG_KINDS[family], makeAdapter(catalogPolicy(family), catalogApertureRegions)])
 ))
 

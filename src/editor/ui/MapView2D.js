@@ -19,7 +19,7 @@ import { STAIR_DX, STAIR_DZ } from '../../world/structures/slab.js'
 import { structureFamily } from '../../world/structures/contract.js'
 import {
   SPACE_ROLE_PALETTE,
-  STRUCTURE_FAMILY_COLORS,
+  structureFamilyColor,
   ZONE_TINT,
   roomRoleLabel,
   spaceIdColor,
@@ -358,7 +358,7 @@ export class MapView2D {
       const participant = st?.hasRoom && st.participants?.some((p) => p.cx === d.cx && p.cz === d.cz)
       if (participant) {
         g.globalAlpha = 0.18
-        g.fillStyle = STRUCTURE_FAMILY_COLORS[structureFamily(st)] ?? '#d8b24a'
+        g.fillStyle = structureFamilyColor(structureFamily(st))
         g.fillRect(ox, oz, CHUNK_WORLD * s, CHUNK_WORLD * s)
         g.globalAlpha = 1
       }
@@ -823,7 +823,7 @@ export class MapView2D {
       const st = entry.structure
       if (loadedKeys.has(structureKey(st)) || floor < st.baseCy || floor > st.topCy) continue
       const b = st.globalBounds
-      const color = STRUCTURE_FAMILY_COLORS[structureFamily(st)] ?? '#d8b24a'
+      const color = structureFamilyColor(structureFamily(st))
       g.strokeStyle = color
       g.globalAlpha = structureKey(st) === selectedKey ? 0.95 : 0.45
       g.lineWidth = structureKey(st) === selectedKey ? 2 : 1
@@ -837,7 +837,7 @@ export class MapView2D {
       const role = app.selectedLevelRole(floor)
       const x = this.sx(b.x0 * CELL)
       const y = this.sy((b.z1 + 1) * CELL)
-      g.fillStyle = STRUCTURE_FAMILY_COLORS[structureFamily(selected)] ?? '#d8b24a'
+      g.fillStyle = structureFamilyColor(structureFamily(selected))
       g.font = '11px ui-monospace, monospace'
       g.fillText(`cy ${floor} · ${role} (${floor - selected.baseCy + 1}/${selected.topCy - selected.baseCy + 1})`, x + 3, y + 13)
     }

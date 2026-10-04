@@ -27,6 +27,7 @@ import {
   FURN_ARMCHAIR,
   FURN_WASHER,
 } from '../world/furniture.js'
+import { PROP_MODEL_FILES } from '../world/props/index.js'
 
 // Blender-built furniture models (scripts/blender/build_furniture.py exports
 // one GLB per kind into public/models/furniture/). Each GLB carries the whole
@@ -180,53 +181,106 @@ export function disposeModelScene(root) {
   for (const texture of textures) texture.dispose()
 }
 
-const pendingLoads = new WeakMap()
+// Per-library load state, keyed by pack: { pending: Map(pack -> state),
+// done: Set(pack) }. Packs share ONE geometries Map keyed by kind id (furniture
+// and prop ids are disjoint), so mesh.js and ChunkManager stay pack-agnostic.
+const packStates = new WeakMap()
 
-// Fetch and bake every kind's GLB. Resolves (never rejects): a missing or
-// malformed model simply leaves that kind on the box-builder fallback.
-export function loadFurnitureModels(library, { loader, baseUrl } = {}) {
-  if (pendingLoads.has(library)) return pendingLoads.get(library).promise
-  if (library.loaded) return Promise.resolve(library)
-  const base = baseUrl ?? `${import.meta.env?.BASE_URL ?? '/'}models/furniture/`
+function packState(library) {
+  let s = packStates.get(library)
+  if (!s) packStates.set(library, (s = { pending: new Map(), done: new Set() }))
+  return s
+}
+
+// Fetch and bake one pack's GLBs (`files`: { kindId: stem }, fetched as
+// `${baseUrl}${stem}.glb`) into the shared library. Resolves (never rejects):
+// a missing or malformed model leaves that kind on its box-builder fallback.
+// Deduplicated per (library, pack): a pending load returns its promise, a
+// finished pack resolves at once. `warn: 'each'` warns per failed model; the
+// default warns once per pack (an unbuilt pack fails every file).
+export function loadModelPack(library, { pack, files, baseUrl, loader, warn = 'pack' }) {
+  const packs = packState(library)
+  if (packs.pending.has(pack)) return packs.pending.get(pack).promise
+  if (packs.done.has(pack)) return Promise.resolve(library)
   const gltf = loader ?? new GLTFLoader()
   const state = { promise: null }
-  const entries = Object.entries(FURNITURE_MODEL_FILES)
+  const live = () => packStates.get(library)?.pending.get(pack) === state
+  const entries = Object.entries(files)
+  const failed = []
   let next = 0
   async function worker() {
-    while (next < entries.length && pendingLoads.get(library) === state) {
+    while (next < entries.length && live()) {
       const [kind, name] = entries[next++]
       let asset
       try {
-        asset = await gltf.loadAsync(`${base}${name}.glb`)
-        if (pendingLoads.get(library) !== state) continue
+        asset = await gltf.loadAsync(`${baseUrl}${name}.glb`)
+        if (!live()) continue
         const geometry = bakeFurnitureGeometry(asset.scene)
         if (geometry) library.geometries.set(Number(kind), geometry)
       } catch (err) {
-        if (pendingLoads.get(library) === state) {
+        if (!live()) continue
+        if (warn === 'each') {
           console.warn(`[yellow-rooms] furniture model "${name}" failed to load; box fallback`, err)
+        } else {
+          failed.push(name)
         }
       } finally {
         disposeModelScene(asset?.scene)
       }
     }
   }
-  pendingLoads.set(library, state)
+  packs.pending.set(pack, state)
   // Four requests keep startup bandwidth and transient parser allocations
-  // bounded instead of constructing all 23 glTF scenes simultaneously.
+  // bounded instead of constructing a whole pack's glTF scenes at once.
   state.promise = Promise.all(Array.from({ length: 4 }, worker)).then(() => {
-    if (pendingLoads.get(library) === state) {
-      pendingLoads.delete(library)
+    if (live()) {
+      packs.pending.delete(pack)
+      packs.done.add(pack)
       library.loaded = library.geometries.size > 0
       library.failed = library.geometries.size === 0
+      if (failed.length) {
+        console.warn(
+          `[yellow-rooms] model pack "${pack}": ${failed.length}/${entries.length} models unavailable ` +
+            `(${failed.join(', ')}); box fallback`
+        )
+      }
     }
     return library
   })
   return state.promise
 }
 
+// The 23 furniture kinds from public/models/furniture/.
+export function loadFurnitureModels(library, { loader, baseUrl } = {}) {
+  return loadModelPack(library, {
+    pack: 'furniture',
+    files: FURNITURE_MODEL_FILES,
+    baseUrl: baseUrl ?? `${import.meta.env?.BASE_URL ?? '/'}models/furniture/`,
+    loader,
+    warn: 'each',
+  })
+}
+
+// The liminal-map prop packs (world/props PROP_MODEL_FILES), each from
+// public/models/<pack>/ under `baseUrl` (the models root). Packs load one
+// after another so the four-request bound holds; a pack whose GLBs are not
+// built yet warns once and keeps its kinds on the box fallback. Stops early
+// when the library is disposed mid-way (it must stay empty).
+export async function loadPropModels(library, { packs = Object.keys(PROP_MODEL_FILES), loader, baseUrl } = {}) {
+  const root = baseUrl ?? `${import.meta.env?.BASE_URL ?? '/'}models/`
+  const owner = packState(library)
+  for (const pack of packs) {
+    const files = PROP_MODEL_FILES[pack]
+    if (!files) continue
+    if (packStates.get(library) !== owner) break
+    await loadModelPack(library, { pack, files, baseUrl: `${root}${pack}/`, loader })
+  }
+  return library
+}
+
 export function disposeFurnitureModels(library) {
   // In-flight loads may still finish, but cannot repopulate a disposed library.
-  pendingLoads.delete(library)
+  packStates.delete(library)
   for (const g of library.geometries.values()) g.dispose()
   library.geometries.clear()
   library.loaded = false

@@ -1,16 +1,32 @@
 import { CHUNK, chunkKey3 } from '../../world/constants.js'
 import { ChunkData } from '../../world/ChunkData.js'
 import { ByteReader, ByteWriter, readRLE8, readRLEV, writeRLE8, writeRLEV } from './bytes.js'
-import { EditorMap, isPristineChunk } from '../EditorMap.js'
+import { EditorMap, attachDocumentSeam, isPristineChunk } from '../EditorMap.js'
 
 // .yrmap — the editor's map container. Binary, little-endian, varint-heavy:
 //
 //   "YRM1" · u8 container version · u8 codec (0 raw, 1 gzip) · payload
-//   payload := meta · rooms · descriptor table · chunks · [authored]
+//   payload := meta · rooms · descriptor table · chunks · [authored] · [finish] · [extras]
 //
-// `authored` (count · json records) is an optional trailing section: readers
-// that predate it stop after the chunks, and files without it load with no
-// authored structures.
+// `authored` (count · json records) and `finish` are optional trailing
+// sections: a reader stops after the last section it knows, and a file that
+// ends before a section loads without it. Each new section is appended this
+// way, so the container version stays 1.
+//
+// `finish` (chunk count · per chunk, in chunk order: u32 world seed · u8 has
+// district [· svarint dx · svarint dz] · spaceClass RLE · family string, ''
+// for the document's) is the context the finish schedule keys rooms by
+// (world/surfaceSet.js): a reloaded room keeps its floor, walls, doors and
+// signs. Files without it load with the document seed as every chunk's
+// world seed and no districts.
+//
+// `extras` (string palette, '' for none · entry count · per entry: varint
+// chunk index in chunk order · u8 flags (1 authoredFeatures, 2 levelLabel,
+// 4 tinted lamps) · [string label] · [varint count · per lamp: varint lamp
+// index · u32 tint]) carries what kind-lab documents add: meta.palette, a
+// chunk's level-plate label and authored windows/rails, lamp tints. It is
+// written only when the document uses one of them, so every other document
+// keeps its bytes; files without it load with no palette, labels or tints.
 //
 // Tile rasters ride byte-run RLE (long solid/empty runs dominate); spaceId
 // uses varint-valued RLE. Stair/structure descriptors are JSON-encoded once
@@ -125,6 +141,46 @@ export function serializeMap(map) {
   w.varint(map.authored.length)
   for (const rec of map.authored) w.string(JSON.stringify(rec))
 
+  // finish context (optional trailing section)
+  w.varint(chunks.length)
+  for (const d of chunks) {
+    w.u32(d.worldSeed)
+    if (d.district) {
+      w.u8(1)
+      w.svarint(d.district.dx)
+      w.svarint(d.district.dz)
+    } else w.u8(0)
+    writeRLE8(w, d.spaceClass)
+    w.string(d.mapFamily === map.meta.family ? '' : d.mapFamily)
+  }
+
+  // kind-lab extras (optional trailing section, only when used)
+  const extras = []
+  chunks.forEach((d, n) => {
+    const tinted = []
+    d.lamps.forEach((l, i) => {
+      if (typeof l.tint === 'number') tinted.push(i)
+    })
+    const flags = (d.authoredFeatures ? 1 : 0) | (d.levelLabel != null ? 2 : 0) | (tinted.length ? 4 : 0)
+    if (flags) extras.push({ n, d, flags, tinted })
+  })
+  if (map.meta.palette || extras.length) {
+    w.string(map.meta.palette ?? '')
+    w.varint(extras.length)
+    for (const { n, d, flags, tinted } of extras) {
+      w.varint(n)
+      w.u8(flags)
+      if (flags & 2) w.string(d.levelLabel)
+      if (flags & 4) {
+        w.varint(tinted.length)
+        for (const i of tinted) {
+          w.varint(i)
+          w.u32(d.lamps[i].tint)
+        }
+      }
+    }
+  }
+
   return w.finish()
 }
 
@@ -163,6 +219,7 @@ export function deserializeMap(payload) {
   for (let i = 0; i < descCount; i++) descs.push(JSON.parse(r.string()))
 
   const chunkCount = r.varint()
+  const chunks = []
   for (let i = 0; i < chunkCount; i++) {
     const cx = r.svarint()
     const cy = r.svarint()
@@ -191,12 +248,48 @@ export function deserializeMap(payload) {
         d[f] = descs[ref]
       }
     }
-    map.chunks.set(chunkKey3(cx, cy, cz), d)
+    chunks.push(d)
   }
   if (r.remaining > 0) {
     const count = r.varint()
     for (let i = 0; i < count; i++) map.authored.push(JSON.parse(r.string()))
   }
+  if (r.remaining > 0) {
+    if (r.varint() !== chunks.length) throw new Error('yrmap: finish section does not match the chunks')
+    for (const d of chunks) {
+      d.worldSeed = r.u32()
+      if (r.u8()) d.district = { dx: r.svarint(), dz: r.svarint() }
+      d.spaceClass.set(readRLE8(r, CELLS))
+      const family = r.string()
+      if (family) d.mapFamily = family
+    }
+  } else {
+    // An older file: its chunks were baked with the document seed, the seed
+    // its last bake set. Without districts, rooms take the 3x3-chunk blocks.
+    for (const d of chunks) d.worldSeed = map.meta.seed
+  }
+  if (r.remaining > 0) {
+    map.meta.palette = r.string() || null
+    const count = r.varint()
+    for (let i = 0; i < count; i++) {
+      const d = chunks[r.varint()]
+      if (!d) throw new Error('yrmap: extras entry references a missing chunk')
+      const flags = r.u8()
+      if (flags & 1) d.authoredFeatures = true
+      if (flags & 2) d.levelLabel = r.string()
+      if (flags & 4) {
+        const tints = r.varint()
+        for (let n = 0; n < tints; n++) {
+          const lamp = d.lamps[r.varint()]
+          if (!lamp) throw new Error('yrmap: extras tint references a missing lamp')
+          lamp.tint = r.u32()
+        }
+      }
+    }
+  }
+  // Each chunk reads its neighbours across its seam lines from the loaded
+  // document (EditorMap.js attachDocumentSeam).
+  for (const d of chunks) map.chunks.set(chunkKey3(d.cx, d.cy, d.cz), attachDocumentSeam(map, d))
   return map
 }
 

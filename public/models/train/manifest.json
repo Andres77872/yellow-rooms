@@ -1,0 +1,277 @@
+{
+  "schema": 1,
+  "pack": "train",
+  "generator": {
+    "blender": "5.2.2 LTS",
+    "blenderHash": "d13f752e3b9c",
+    "exporter": "5.2.40",
+    "script": "build_pack.py"
+  },
+  "budget": {
+    "tris": 20000,
+    "bytes": 650000
+  },
+  "totals": {
+    "tris": 2738,
+    "bytes": 82820
+  },
+  "kinds": [
+    {
+      "kind": "metro_bench",
+      "kindKey": "PROP_METRO_BENCH",
+      "file": "metro_bench.glb",
+      "class": "B",
+      "collision": {
+        "w": 2.1,
+        "d": 0.55
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 0.9,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -1.046,
+          0.0,
+          -0.275
+        ],
+        "max": [
+          1.046,
+          0.9,
+          0.26
+        ]
+      },
+      "tris": 1230,
+      "bytes": 32924,
+      "materials": [
+        "yr_slotDark",
+        "yr_applianceSteel",
+        "yr_trainShell",
+        "yr_lineGreen",
+        "yr_moquette",
+        "yr_moquettePriority",
+        "yr_chrome"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -1.05,
+          "u1": 1.05,
+          "v0": -0.275,
+          "v1": 0.275,
+          "y0": 0.0,
+          "y1": 0.9
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -1.05,
+          "u1": 1.05,
+          "v0": -0.26,
+          "v1": 0.23,
+          "y0": 0.0,
+          "y1": 0.48,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -1.03,
+          "u1": 1.03,
+          "v0": -0.28,
+          "v1": -0.17,
+          "y0": 0.48,
+          "y1": 0.9,
+          "t": 0
+        }
+      ],
+      "sha256": "450f2c02f357e3040a3f3d1e5eedeeab3184836f32434a538ef69083b7483a51"
+    },
+    {
+      "kind": "seat_pair",
+      "kindKey": "PROP_SEAT_PAIR",
+      "file": "seat_pair.glb",
+      "class": "B",
+      "collision": {
+        "w": 1.0,
+        "d": 0.75
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.1,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.49,
+          0.0,
+          -0.4476
+        ],
+        "max": [
+          0.495,
+          1.0987,
+          0.33
+        ]
+      },
+      "tris": 930,
+      "bytes": 26732,
+      "materials": [
+        "yr_slotDark",
+        "yr_applianceSteel",
+        "yr_trainShell",
+        "yr_moquette",
+        "yr_paperWhite",
+        "yr_lineGreen",
+        "yr_chrome"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.5,
+          "u1": 0.5,
+          "v0": -0.375,
+          "v1": 0.375,
+          "y0": 0.0,
+          "y1": 1.1
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.49,
+          "u1": 0.5,
+          "v0": -0.29,
+          "v1": 0.3,
+          "y0": 0.0,
+          "y1": 0.49,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.49,
+          "u1": 0.49,
+          "v0": -0.36,
+          "v1": -0.2,
+          "y0": 0.49,
+          "y1": 1.1,
+          "t": 0
+        }
+      ],
+      "sha256": "95b4fafd33b9554e74745ab60fd653610c406d9e0a41be7120fd01a4b876e6e1"
+    },
+    {
+      "kind": "ticket_gate",
+      "kindKey": "PROP_TICKET_GATE",
+      "file": "ticket_gate.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.3,
+        "d": 1.5
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.05,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 800,
+        "bytes": 30000
+      },
+      "bounds": {
+        "min": [
+          -0.155,
+          0.0,
+          -0.725
+        ],
+        "max": [
+          0.28,
+          1.0555,
+          0.725
+        ]
+      },
+      "tris": 578,
+      "bytes": 23164,
+      "materials": [
+        "yr_slotDark",
+        "yr_applianceSteel",
+        "yr_lineGreen",
+        "yr_keyDark",
+        "yr_trainShell",
+        "yr_readerBlue",
+        "yr_screen",
+        "yr_ledGreen",
+        "yr_tvBlack",
+        "yr_gateFlap",
+        "yr_paperWhite",
+        "yr_stopRed"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.15,
+          "u1": 0.15,
+          "v0": -0.75,
+          "v1": 0.75,
+          "y0": 0.0,
+          "y1": 1.05
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.16,
+          "u1": 0.08,
+          "v0": -0.73,
+          "v1": 0.73,
+          "y0": 0.0,
+          "y1": 1.02,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": 0.08,
+          "u1": 0.28,
+          "v0": -0.02,
+          "v1": 0.02,
+          "y0": 0.5,
+          "y1": 0.9,
+          "t": 0
+        }
+      ],
+      "sha256": "8b05b26559f8d5eb8af4dcac5ff253794e3d488033a98af6602f169c4ffd4b93"
+    }
+  ]
+}

@@ -54,6 +54,23 @@ development-only and is excluded from the production build. See the
 [model and engine review](docs/model-engine-review.md) for the latest changes
 and measured geometry reductions.
 
+## Music
+
+The building's PA speaker plays public-domain pieces from `public/music/`.
+They are Satie's Gymnopédies No. 1 and No. 3, from Mutopia Project editions
+the typesetter placed in the Public Domain. Each score is kept as its
+LilyPond text in `src/audio/music/scores/` and rendered to Standard MIDI
+Files with:
+
+```bash
+npm run build:music
+```
+
+The game plays every `.mid` listed in `public/music/index.json` through a
+procedural FM electric piano with a tape-and-speaker chain. The MUSIC slider
+under AUDIO sets the level. See
+[chapter 16](docs/engine-improvement/16-surface-variety-and-immersion.md#35-public-domain-music-over-a-pa-speaker).
+
 ## Debug tools
 
 - `F2` — debug panel with four tabs (`1`-`4` to switch): **world** (top-down
@@ -65,8 +82,10 @@ and measured geometry reductions.
   params, 3D gizmos), and **perf** (fps, frame-time sparkline, draw calls,
   memory).
 - `F3` — freeze/unfreeze the sim while the panel is open.
-- `` ` `` (backtick) — lightweight fps / complete-frame draw-call overlay, no
-  panel needed.
+- `` ` `` (backtick) — cycles the **FPS MONITOR** setting (Settings →
+  Graphics): off → fps counter → fps + stats (slowest frame, complete-frame
+  draw calls, memory). Persisted, and it reports frames actually drawn, so a
+  frame limit or the 30 FPS menu cadence reads as what reaches the screen.
 - `?touch=1` / `?touch=0` — force the touch or desktop UI tier.
 
 The full F2 toolbox and its map/editor dependencies load on the first F2 press,
@@ -127,6 +146,22 @@ costs, measurements and limitations are in
 [docs/pathracer/10](docs/pathracer/10-realtime-integration.md) (realtime:
 where it plugs into the render and why).
 
+### Experimental: liminal maps (off by default)
+
+Settings → MAPS → **EXPERIMENTAL MAPS** adds the 12 liminal map families
+(Stairwell, Night Lot, Showroom, Poolrooms, Library, Suburb, Terminal,
+Theater, Playplace, Train, House, Funhouse) to the title MAP picker, under
+EXPERIMENTAL. Their profiles stay disabled in the shipped config, so this
+toggle is how a production build plays them. Their layouts are not pinned by
+goldens yet: a seed may build a different world after an update.
+
+- A shared `?family=<id>` link opens that world only while the setting is on;
+  otherwise it opens office.
+- Turning the setting off mid-run keeps the running world (RESTART and TRY
+  AGAIN stay in it). The title picker then offers the shipped families only.
+- In development, `?forceFamily=all` does the same for one page load without
+  saving the setting.
+
 ## World generation
 
 The world is generated reproducibly from a text seed. The headless generation
@@ -163,6 +198,19 @@ catalog-driven furnishing, family acoustics, shared structure contracts,
 hard-void death/reset rules, and release evidence for every family. See
 [World Generation Architecture](docs/worldgen-architecture.md) for the current
 module and runtime contract.
+
+### Finishes and dressing
+
+Surfaces and dressing are chosen at mesh time from the generated layout,
+leaving world generation and its digests untouched. Each world draws a
+**finish schedule**: coordinated floor/wall/ceiling packages per room
+category, applied per storey (circulation), department (rooms) and landmark.
+The schedule also brings a smooth wear field, and metal transition strips
+wherever a floor finish changes. Doors, window glazing, signs, failing lamps
+and furniture tint read the same room context. A department hangs one door
+standard, a gallery screen shares one glazing system, a sign names the room
+it serves, exit signs mark the escape route, and derelict wings fail
+together. See [chapter 16](docs/engine-improvement/16-surface-variety-and-immersion.md#4-semantic-coherence-a-building-not-a-patchwork).
 
 ### Historical milestones (world-gen versions 14–15)
 

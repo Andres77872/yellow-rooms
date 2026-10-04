@@ -3,6 +3,7 @@ import { EditorMap } from '../EditorMap.js'
 import { auditStructure, documentStructures, structureKey } from '../structureReview.js'
 import { familyCatalog, findNearestInWorld, stampRecipeIntoDocument } from '../catalogLab.js'
 import { CATALOG_RECIPES } from '../../world/structures/catalog/index.js'
+import { EditorApp } from '../EditorApp.js'
 
 const FAMILIES = ['office', 'hotel', 'sewer', 'tower', 'lattice']
 
@@ -47,5 +48,28 @@ describe('structure catalog lab', () => {
       map.undo()
       expect(map.chunks.size).toBe(0)
     }
+  })
+})
+
+describe('stamping into an emptied document', () => {
+  it("takes the recipe's family and drops a kind's palette", () => {
+    // EditorApp has no DOM here: stub just what stampCatalogType reads.
+    const app = Object.create(EditorApp.prototype)
+    Object.assign(app, {
+      mode: 'document',
+      map: new EditorMap({ family: 'tower', palette: 'poolTile' }),
+      world: { family: 'tower' },
+      view2d: { view: { cx: 0, cz: 0 } },
+      floor: 0,
+      review: { auto: false },
+      notify() {},
+      onDocumentChanged() {},
+      focusStructure() {},
+    })
+    app.stampCatalogType({ family: 'office', type: 'lightWell', label: 'light well' })
+    expect(app.map.chunks.size).toBeGreaterThan(0)
+    expect(app.map.meta.family).toBe('office')
+    expect(app.map.meta.palette).toBeNull()
+    expect(app.world.family).toBe('office')
   })
 })

@@ -276,10 +276,10 @@ describe('display refresh estimate', () => {
     expect(e._displayHz).toBe(60)
   })
 
-  it('takes no estimate while every callback renders at full rate (diagnostics on)', () => {
+  it('takes no estimate while every callback renders at full rate (F2 debug mode)', () => {
     const e = bareEngine({ gpu: false })
-    e.debug = { visible: true }
-    idle(e, { hz: 60, renderMs: 25 })
+    e.debugMode.active = true
+    idle(e, { hz: 50, renderMs: 25 })
     expect(e._displayHz).toBeUndefined()
   })
 

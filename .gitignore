@@ -28,3 +28,8 @@ dist-ssr
 .codex
 .wrangler
 .kimi-code
+
+# Blender pipeline: bytecode caches and save-version backups
+scripts/blender/__pycache__/
+scripts/blender/packs/__pycache__/
+*.blend1

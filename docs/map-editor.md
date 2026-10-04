@@ -1,7 +1,11 @@
 # Map Editor (`/editor`)
 
 Verified on 2026-09-26 against the current editor implementation (world-gen
-v26) and the version-1 `.yrmap` codec.
+v26) and the version-1 `.yrmap` codec. **Updated 2026-10-02** (world-gen v28)
+for the twelve liminal kind-lab prototypes and the systems they share:
+per-map palettes, level labels, authored windows/rails, lamp tints, prop packs
+in the object tool, stacked furniture cells, kind-build failure handling and
+the `.yrmap` extras section ([Kind lab](#kind-lab)).
 
 A standalone map-creation tool with its own Vite entry (`editor.html` →
 `src/editor/main.js`). Vite development and preview rewrite `/editor` to that
@@ -78,7 +82,11 @@ established these load-bearing facts:
 
 `EditorMap` (`src/editor/EditorMap.js`) is the single mutable document:
 
-- `meta`: `{ name, family, seed, worldGenVersion }`.
+- `meta`: `{ name, family, seed, worldGenVersion, palette }`. `palette` is a
+  render palette id from `MAP_PALETTES` (`src/world/familyPalette.js`) that
+  overrides the family's look, or `null`. Only the kind lab sets it; a
+  procedural bake, or a catalog stamp into an empty document, sets it back
+  to `null`. Undo restores it like the rest of `meta`.
 - `chunks: Map<"cx,cy,cz" → ChunkData>` — real `ChunkData` instances.
   Chunks materialize lazily as fully-open fabric (no walls, `CELL_OPEN`)
   when an edit touches them. Untouched chunks do not exist in the document,
@@ -93,8 +101,23 @@ established these load-bearing facts:
   perimeter edges.
 - Global accessors mirror the game's seam rules: `wallVAt/setWallV(gx, cy,
   gz, …)` resolve the owning chunk of an edge line, cell accessors resolve
-  `(floor(g/14), g mod 14)`; furniture moves re-home the record (and its
+  `(floor(g/14), g mod 14)`; furniture moves re-home the records (and their
   `COLUMN_FURNITURE` byte) across chunk boundaries.
+- **Stacked furniture cells.** A cell may hold several furniture records, each
+  with its own centre and AABB, under one `COLUMN_FURNITURE`. Examples are a
+  showroom gondola (four bookshelves back to back), a till (two counters), or
+  a table the world furnisher set on a counter or cooler cell.
+  `furnitureListAt(gx, cy, gz)` returns every record; `furnitureAt` returns
+  only the first, for callers that ask whether a cell is furnished. The editor
+  treats a cell as one unit. Select picks the cell, and the selection card
+  then reads *Selected pieces* and lists them. `moveFurniture` moves every
+  record and keeps each one's offset. Rotate turns a single piece onto the
+  cell centre, but turns a stacked cell as one arrangement (each offset
+  rotates with its facing). Delete (`removeFurniture`) clears every record
+  and the column. The inspector prints one line per record, the room-repetition
+  signature (`simulate.js`) counts every record, and the repetition-anomaly
+  template copies every record. The object tool refuses an occupied cell, so
+  stacks come only from kinds and baked world chunks.
 - Undo/redo: every operation snapshots the chunks it touches (typed-array
   clones — ~2 KB each) plus the room list; the stack is capped.
 
@@ -128,7 +151,12 @@ document, whose original seed text is not stored.
    infinite generation and would starve seam-adjacent rects), then call
    `furnishRoleRoom` / `furnishOrdinaryRoom` with the room's `salt` mixed
    into the space id. Placement inherits the per-piece connectivity guard,
-   wall-hugging and anchor guarantees from the game's grammar.
+   wall-hugging and anchor guarantees from the game's grammar. The room
+   builder also sets `ctx.onePerCell`, so the grammar refuses a cell that an
+   earlier op already filled (a kitchen's table never lands on its stove).
+   World generation leaves that flag off and can still stack two grammar
+   pieces in one cell (`furnishConference`). Turning it on for world
+   generation would change the world goldens, so that is left to the owner.
 3. The room record stores everything needed to regenerate deterministically;
    "reroll" just bumps `salt`.
 
@@ -166,14 +194,19 @@ ordinary-theme option; labels via `roomRoleLabel` (`debug/mapInspect.js`).
   cursor.
 - **Tools** (pointer-mode strategy objects, keys `1`–`9`, `0`): select/move
   (drag furniture or lamps, `R` rotates furniture, `Delete` removes the
-  selection; in explore mode it pins the inspector), wall pen (click applies
-  the selected edge type; drag snaps to grid vertices and lays a continuous
-  run — wall / door / wide / window / rail / erase), cell paint (open /
-  corridor / lobby), room rect (choose role, then drag), object placer, lamp
-  placer (lit/dead cycling), eraser, section cut, probe (inspect / distance /
-  path / isovist) and author (structure templates). Drag strokes are
-  interpolated between pointer samples and land as one undo step. Editing
-  tools refuse in explore mode.
+  selection; a stacked cell moves, turns and deletes as one; a dragged lamp
+  keeps its tint; in explore mode it pins the inspector), wall pen (click
+  applies the selected edge type; drag snaps to grid vertices and lays a
+  continuous run — wall / door / wide / window / rail / erase), cell paint
+  (open / corridor / lobby), room rect (choose role, then drag), object
+  placer (the 23 furniture kinds plus the 39 prop-pack kinds, ids 24–79,
+  sized from `PIECE_DIMS`, which includes `PROP_DIMS`; chair and table have
+  no entry and get a 1 m × 1 m footprint), lamp placer
+  (lit/dead cycling; the cycle keeps a lamp's tint, and no tool sets one),
+  eraser, section cut, probe (inspect / distance / path / isovist) and
+  author (structure templates). Drag strokes are interpolated between
+  pointer samples and land as one undo step. Editing tools refuse in
+  explore mode.
 - **Structure protection** (`protect.js`, on by default): generated multilevel
   geometry is only valid as a whole, so the tools skip what the descriptors
   own and say why in the status line — slab openings and lethal drops, stair
@@ -237,7 +270,14 @@ ordinary-theme option; labels via `roomRoleLabel` (`debug/mapInspect.js`).
   `high` quality tier, with a `LightGrid` baked from the edited chunks,
   furniture proxy shadows (ring masks cross chunk seams, since the editor
   places pieces anywhere) and the look's panel glow and troffer face (see
-  engine-improvement chapters 13 and 14).
+  engine-improvement chapters 13 and 14). Materials, `applyPalette` and
+  change detection key on `map.meta.palette ?? map.meta.family`
+  (`previewPaletteKey`), so a kind-lab map renders in its own palette. The
+  preview loads the furniture GLBs and then every prop pack once per page
+  (`previewModelLibrary`: `loadFurnitureModels`, then `loadPropModels`) and
+  re-meshes resident chunks once the furniture GLBs arrive and again once
+  every prop pack has loaded or fallen back. Until then, or for a pack
+  that fails to load, props draw as their registry box fallback.
 
 ## Multilevel structures
 
@@ -475,16 +515,171 @@ cells to open floor (undo restores the original fabric).
 ## Kind lab
 
 *generate kind* builds a whole prototype map into the document from a seed
-(`src/editor/prototypes.js`): transit underpass (Exit 8), parking deck, dead
-mall, hospital ward and school at night. Each is compiled by a small floor-plan
-compiler (walkable cells, explicit room walls and doors; every other cell of
-the touched chunks is column-sealed mass, the sewer family's convention — it
-shows as posts from above in the 3D cutaway, hidden behind walls at eye
-level) plus authored atria and stairwells, and every kind passes the layered
-audit with each floor and the whole volume one walkable component (tested,
-byte-deterministic per seed). The research behind the kinds and their
-measured metrics are in
+(`src/editor/prototypes.js`). `PROTOTYPE_KINDS` holds 17 kinds. The original
+five come first. The twelve liminal maps researched in
+[liminal_maps/](liminal_maps/README.md) follow, in that folder's recommended
+order (`src/editor/kinds/index.js` `LIMINAL_KINDS`). New kinds are always
+appended, because index 0 (the underpass) is the panel's default kind.
+
+| # | id | label | family | floors | palette | design |
+|---|---|---|---|---|---|---|
+| 0 | `underpass` | transit underpass (Exit 8) | tower | 1 | — | [research update](liminal-horror-design.md#new-map-kinds-prototyped-in-the-editors-kind-lab) |
+| 1 | `parking` | parking deck | tower | 3 | — | [research update](liminal-horror-design.md#new-map-kinds-prototyped-in-the-editors-kind-lab) |
+| 2 | `mall` | dead mall | hotel | 3 | — | [research update](liminal-horror-design.md#new-map-kinds-prototyped-in-the-editors-kind-lab) |
+| 3 | `hospital` | hospital ward | tower | 1 | — | [research update](liminal-horror-design.md#new-map-kinds-prototyped-in-the-editors-kind-lab) |
+| 4 | `school` | school at night | office | 2 | — | [research update](liminal-horror-design.md#new-map-kinds-prototyped-in-the-editors-kind-lab) |
+| 5 | `stairwell` | endless stairwell | tower | 16 | `stairwellConcrete` | [04](liminal_maps/04-endless-stairwell.md) |
+| 6 | `nightlot` | night parking lot | lattice | 1 | `nightLot` | [02](liminal_maps/02-night-lot.md) |
+| 7 | `showroom` | infinite showroom | tower | 2 | `showroomWhite` | [09](liminal_maps/09-infinite-showroom.md) |
+| 8 | `poolrooms` | poolrooms | tower | 3 | `poolTile` | [01](liminal_maps/01-poolrooms.md) |
+| 9 | `babel` | library of Babel | hotel | 5 | `babelLibrary` | [06](liminal_maps/06-library-of-babel.md) |
+| 10 | `suburb` | sleeping suburb | hotel | 1 | `suburbNight` | [03](liminal_maps/03-sleeping-suburb.md) |
+| 11 | `terminal` | airport terminal | tower | 3 | `terminalTerrazzo` | [08](liminal_maps/08-terminal.md) |
+| 12 | `theater` | empty theater | hotel | 5 | `theaterDamask` | [11](liminal_maps/11-empty-theater.md) |
+| 13 | `playplace` | playplace | office | 3 | `playCarpet` | [10](liminal_maps/10-playplace.md) |
+| 14 | `train` | endless train | tower | 2 | `metroTile` | [07](liminal_maps/07-endless-train.md) |
+| 15 | `house` | house larger inside | hotel | 3 | `houseFaded` | [05](liminal_maps/05-house-larger-inside.md) |
+| 16 | `funhouse` | funhouse | tower | 2 | `funhouseNeon` | [12](liminal_maps/12-funhouse.md) |
+
+Each kind is compiled from small floor plans: walkable cells, explicit room
+walls and doors, and column-sealed mass in every other cell of the touched
+chunks. That mass follows the sewer family's convention; from above it shows
+as posts in the 3D cutaway, and at eye level it hides behind walls. Kinds
+add authored atria and stairwells, catalog volumes
+(`stampRecipeIntoDocument`, or `assembleCatalogDescriptor` +
+`stampCatalogStructure`) and `createRoom` rooms. Every kind passes the
+layered audit with the whole volume one walkable component and each floor
+one planar component. The exception is `stairwell`, whose storeys may split
+into pockets that only the stairs join. Every kind is also
+byte-deterministic per seed (tested; the liminal kinds over 11 seeds). On seed `proto` the twelve liminal kinds build 6–120 chunks in
+1–67.5 ms warm (`babel` is the largest and slowest). A build's notes say what
+it drew, what to look at, and which stand-ins replace engine systems that do
+not exist yet. The research behind the kinds and their measured metrics, with
+the liminal kinds' gaps against each map document's targets, are in
 [the liminal research update](liminal-horror-design.md#research-update-2026-09-26-liminality-horror-layout-and-new-map-kinds).
+
+### Writing a kind
+
+- A kind is `{ id, label, family, floors, palette, build, floorPockets? }`,
+  default-exported from `src/editor/kinds/<id>.js`. `family` is office,
+  hotel, tower or lattice. `floors` must equal the storeys built for every
+  seed. `palette` names a `MAP_PALETTES` entry. `floorPockets: true` lets a
+  storey split into planar pockets joined only by stairs, though the whole
+  volume must still be one component; only `stairwell` sets it. A kind module
+  must not import `prototypes.js`, which imports it through `kinds/index.js`.
+- `build(map, seed, opts)` receives the numeric seed (`seedFromText`) and
+  the remaining options. It returns `{ spawn: { gx, gz, cy }, notes, exit? }`,
+  or `{ error }`. `buildKind`, used by `generatePrototype` and by tests for
+  unregistered scratch kinds, runs it as one undoable `mutate` after
+  `clearAll`. It resets `nextRoomId` to 1, so `createRoom` rooms number and
+  furnish as on a fresh document. It also sets `meta.family`, `meta.palette`
+  (`kind.palette ?? null`), `meta.seed` and `meta.name` (`<id>-<seed>`).
+- Tests: `src/editor/__tests__/kindJudge.js` exports `KIND_SEEDS` (11 seeds),
+  `judgeMap(map)` (the layered audit, planar components per floor, volume
+  components) and `expectKindClean(expect, kind, seeds)`. For each seed,
+  `expectKindClean` requires a clean build and an empty audit, one component
+  per floor unless the kind sets `floorPockets`, exactly `floors` storeys, one
+  volume component, at least `floors − 1` canonical stair links, and
+  byte-identical `serializeMap` output on a rebuild. Each liminal kind also has
+  `kind-<id>.test.js`, with its own layout checks and the map document's §12
+  measures that today's engine can reach.
+
+### FloorPlan helpers (`src/editor/kinds/floorPlan.js`)
+
+The compiler the original five use (`FloorPlan`, `addPiece`, `rng`,
+`FACING`, `WALL_TO_FRONT`, `THICK`) moved here from `prototypes.js` with no
+change in behaviour. The module re-exports the constants a kind needs
+(`CELL`, `CHUNK`, `CELL_*`, `PASSAGE_*`, `WALL_*`, `COLUMN_*`,
+`SPACE_ROLE_*`, `STAIR_*`). Additions, all defaulting to the old behaviour:
+
+- `edge(axis, gx, gz, wall, passage, feature = WALL_PLAIN)`, with
+  `window(axis, gx, gz)` and `rail(axis, gx, gz)` as sugar for walled edges
+  carrying `WALL_WINDOW` / `WALL_RAIL`. `compile` marks the chunk that owns a
+  placed window or rail `authoredFeatures`.
+- `lamp(gx, gz, lit = true, tint = null)` passes the tint to `setLamp`.
+- `piece(gx, gz, kind, { wall | facing })` either centres a piece in its
+  cell or hugs the named wall with its front away from it. Pieces are sized
+  from `PIECE_DIMS`, which includes the props; chair and table have no entry
+  and get a 1 m × 1 m footprint. A piece blocks its whole cell for walking.
+- `mirror({ axis, line, from, spaceOffset })` copies the cells, explicit
+  edges (with their features), lamps, columns and pieces inside `from` to
+  their reflection across grid line `line`. On axis `'x'`, cell `gx` goes to
+  `2·line−1−gx` and V-line `gx` to `2·line−gx`; axis `'z'` works the same on
+  rows. Pieces flip their front and hugged wall, the chiral corner shelf turns
+  to the mirrored corner, and non-zero space ids shift by `spaceOffset`. It
+  returns the number of cells written. The seven `MIRROR_UNSAFE` props
+  (standpipe, ticket gate, CCTV desk, metro bench, mascot, mailbox,
+  lifeguard chair) are left-right asymmetric, so `mirror` throws before
+  writing anything if one is inside `from`; a kind places their twins by hand.
+  The funhouse's mirror maze is built with it.
+- `featureEdge(map, axis, gx, cy, gz, feature)` writes a window or rail
+  after the stamps have run (`compile` would overwrite it) and marks the
+  owning chunk.
+- `labelFloor(map, cy, label, { cx, cz })` sets `levelLabel` on every chunk
+  of storey `cy` that exists at call time, or on one chunk column, so call it
+  after compiling that storey. A label is at most four glyphs from
+  `0-9 - b A C E F H L P U d r n o t y` and space, and anything else throws.
+  `null` restores the storey number. It returns the number of chunks
+  labelled.
+
+### Shared document systems
+
+- **Per-map palettes.** `MAP_PALETTES` (`src/world/familyPalette.js`) holds
+  twelve palettes, one per liminal kind. They have the family palettes' shape
+  and use only the existing surface painters. `familyPalette(id)` resolves a
+  family id first, then a map palette id, and falls back to Office. A palette
+  is a render choice only: chunks keep their real `mapFamily`, which audits,
+  dressing and doors read. See
+  [Lighting & Rendering Pipeline](lighting-pipeline.md#authored-lamp-tint-and-map-palettes).
+- **Level labels.** The LEVEL plates (`objects/dressing/edges.js`,
+  `lattice.js`) print `ChunkData.levelLabel` in place of `storeyNumber(cy)`.
+  The seven-segment glyph table in `objects/dressing/notices.js` gained the
+  letters above and a blank. There are two known limits. The top storey of
+  an enclosed `stampStairwell` core gets no LEVEL plate, because the top exit
+  has no plain door-free wall face. Hotel guest-door numbers ignore
+  `levelLabel` and keep the real storey. A labelled chunk is never treated as
+  pristine, so it is always saved.
+- **Authored windows and rails.** `ChunkData.authoredFeatures` opts a chunk
+  out of the audit's stray-feature rule (`world/audit.js`
+  `strayWallFeatures`). The atrium base-floor rule still applies. The
+  generator sets neither this field nor `levelLabel`, and neither is
+  digested, so the world goldens are unchanged.
+- **Lamp tint.** In `setLamp(gx, cy, gz, lit, tint)`, `tint` is a 0xRRGGBB
+  value that multiplies the lamp's light colour (linear, channel/255).
+  `undefined` keeps the existing tint, `null` removes it, and a number sets
+  it. An untinted record carries no `tint` key, so its saved bytes are
+  unchanged. The tint reaches the panels, LightField, the light grid and the
+  path tracer
+  ([Lighting & Rendering Pipeline](lighting-pipeline.md#authored-lamp-tint-and-map-palettes)).
+- **Props.** The 39 prop kinds (ids 24–79) come in 12 packs and share the
+  furniture record. The object tool lists them, `piece` and `addPiece` size
+  them, and the 3D preview loads their GLBs
+  ([Furniture asset pipeline](furniture-pipeline.md#prop-packs)).
+- **Stacked furniture cells**: see [Document model](#document-model).
+
+### Build failures
+
+`EditorApp.generateKind` handles a build that throws and a build that
+returns `{ error }` the same way. `_rollBackBuild` closes any op left open
+and undoes the attempt if it left an undo entry, which restores the chunks,
+rooms, authored records and `meta` (palette included). It then puts the
+undo/redo stacks and `meta.name` back as they were, and the editor returns
+to explore mode if it was exploring. The status bar shows
+`kind lab: <error>`. A successful build fits the plan to the map, jumps to
+its spawn, and reports the build time and the notes
+(`src/editor/__tests__/editorApp.test.js`).
+
+### Limits
+
+- The game has no path that loads editor maps (`src/core/Engine.js`). The
+  kinds are prototypes that you view in the editor's 3D preview.
+- The engine loads only the furniture GLBs, not the prop packs, so a prop
+  placed in the game would render as its fallback boxes. No world grammar
+  places props.
+- Most engine systems the map documents need do not exist yet: water, sky,
+  motion, portals, mirrors and the rest of
+  [13-shared-systems.md](liminal_maps/13-shared-systems.md). Each kind's notes
+  list its stand-ins.
 
 ## `.yrmap` format
 
@@ -493,7 +688,7 @@ Layout (`src/editor/format/yrmap.js`):
 
 ```
 "YRM1" magic · u8 container version · u8 codec (0 raw, 1 gzip) · payload
-payload := meta · rooms · descriptor table · chunks · [authored]
+payload := meta · rooms · descriptor table · chunks · [authored] · [finish] · [extras]
 meta    := name str · family str · seed u32 · worldGenVersion varint ·
            nextRoomId varint
 rooms   := count · { id varint · cy svarint · x0,z0 svarint · dx,dz varint ·
@@ -509,6 +704,13 @@ chunk   := cx,cy,cz svarint · zone u8 ·
            descriptor refs: stairUp/Down, sewer, structure, structureUp/Down,
                             lethalVoidUp/Down → svarint index into descs (-1 none)
 authored := count · { json str }         // optional trailing section
+finish   := chunk count · { worldSeed u32 · hasDistrict u8 ·
+                            [dx,dz svarint] · spaceClass → RLE8 ·
+                            family str ('' = the document's) }   // optional
+extras   := palette str ('' none) · count ·
+            { chunk index varint · flags u8 (1 authoredFeatures,
+              2 levelLabel, 4 tinted lamps) · [label str] ·
+              [count · { lamp index varint · tint u32 }] }       // optional
 ```
 
 - RLE (runs of `(len varint, value)`) exploits the long solid/empty runs of
@@ -523,6 +725,20 @@ authored := count · { json str }         // optional trailing section
 - `authored` (authored structure records) is an optional trailing section:
   readers that predate it stop after the chunks, and files without it load
   with no authored structures, so the container version is unchanged.
+  `finish` and `extras` follow the same rule. A reader stops after the last
+  section it knows, and a file that ends before a section loads without it.
+- `finish` carries the context the finish schedule keys rooms by
+  (`world/surfaceSet.js`), so a reloaded room keeps its floor, walls, doors
+  and signs. A file without it loads with the document seed as every chunk's
+  world seed and with no districts.
+- `extras` carries what kind-lab documents add: `meta.palette`, each chunk's
+  `levelLabel` and `authoredFeatures`, and lamp tints (by lamp index in the
+  chunk's lamp list). It is written only when the document uses one of
+  them, so every other document, the original five kinds included, keeps
+  its bytes. A file without it loads with no palette, labels or tints. An
+  entry that names a missing chunk or lamp fails the import. Round trips,
+  undo snapshots and the compressed container are covered by
+  `src/editor/__tests__/yrmap-extras.test.js`.
 
 Export downloads `<name>.yrmap`; import accepts a file picker or drag+drop.
 The editor also autosaves the document (debounced `.yrmap` bytes encoded as

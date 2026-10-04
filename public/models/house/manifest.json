@@ -1,0 +1,198 @@
+{
+  "schema": 1,
+  "pack": "house",
+  "generator": {
+    "blender": "5.2.2 LTS",
+    "blenderHash": "d13f752e3b9c",
+    "exporter": "5.2.40",
+    "script": "build_pack.py"
+  },
+  "budget": {
+    "tris": 20000,
+    "bytes": 650000
+  },
+  "totals": {
+    "tris": 2115,
+    "bytes": 72360
+  },
+  "kinds": [
+    {
+      "kind": "hall_clock",
+      "kindKey": "PROP_HALL_CLOCK",
+      "file": "hall_clock.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.55,
+        "d": 0.35
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 2.05,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.275,
+          0.0,
+          -0.18
+        ],
+        "max": [
+          0.275,
+          2.05,
+          0.175
+        ]
+      },
+      "tris": 1137,
+      "bytes": 39632,
+      "materials": [
+        "yr_mahogany",
+        "yr_woodDark",
+        "yr_slotDark",
+        "yr_valveBrass",
+        "yr_keyDark",
+        "yr_paperWhite"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.275,
+          "u1": 0.275,
+          "v0": -0.175,
+          "v1": 0.175,
+          "y0": 0.0,
+          "y1": 2.05
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.26,
+          "u1": 0.26,
+          "v0": -0.175,
+          "v1": 0.16,
+          "y0": 0.0,
+          "y1": 1.47,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.27,
+          "u1": 0.27,
+          "v0": -0.175,
+          "v1": 0.175,
+          "y0": 1.47,
+          "y1": 2.0,
+          "t": 0
+        }
+      ],
+      "sha256": "52cf1955fa8d3dbbf0ea903a1644a558effe95896e47976bfaa79410b7870beb"
+    },
+    {
+      "kind": "radio",
+      "kindKey": "PROP_RADIO",
+      "file": "radio.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.55,
+        "d": 0.4
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 0.95,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.275,
+          0.0,
+          -0.2
+        ],
+        "max": [
+          0.275,
+          0.944,
+          0.202
+        ]
+      },
+      "tris": 978,
+      "bytes": 32728,
+      "materials": [
+        "yr_mahogany",
+        "yr_valveBrass",
+        "yr_paperWhite",
+        "yr_woodDark",
+        "yr_woodMid",
+        "yr_rug",
+        "yr_dialGlow",
+        "yr_keyDark"
+      ],
+      "sockets": [
+        {
+          "name": "socket_sound_0",
+          "at": [
+            0.0,
+            0.854,
+            0.12
+          ],
+          "yrSocket": "sound"
+        }
+      ],
+      "colliders": [
+        {
+          "u0": -0.275,
+          "u1": 0.275,
+          "v0": -0.2,
+          "v1": 0.2,
+          "y0": 0.0,
+          "y1": 0.95
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.275,
+          "u1": 0.275,
+          "v0": -0.2,
+          "v1": 0.2,
+          "y0": 0.0,
+          "y1": 0.635,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.19,
+          "u1": 0.19,
+          "v0": -0.11,
+          "v1": 0.135,
+          "y0": 0.635,
+          "y1": 0.94,
+          "t": 0
+        }
+      ],
+      "sha256": "dabd4aeccce3e96fb1b2357a94d896000d373511c264006eec488170b19b87c5"
+    }
+  ]
+}

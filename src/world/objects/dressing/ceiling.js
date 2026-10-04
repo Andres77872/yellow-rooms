@@ -31,8 +31,35 @@ import { PROP_TINT, SIGN_TINT } from './palette.js'
 // openings.
 const roll = (salt, gx, gz) => hash2i(salt | 0, gx, gz) / 4294967296
 
+const RUN_PROBE = 3 // cells probed each way to read a corridor's direction
+
 export function dressCeiling(data, props, signs) {
   const lampCells = new Set(data.lamps.map((l) => `${l.lx},${l.lz}`))
+  const walkable = (x, z) => {
+    if (x < 0 || x >= CHUNK || z < 0 || z >= CHUNK) return false
+    const k = data.cellKind[cIdx(x, z)]
+    return k === CELL_CORRIDOR || k === CELL_LOBBY || k === CELL_STAIR
+  }
+  // How far the circulation runs open from (x, z) along one axis: through
+  // walkable cells with no wall between, a few cells each way.
+  const run = (x, z, dx, dz) => {
+    let n = 0
+    for (const sgn of [-1, 1]) {
+      let cx = x
+      let cz = z
+      for (let step = 0; step < RUN_PROBE; step++) {
+        const nx = cx + sgn * dx
+        const nz = cz + sgn * dz
+        if (!walkable(nx, nz)) break
+        const walled = dx ? data.vAt(Math.max(cx, nx), cz) : data.hAt(cx, Math.max(cz, nz))
+        if (walled) break
+        n++
+        cx = nx
+        cz = nz
+      }
+    }
+    return n
+  }
   for (let z = 0; z < CHUNK; z++) {
     for (let x = 0; x < CHUNK; x++) {
       if (data.cols[cIdx(x, z)]) continue
@@ -47,7 +74,12 @@ export function dressCeiling(data, props, signs) {
       if (kind === CELL_CORRIDOR || kind === CELL_LOBBY) {
         const h = hash2i((SIGN_SALT ^ 0x5b1a) | 0, gx, gz)
         if (h / 4294967296 < BLADE_SIGN_CHANCE) {
-          const alongX = (h & 2) === 2
+          // The panel hangs across the corridor, broad face to the walker:
+          // its long axis runs perpendicular to the way the corridor runs
+          // (an open junction with no clear run keeps the hashed bit).
+          const runX = run(x, z, 1, 0)
+          const runZ = run(x, z, 0, 1)
+          const alongX = runX === runZ ? (h & 2) === 2 : runZ > runX
           const blade = (ou, y, ov, su, sy, sv, tint) =>
             signs.push({
               px: px + (alongX ? ou : ov),

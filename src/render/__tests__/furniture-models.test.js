@@ -20,15 +20,17 @@ import {
   TABLE_W,
 } from '../../world/constants.js'
 import { PIECE_DIMS } from '../../world/rooms/furnish.js'
+import * as FURN from '../../world/furniture.js'
 import { FURN_BED, FURN_CHAIR, FURN_DESK, FURN_TABLE } from '../../world/furniture.js'
 import { buildChunkMeshes } from '../../world/mesh.js'
 import { Chunk } from '../../world/Chunk.js'
 import { ChunkData } from '../../world/ChunkData.js'
 import { DEFAULT_WORLD_CONFIG } from '../../world/config.js'
 import { createGeometries } from '../geometries.js'
+import { readPackManifest } from './packManifest.js'
 
-// The Blender pipeline (scripts/blender/build_furniture.py) exports one GLB
-// per furniture kind. These tests lock the export contract the runtime loader
+// The Blender pipeline (scripts/blender/build_pack.py + packs/furniture.py)
+// exports one GLB per furniture kind and describes the set in manifest.json. These tests lock the export contract the runtime loader
 // and the collision system rely on: origin at the footprint centre on the
 // floor, Y-up, and horizontal extents inside the collision AABB (rooms/
 // furnish.js sweeps a 2D box from these dims — geometry must not protrude).
@@ -46,13 +48,25 @@ const EXPECTED_DIMS = {
   [FURN_DESK]: [DESK_W, DESK_D],
 }
 
-// Height budgets per kind (mirrors the audit table in build_furniture.py).
+// Height budgets per kind (at least the audit heights in scripts/blender/
+// packs/furniture.py, which the manifest carries as heightBudget).
 const EXPECTED_HEIGHT = {
   [FURN_DESK]: 1.36,
   [FURN_CHAIR]: 0.98,
   [FURN_TABLE]: 0.8,
   [FURN_BED]: 1.32,
 }
+
+// public/models/furniture/manifest.json: kinds, budgets and the collision /
+// height contract the build audited against (pack-manifest.test.js checks it
+// is fresh against the GLBs).
+const MANIFEST = readPackManifest('furniture')
+const KIND_COUNT = MANIFEST.kinds.length
+const MANIFEST_KIND = new Map(MANIFEST.kinds.map((k) => [FURN[k.kindKey], k]))
+// Every FURN_* placement kind exported by world/furniture.js.
+const FURN_IDS = Object.entries(FURN)
+  .filter(([key, id]) => key.startsWith('FURN_') && Number.isInteger(id))
+  .map(([, id]) => id)
 
 const TOL_XZ = 0.15 // rim/cornice/tray overhangs the box builders already had
 const TOL_CENTER = 0.12 // asymmetric accents (cooler cup tube, sink towel bar)
@@ -90,7 +104,12 @@ async function readModel(name) {
 describe('furniture GLB exports (Blender pipeline contract)', () => {
   it('exports exactly one GLB per furniture kind', () => {
     const kinds = Object.keys(FURNITURE_MODEL_FILES)
-    expect(kinds.length).toBe(23)
+    expect(kinds.length).toBe(KIND_COUNT)
+    expect(kinds.map(Number).sort((a, b) => a - b)).toEqual([...FURN_IDS].sort((a, b) => a - b))
+    // The manifest maps the same ids to the same files (FURN_DESK -> desk).
+    const byId = (a, b) => a[0] - b[0]
+    expect(Object.entries(FURNITURE_MODEL_FILES).map(([id, file]) => [Number(id), file]).sort(byId))
+      .toEqual(MANIFEST.kinds.map((k) => [FURN[k.kindKey], k.kind]).sort(byId))
     for (const kind of kinds) {
       const json = glbJson(`${FURNITURE_MODEL_FILES[kind]}.glb`)
       expect(json.meshes.length).toBeGreaterThan(0)
@@ -142,8 +161,10 @@ describe('furniture GLB exports (Blender pipeline contract)', () => {
         for (const primitive of mesh.primitives) triangles += json.accessors[primitive.indices].count / 3
       }
     }
-    expect(bytes).toBeLessThan(650_000)
-    expect(triangles).toBeLessThan(20_000)
+    expect(MANIFEST.budget).toEqual({ tris: 20_000, bytes: 650_000 })
+    expect(bytes).toBeLessThan(MANIFEST.budget.bytes)
+    expect(triangles).toBeLessThan(MANIFEST.budget.tris)
+    expect(MANIFEST.totals).toEqual({ tris: triangles, bytes })
   })
 
   it('exports usable normals and nondegenerate, correctly wound triangles for every kind', async () => {
@@ -199,6 +220,14 @@ describe('furniture GLB exports (Blender pipeline contract)', () => {
       const budget = EXPECTED_HEIGHT[kind] ?? 2.1
       expect(mx[1]).toBeLessThanOrEqual(budget + TOL_H)
       expect(mx[1]).toBeGreaterThan(0.5) // every piece reads as furniture
+      // The build audited against the same collision dims and its own
+      // (tighter) height budget.
+      const entry = MANIFEST_KIND.get(Number(kind))
+      expect(entry.file).toBe(`${file}.glb`)
+      expect(entry.collision.w).toBeCloseTo(w, 4)
+      expect(entry.collision.d).toBeCloseTo(d, 4)
+      expect(entry.heightBudget).toBeLessThanOrEqual(budget)
+      expect(mx[1]).toBeLessThanOrEqual(entry.heightBudget + TOL_H)
     }
   )
 })
@@ -338,7 +367,7 @@ describe('furniture model loading lifecycle', () => {
     } }
     try {
       await expect(loadFurnitureModels(library, { loader })).resolves.toBe(library)
-      expect(library.geometries.size).toBe(21)
+      expect(library.geometries.size).toBe(KIND_COUNT - 2)
       expect(library.geometries.has(FURN_DESK)).toBe(false)
       expect(library.geometries.has(FURN_CHAIR)).toBe(false)
       expect(library.loaded).toBe(true)
@@ -382,12 +411,12 @@ describe('furniture model loading lifecycle', () => {
     expect(loadFurnitureModels(library, { loader })).toBe(first)
     await first
     expect(peak).toBe(4)
-    expect(library.geometries.size).toBe(23)
+    expect(library.geometries.size).toBe(KIND_COUNT)
     expect(library.loaded).toBe(true)
-    expect(loader.loadAsync).toHaveBeenCalledTimes(23)
+    expect(loader.loadAsync).toHaveBeenCalledTimes(KIND_COUNT)
     for (const dispose of disposal) expect(dispose).toHaveBeenCalledTimes(1)
     await loadFurnitureModels(library, { loader })
-    expect(loader.loadAsync).toHaveBeenCalledTimes(23)
+    expect(loader.loadAsync).toHaveBeenCalledTimes(KIND_COUNT)
     disposeFurnitureModels(library)
   })
 

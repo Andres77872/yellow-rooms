@@ -11,7 +11,8 @@ import { injectEditorStyle } from './ui/style.js'
 import { createTools } from './ui/tools.js'
 import { describeCell, roomRoleLabel } from '../debug/mapInspect.js'
 import { CELL, CHUNK, CHUNK_WORLD, cIdx } from '../world/constants.js'
-import { MAP_FAMILY_ORDER, worldConfigForFamilyOrOffice } from '../world/mapFamily.js'
+import { worldConfigForFamilyOrOffice } from '../world/mapFamily.js'
+import { LEGACY_FAMILIES } from '../world/families/registry.js'
 import { WorldSource } from './worldSource.js'
 import { chunkDescriptors, inspectCell } from './inspect.js'
 import { distanceField, isovist, lightField, liminalReport, shortestPath } from './simulate.js'
@@ -467,9 +468,22 @@ export class EditorApp {
     const sel = this.selection
     if (!sel) return '(nothing selected)'
     if (sel.type === 'furniture') {
-      const found = this.map.furnitureAt(sel.gx, sel.cy, sel.gz)
-      if (!found) return '(gone)'
-      const { rec } = found
+      // A furniture selection is a cell: every record in it (a stacked cell
+      // such as a back-to-back gondola holds several).
+      const list = this.map.furnitureListAt(sel.gx, sel.cy, sel.gz)
+      if (!list.length) return '(gone)'
+      if (list.length > 1) {
+        const counts = new Map()
+        for (const { rec } of list) {
+          const name = FURN_NAMES[rec.kind] ?? rec.kind
+          counts.set(name, (counts.get(name) ?? 0) + 1)
+        }
+        return [
+          `${list.length} pieces: ${[...counts].map(([name, n]) => `${name} ×${n}`).join(', ')} @ ${sel.gx},${sel.gz} f${sel.cy}`,
+          'stacked cell · move, rotate and delete act on every piece',
+        ]
+      }
+      const { rec } = list[0]
       return [
         `${FURN_NAMES[rec.kind] ?? rec.kind} @ ${sel.gx},${sel.gz} f${sel.cy}`,
         `facing ${FACING_LABEL[rec.facing]} · ${rec.w.toFixed(2)}×${rec.d.toFixed(2)}u`,
@@ -507,23 +521,40 @@ export class EditorApp {
     this.onDocumentChanged()
   }
 
+  // Turn the selected cell's furniture 90°. A single piece snaps to the cell
+  // centre (a rotated wall-hug offset would poke through the wall). A stacked
+  // cell turns as one arrangement: every piece's offset from the cell centre
+  // rotates with its facing, so back-to-back shelves stay back to back
+  // instead of collapsing onto one point.
   rotateSelection() {
     const sel = this.selection
     if (sel?.type !== 'furniture') return
     const found = this.map.furnitureAt(sel.gx, sel.cy, sel.gz)
     if (!found) return
     this.map.mutate(() => {
-      const live = this.map.furnitureAt(sel.gx, sel.cy, sel.gz)
-      const rec = live.rec
+      // Snapshot the chunk first, so the turn is one undo step and the chunk
+      // re-meshes (the records are edited in place).
+      this.map._touch(found.chunk.cx, sel.cy, found.chunk.cz)
+      const list = this.map.furnitureListAt(sel.gx, sel.cy, sel.gz)
       const CYCLE = { 0: 3, 3: 1, 1: 2, 2: 0 } // 90° steps through the DIR set
-      rec.facing = CYCLE[rec.facing] ?? 0
-      const w = rec.w
-      rec.w = rec.d
-      rec.d = w
-      // Recentre within the cell — a rotated wall-hug offset would poke
-      // through the wall, so rotation snaps the piece to the cell centre.
-      rec.x = (rec.lx + 0.5) * CELL
-      rec.z = (rec.lz + 0.5) * CELL
+      for (const { rec } of list) {
+        rec.facing = CYCLE[rec.facing] ?? 0
+        const w = rec.w
+        rec.w = rec.d
+        rec.d = w
+        const cx = (rec.lx + 0.5) * CELL
+        const cz = (rec.lz + 0.5) * CELL
+        if (list.length === 1) {
+          rec.x = cx
+          rec.z = cz
+        } else {
+          // The facing steps +z → −x → −z → +x: (ox, oz) → (−oz, ox).
+          const ox = rec.x - cx
+          const oz = rec.z - cz
+          rec.x = cx - oz
+          rec.z = cz + ox
+        }
+      }
     })
     this.onDocumentChanged()
   }
@@ -744,7 +775,9 @@ export class EditorApp {
   scanStructures() {
     const seed = seedFromText(this.world.seedText)
     // v26: every family has structures (Sewer's are catalog volumes).
-    const families = this.structureScan.allFamilies ? [...MAP_FAMILY_ORDER] : [this.world.family]
+    // The 5 building families: the liminal ones only exist as editor kinds
+    // here (their world tiles are not editor documents), spec §11.4.
+    const families = this.structureScan.allFamilies ? [...LEGACY_FAMILIES] : [this.world.family]
     const r = this.structureScan.radius
     const ccx = Math.floor(this.view2d.view.cx / CHUNK_WORLD)
     const ccz = Math.floor(this.view2d.view.cz / CHUNK_WORLD)
@@ -817,7 +850,9 @@ export class EditorApp {
       return
     }
     if (!this.map.chunks.size) {
+      // An emptied document takes the recipe's world, and its palette.
       this.map.meta.family = entry.family
+      this.map.meta.palette = null
       this.world.family = entry.family
     }
     const cx0 = Math.floor(this.view2d.view.cx / CHUNK_WORLD)
@@ -1043,13 +1078,27 @@ export class EditorApp {
 
   // --- kind lab & lighting lab ---------------------------------------------------
 
-  // Build a prototype map kind (editor/prototypes.js) into the document.
+  // Build a prototype map kind (editor/prototypes.js) into the document. A
+  // build that throws (e.g. a level-plate glyph labelFloor rejects) or
+  // returns an error never leaves a half-built document: it is rolled back
+  // to the document as it was before the attempt, and the error is shown.
   generateKind(kindId, seedText) {
+    const mode = this.mode
     if (this.mode === 'explore') this.mode = 'document'
     const t0 = performance.now()
-    const res = generatePrototype(this.map, kindId, { seed: seedText })
+    const map = this.map
+    const before = { top: map._undo.at(-1), undo: [...map._undo], redo: [...map._redo], name: map.meta.name }
+    let res
+    try {
+      res = generatePrototype(map, kindId, { seed: seedText })
+    } catch (err) {
+      res = { ok: false, error: `${kindId} build failed: ${err?.message ?? err}` }
+    }
     if (!res.ok) {
-      this.notify(`kind lab: ${res.error}`)
+      this._rollBackBuild(map, before)
+      this.mode = mode
+      this.notify(`kind lab: ${res.error}`, 'error')
+      this.onDocumentChanged()
       return
     }
     this.world.family = this.map.meta.family
@@ -1064,6 +1113,20 @@ export class EditorApp {
     this.notify(`kind lab: ${res.label} (${Math.round(performance.now() - t0)} ms)${res.notes?.length ? ` · ${res.notes.join(' · ')}` : ''}`)
     this.onDocumentChanged()
     if (res.spawn) this.jumpToCell(res.spawn.gx, res.spawn.gz, res.spawn.cy, { center: false })
+  }
+
+  // Undo what a failed build left in `map`: buildKind's mutate closes its op
+  // even when the build throws, so the attempt is the newest undo entry
+  // (when it changed anything). Undoing it restores the chunks, rooms,
+  // authored records and meta; the undo/redo history and the name (not part
+  // of an undo entry) are put back as they were, so the attempt leaves no
+  // trace.
+  _rollBackBuild(map, before) {
+    while (map._op) map.endOp() // a build that threw inside a bare beginOp
+    if (map._undo.at(-1) !== before.top) map.undo()
+    map._undo = before.undo
+    map._redo = before.redo
+    map.meta.name = before.name
   }
 
   // Re-assign this floor's lamp failures by circuit or breaker zone.

@@ -14,6 +14,10 @@ import {
   PASSAGE_OPEN,
   PASSAGE_WALL,
   PASSAGE_WIDE,
+  SPACE_CLASS_CIRCULATION,
+  SPACE_CLASS_ROOM,
+  SPACE_CLASS_UNKNOWN,
+  SPACE_ROLE_NONE,
 } from '../mapTypes.js'
 import { selectZone } from './regions.js'
 import { chunkStairs, stairHaloRect, STAIR_DX, STAIR_DZ } from '../structures/slab.js'
@@ -1943,11 +1947,139 @@ export function clearOfficePlanCache(config) {
   if (config) PLAN_CACHES.delete(config)
 }
 
+// Space id -> SPACE_CLASS_* from the plan's own space records (a promoted
+// lobby is a corridor-type space), memoised on the cached plan.
+const SPACE_CLASSES = new WeakMap()
+function planSpaceClasses(plan) {
+  let classes = SPACE_CLASSES.get(plan)
+  if (!classes) {
+    classes = new Map()
+    for (const space of plan.spaces) {
+      classes.set(space.id, space.type === 'corridor' ? SPACE_CLASS_CIRCULATION : SPACE_CLASS_ROOM)
+    }
+    SPACE_CLASSES.set(plan, classes)
+  }
+  return classes
+}
+
+// The seam ring: the planner fields of the neighbours' cells along this
+// chunk's own West and North lines. A neighbour in the same district is read
+// from this chunk's own district plan (held by the source, so resolving never
+// plans anything); a cell inside the neighbour's structure footprint (its
+// root-seeded globalBounds) is the landmark's, as that chunk's stamp will make
+// it. A neighbour across a district line is not read at all: the district
+// edge contract only opens portals there, and every portal cell is a routed
+// corridor endpoint on both sides, so that side is recorded as a portal.
+// Only office-planned neighbours; null when there is none. Resolved on first
+// use — the dressing and mesh build read it, generation never does.
+function officeSeamSource(ctx, district, plan) {
+  if (!ctx.borderZones) return null
+  const src = {
+    district,
+    plan,
+    config: ctx.config,
+    cx: ctx.cx,
+    cz: ctx.cz,
+    rootSeed: ctx.rootSeed,
+    cy: Number.isFinite(ctx.cy) ? Math.floor(ctx.cy) : 0,
+    zones: { w: ctx.borderZones.w, n: ctx.borderZones.n },
+  }
+  let ring
+  let resolved = false
+  // District-local plan cell of a global cell, or -1 outside this district.
+  const x0 = (ctx.cx - district.localCx) * CHUNK
+  const z0 = (ctx.cz - district.localCz) * CHUNK
+  const planCell = (gx, gz) => {
+    const x = gx - x0
+    const z = gz - z0
+    return x >= 0 && z >= 0 && x < plan.size && z < plan.size ? idx(plan.size, x, z) : -1
+  }
+  return {
+    resolve() {
+      if (!resolved) {
+        ring = officeSeamRing(src)
+        resolved = true
+      }
+      return ring
+    },
+    // The plan's own space id, role and class at a global cell of this
+    // district, before any stamp relabelled it (0 / SPACE_ROLE_NONE /
+    // SPACE_CLASS_UNKNOWN outside). Mesh-time rules read them where a
+    // structure or stair halo cleared a room's role, or to see a room's
+    // extent past the chunk edge.
+    plannedId(gx, gz) {
+      const i = planCell(gx, gz)
+      return i < 0 ? 0 : plan.spaceId[i]
+    },
+    plannedRole(gx, gz) {
+      const i = planCell(gx, gz)
+      return i < 0 ? SPACE_ROLE_NONE : plan.roleGrid[i]
+    },
+    plannedClass(gx, gz) {
+      const i = planCell(gx, gz)
+      return i < 0 || !plan.spaceId[i] ? SPACE_CLASS_UNKNOWN : planSpaceClasses(plan).get(plan.spaceId[i]) ?? SPACE_CLASS_UNKNOWN
+    },
+  }
+}
+
+function officeSeamRing(src) {
+  const ring = {
+    id: new Uint32Array(2 * CHUNK),
+    kind: new Uint8Array(2 * CHUNK),
+    role: new Uint8Array(2 * CHUNK),
+    cls: new Uint8Array(2 * CHUNK),
+    hall: new Uint8Array(2 * CHUNK), // 1: the cell belongs to a structure
+    west: null, // the neighbour's district {dx, dz} when its cells are read
+    north: null,
+    portal: { w: false, n: false }, // the side is another district's portal edge
+  }
+  const plan = src.plan
+  const classOf = planSpaceClasses(plan)
+  const fill = (side, ncx, ncz, base, cellOf) => {
+    if (src.zones[side] !== ZONE_OFFICE) return null
+    const d = officeDistrictCoords(ncx, ncz, src.config)
+    if (d.dx !== src.district.dx || d.dz !== src.district.dz) {
+      ring.portal[side] = true
+      return null
+    }
+    const structure = src.rootSeed === undefined ? null : structureAt(src.rootSeed, ncx, ncz, src.cy, src.config)
+    const b = structure?.id ? structure.globalBounds : null
+    for (let i = 0; i < CHUNK; i++) {
+      const [x, z] = cellOf(i)
+      const pi = idx(plan.size, d.localCx * CHUNK + x, d.localCz * CHUNK + z)
+      const gx = ncx * CHUNK + x
+      const gz = ncz * CHUNK + z
+      const owned = !!b && gx >= b.x0 && gx <= b.x1 && gz >= b.z0 && gz <= b.z1
+      // The stamp clears its volume and a one-cell ring around it to role-less
+      // hall / lobby (multilevelStamp.js carveStructure / labelRing). Inside
+      // the volume the exact kind (lobby, stair, void) is the stamp's; lobby
+      // is the walkable stand-in, and the hall flag already names the class.
+      // The ring outside the volume keeps the space it was carved from, and a
+      // room there keeps its role: the resolver reads the cleared byte back
+      // from this plan (surfaceSet.js cellRole), so the ring reports the
+      // plan's role, as that chunk's own context will. Roles only ride rooms,
+      // so a corridor's ring cell stays role-less either way.
+      const halo = !!b && gx >= b.x0 - 1 && gx <= b.x1 + 1 && gz >= b.z0 - 1 && gz <= b.z1 + 1
+      const planned = plan.spaceId[pi]
+      ring.id[base + i] = owned ? structure.id : planned
+      ring.kind[base + i] = halo ? CELL_LOBBY : plan.cellKind[pi]
+      ring.role[base + i] = owned ? SPACE_ROLE_NONE : plan.roleGrid[pi]
+      ring.cls[base + i] = planned ? classOf.get(planned) ?? SPACE_CLASS_UNKNOWN : SPACE_CLASS_UNKNOWN
+      ring.hall[base + i] = owned ? 1 : 0
+    }
+    return { dx: d.dx, dz: d.dz }
+  }
+  ring.west = fill('w', src.cx - 1, src.cz, 0, (i) => [CHUNK - 1, i])
+  ring.north = fill('n', src.cx, src.cz - 1, CHUNK, (i) => [i, CHUNK - 1])
+  return ring.west || ring.north || ring.portal.w || ring.portal.n ? ring : null
+}
+
 export function applyOfficeDistrictPlan(data, ctx) {
   const district = officeDistrictCoords(ctx.cx, ctx.cz, ctx.config)
   const plan = getOfficeDistrictPlan(ctx.seed, district.dx, district.dz, ctx.config, ctx)
   const x0 = district.localCx * CHUNK
   const z0 = district.localCz * CHUNK
+  const classOf = planSpaceClasses(plan)
   for (let z = 0; z < CHUNK; z++) {
     for (let x = 0; x < CHUNK; x++) {
       const pi = idx(plan.size, x0 + x, z0 + z)
@@ -1955,8 +2087,11 @@ export function applyOfficeDistrictPlan(data, ctx) {
       data.cellKind[di] = plan.cellKind[pi]
       data.spaceId[di] = plan.spaceId[pi]
       data.spaceRole[di] = plan.roleGrid[pi]
+      data.spaceClass[di] = plan.spaceId[pi] ? classOf.get(plan.spaceId[pi]) ?? SPACE_CLASS_UNKNOWN : SPACE_CLASS_UNKNOWN
     }
   }
+  data.district = { dx: district.dx, dz: district.dz }
+  data.seam = officeSeamSource(ctx, district, plan)
   for (let z = 0; z < CHUNK; z++) {
     for (let lineX = 1; lineX < CHUNK; lineX++) {
       data.setPassageV(lineX, z, plan.passageVAt(x0 + lineX, z0 + z))

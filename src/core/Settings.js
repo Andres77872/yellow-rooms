@@ -33,6 +33,12 @@ export const PATH_TRACER_MODES = ['off', 'viewer', 'realtime']
 // preset changes it, and it never changes what a frame looks like.
 export const FRAME_LIMITS = ['off', 'half', 30, 60, 90, 120, 144]
 
+// On-screen frame-rate monitor (core/DebugOverlay.js): 'fps' is a one-line
+// counter (rate + average frame time), 'stats' adds the worst frame and the
+// renderer.info counters. Backtick cycles it. It only reads frames: it never
+// changes when or how the game draws.
+export const FPS_MONITOR_MODES = ['off', 'fps', 'stats']
+
 export const DEFAULTS = {
   sensitivity: SENS_DEFAULT,
   invertY: false,
@@ -52,6 +58,8 @@ export const DEFAULTS = {
   dynamicRes: false,
   outline: true,
   volume: 0.9,
+  // The PA music (audio/music), relative to the master volume.
+  music: 0.5,
   minimap: true,
   // Photosensitivity: caps the bad-tube strobe (<= 2 steps/s, < 10% swing)
   // and softens the global tube hum and dead-tube dip, keeping every lamp
@@ -64,6 +72,12 @@ export const DEFAULTS = {
   // Uncapped by default (FRAME_LIMITS): a high-refresh display otherwise
   // gets exactly the frame rate it had before the setting existed.
   frameLimit: 'off',
+  fpsMonitor: 'off',
+  // EXPERIMENTAL, OFF by default: lists the liminal map families (still
+  // disabled in the shipped config) under EXPERIMENTAL in the title MAP
+  // picker, and lets a run start in them (Engine._configFor). Not a graphics
+  // key: no preset changes it.
+  experimentalMaps: false,
   // Graphics: the preset plus the advanced keys it pins (core/graphics.js).
   // Fresh installs are 'auto' (classified per device at boot); the advanced
   // defaults are the pre-classification fallback EXPANDED, so the advanced
@@ -84,6 +98,7 @@ const oneOf = (list) => (v, d) => (list.includes(v) ? v : d)
 const COERCE = {
   sensitivity: num(SENS_MIN, SENS_MAX),
   volume: num(0, 1),
+  music: num(0, 1),
   invertY: bool,
   invertX: bool,
   bob: bool,
@@ -97,6 +112,8 @@ const COERCE = {
   reduceFlicker: bool,
   pathTracer: oneOf(PATH_TRACER_MODES),
   frameLimit: oneOf(FRAME_LIMITS),
+  fpsMonitor: oneOf(FPS_MONITOR_MODES),
+  experimentalMaps: bool,
   preset: oneOf(PRESET_CHOICES),
   renderScale: num(0.5, 1),
   worldDetail: oneOf(WORLD_DETAIL_ORDER),

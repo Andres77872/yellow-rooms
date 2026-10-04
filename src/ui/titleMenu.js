@@ -1,5 +1,8 @@
 import { IS_TOUCH } from '../core/device.js'
 import { MAP_FAMILY_ORDER } from '../world/mapFamily.js'
+import { DEFAULT_WORLD_CONFIG } from '../world/config.js'
+import { displayNameOf, isLiminal, noteOf } from '../world/families/registry.js'
+import { selectableFamilies } from '../world/families/select.js'
 import { WORLD_GEN_VERSION } from '../world/constants.js'
 import { SETTINGS_HTML } from './settingsPanel.js'
 import { CONTROL_CHIPS } from './hud.js'
@@ -11,14 +14,11 @@ import { CONTROL_CHIPS } from './hud.js'
 // theme.js. Element ids are the UI class's cache contract — keep them stable.
 
 // One-line spatial identity per map family, shown under the MAP picker.
-// Mirrors the README family table; unknown families show nothing.
-export const FAMILY_NOTES = Object.freeze({
-  office: 'room districts · empty bullpens · tall atria',
-  sewer: 'dry galleries · confluences · manhole stairs',
-  tower: 'broad galleries · service cores · skybridges',
-  lattice: 'service alleys · catwalks · transfer plazas',
-  hotel: 'guest-room wings · corridor loops · atria',
-})
+// Mirrors the README family table; unknown families show nothing. The text
+// lives in the family records (families/legacy.js, families/<id>/record.js).
+export const FAMILY_NOTES = Object.freeze(Object.fromEntries(
+  MAP_FAMILY_ORDER.map((family) => [family, noteOf(family)])
+))
 
 export function familyNote(family) {
   return Object.hasOwn(FAMILY_NOTES, family) ? FAMILY_NOTES[family] : ''
@@ -40,9 +40,19 @@ const tubes = (word, from, failAt = -1) =>
     .map((ch, i) => `<span class="lt${i === failAt ? ' fail' : ''}" style="--i:${from + i}">${ch}</span>`)
     .join('')
 
-const familyOpts = MAP_FAMILY_ORDER.map(
-  (f) => `<option value="${f}">${f.toUpperCase()}</option>`
-).join('')
+// The MAP list: the families the shipped config enables, in code order. With
+// any liminal family enabled the list splits into BUILDINGS / LIMINAL
+// optgroups; with none (until the release) it is the plain legacy list, byte
+// for byte. The DEV forced family is added at runtime (overlays.js).
+const familyOption = (f) => `<option value="${f}">${displayNameOf(f)}</option>`
+export function familyOptionsHtml(families) {
+  const buildings = families.filter((f) => !isLiminal(f))
+  const liminal = families.filter((f) => isLiminal(f))
+  if (liminal.length === 0) return buildings.map(familyOption).join('')
+  return `<optgroup label="BUILDINGS">${buildings.map(familyOption).join('')}</optgroup>` +
+    `<optgroup label="LIMINAL">${liminal.map(familyOption).join('')}</optgroup>`
+}
+const familyOpts = familyOptionsHtml(selectableFamilies(DEFAULT_WORLD_CONFIG))
 
 const footNote = IS_TOUCH ? 'best with headphones · landscape only' : 'best with headphones'
 

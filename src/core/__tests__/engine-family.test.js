@@ -13,6 +13,7 @@ vi.mock('../../render/furnitureModels.js', () => ({
   loadFurnitureModels: (library) => new Promise((resolve) => {
     pendingModels.furniture.push({ library, resolve })
   }),
+  loadPropModels: vi.fn((library) => Promise.resolve(library)),
   disposeFurnitureModels: vi.fn(),
 }))
 
@@ -127,6 +128,7 @@ vi.mock('../../world/ChunkManager.js', () => ({
         this.exit = { cx, cy, cz, lx, lz }
       })
       this.reset = vi.fn()
+      this.setSpawn = vi.fn()
       this.upgradeFurnitureModels = vi.fn()
       this.setRenderDetailProfile = vi.fn()
       this.updateVisibility = vi.fn()
@@ -261,6 +263,7 @@ vi.mock('../DebugOverlay.js', () => ({
     constructor() {
       this.visible = false
       this.update = vi.fn()
+      this.setMode = vi.fn()
       this.dispose = vi.fn()
     }
   },
@@ -737,7 +740,12 @@ describe('low-activity render cadence', () => {
     expect(engine.renderer.info.reset).toHaveBeenCalledTimes(2)
     expect(preRender).toHaveBeenCalledTimes(2)
     expect(postRender).toHaveBeenCalledTimes(2)
-    expect(engine.debug.update).toHaveBeenCalledTimes(2)
+    // The FPS monitor sees every callback and is told which ones drew.
+    expect(engine.debug.update.mock.calls.map(([t, drawn]) => [t, drawn])).toEqual([
+      [1_000, true],
+      [1_010, false],
+      [1_034, true],
+    ])
 
     clock.mockRestore()
   })
@@ -779,27 +787,37 @@ describe('low-activity render cadence', () => {
     engine._animate()
     expect(engine.deferred.render).toHaveBeenCalledTimes(1)
 
-    engine.debug.visible = true
+    // The FPS monitor is a player setting: it reports the idle cadence and
+    // never lifts it (only its own change invalidates the deadline once).
+    engine._applySetting('fpsMonitor', 'stats')
+    engine._animate()
+    expect(engine.debug.setMode).toHaveBeenLastCalledWith('stats')
     now += 5
     engine._animate()
     expect(engine.deferred.render).toHaveBeenCalledTimes(2)
 
-    engine.debug.visible = false
+    // F2 debug mode does lift it (its tools time and step frames).
+    Object.defineProperty(engine.debugMode, 'active', { value: true, writable: true })
+    now += 5
+    engine._animate()
+    expect(engine.deferred.render).toHaveBeenCalledTimes(3)
+
+    engine.debugMode.active = false
     now += 5
     engine._animate() // leaving diagnostics starts a fresh idle deadline
-    expect(engine.deferred.render).toHaveBeenCalledTimes(3)
+    expect(engine.deferred.render).toHaveBeenCalledTimes(4)
 
     now += 5
     engine._animate()
     engine._applySetting('outline', false)
     engine._animate()
-    expect(engine.deferred.render).toHaveBeenCalledTimes(4)
+    expect(engine.deferred.render).toHaveBeenCalledTimes(5)
 
     now += 5
     engine._animate()
     engine._onResize()
     engine._animate()
-    expect(engine.deferred.render).toHaveBeenCalledTimes(5)
+    expect(engine.deferred.render).toHaveBeenCalledTimes(6)
 
     clock.mockRestore()
   })

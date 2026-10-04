@@ -31,7 +31,10 @@ describe('prototype map kinds', () => {
       expect(res.ok).toBe(true)
       const { bad, floors, volume, audit } = judge(map)
       expect(bad).toEqual([])
-      expect(floors.every((f) => f.length === 1)).toBe(true)
+      // floorPockets: storeys may split into planar pockets that only stairs
+      // join (the world audit's own contract is the connected volume).
+      if (kind.floorPockets) expect(floors.every((f) => f.length >= 1)).toBe(true)
+      else expect(floors.every((f) => f.length === 1)).toBe(true)
       expect(floors).toHaveLength(kind.floors)
       expect(volume).toBe(1)
       if (kind.floors > 1) expect(audit.canonicalLinks).toBeGreaterThanOrEqual(kind.floors - 1)

@@ -242,7 +242,8 @@ export const LAMP_TINT_VAR = 0.045 // per-channel colour-temperature drift (subt
 // a whole room. The safe profile clears BOTH limits on its own: a step is at
 // most one change, so 2 steps/s is at most 1 flash/s, and a 0.92 floor keeps
 // every step under an 8% change. Render-side only: no world-gen byte reads
-// these (lamp character is a pure function of position and time).
+// these (lamp character is a pure function of position, the lamp's room wear
+// and time — lampCharacter.js).
 export const LAMP_SAFE_BAD_RATE = 2 // bad-tube steps per second (<= 3 Hz)
 export const LAMP_SAFE_BAD_LO = 0.92 // bad-tube floor: an 8% swing (< 10%)
 export const LAMP_SAFE_HUM_SCALE = 0.5 // global tube-hum ripple, x the full ripple
@@ -577,10 +578,11 @@ export const HEADER_H = 0.8 // doorway lintel header height
 // stepped architrave (back-band behind each jamb, corner blocks in the header
 // where jamb meets lintel, plinth blocks at the feet, a head-cap ledge over
 // the opening) — bold flat shapes, which is what reads as "anime background
-// art" under the cel ramp and ink outline. A deterministic DOOR_LEAF_FRACTION
-// of doorways also show the door itself: a PAIR of leaves, each half the
-// framed opening (so the closed pair would fill it exactly — realistic ~1.36u
-// doors, not a 2.7u gate), swung flat against the flanking wall with one leaf
+// art" under the cel ramp and ink outline. About DOOR_LEAF_FRACTION of
+// doorways (weighted by what the door is for — doorSchedule.js) also show
+// the door itself: a PAIR of leaves, each half the framed opening (so the
+// closed pair would fill it exactly — realistic ~1.36u doors, not a 2.7u
+// gate), swung flat against the flanking wall with one leaf
 // on EACH face, so the doorway reads as a door from both rooms. DOOR_SALT
 // keys the per-door hash so each doorway looks identical across chunk reloads.
 //
@@ -613,7 +615,7 @@ export const DOOR_LEAF_THICK = 0.06 // open door panel thickness
 // toe, so the leaf's hinge edge kisses the casing band and clears the 0.03
 // plinth toe below it.
 export const DOOR_LEAF_GAP = (FRAME_BAND_W - FRAME_W) / 2 // 0.04
-export const DOOR_LEAF_FRACTION = 0.5 // fraction of doorways that show the open door pair
+export const DOOR_LEAF_FRACTION = 0.5 // base share of doorways showing the open door pair, before the function gate
 export const DOOR_SALT = 0x0d00 | 0 // fixed hash salt for the per-door leaf/face choice
 // Raised panel moldings dress each leaf's room-side face (the wall-side face
 // is hidden against the wall) + a small knob plate at the leading edge. All
@@ -644,11 +646,13 @@ export const DOOR_LOUVER_LO = DOOR_PANEL_TOP_Y - DOOR_PANEL_TOP_H / 2 + DOOR_LOU
 export const DOOR_LOUVER_HI = DOOR_H - DOOR_RAIL_H // 2.16 highest slat centre, on the top-rail line
 export const DOOR_KICK_Y = 0.07 // kick-plate centre height
 export const DOOR_KICK_H = 0.12 // metal kick plate at the leaf foot
-// Per-door leaf tint (deterministic from the same doorway hash): most doors
-// sit within a narrow painted-cream brightness band; a rare one comes out
-// dark-stained — the liminal "something is off with this one" beat.
-export const DOOR_TINT_VAR = 0.12 // ± brightness variation on ordinary leaves
-export const DOOR_DARK_CHANCE = 0.05 // fraction of leaves that are stained dark
+// Leaf tint scale (mesh.js leafTint): a door's tone seed maps onto a painted-
+// cream brightness band; the doors off one corridor share their department's
+// paint batch inside it (doorSchedule.js), and a rare leaf comes out
+// dark-stained — the liminal "something is off with this one" beat, likelier
+// in derelict wings.
+export const DOOR_TINT_VAR = 0.12 // ± brightness range the tone seed spans
+export const DOOR_DARK_CHANCE = 0.05 // tone band read as stained dark (the rate itself: doorSchedule.js)
 export const DOOR_DARK_TINT = 0.32 // brightness multiplier for a dark-stained leaf
 
 // Observation windows exist only on multi-level room galleries. They are
@@ -699,15 +703,22 @@ export const COL_BASE_H = 0.24
 export const COL_BASE_WIDEN = 0.14 // extra half-width beyond the shaft
 export const COL_CAP_H = 0.16
 export const COL_CAP_WIDEN = 0.18
-// Exit signs surface-mounted on the door header (both faces), on a
-// deterministic subset of doorways — a sparse wayfinding beacon in the haze.
-export const EXIT_SIGN_CHANCE = 0.35
+// Exit signs: surface-mounted on the door header (both faces) of the egress
+// doorways (doorFunction.js DOOR_EGRESS: stair, lobby, corridor and district
+// portal fire doors), and hung from the ceiling at the mouth of every stair
+// flight — the escape route lit as a beacon in the haze, and nowhere else,
+// in every family. Emergency green means the way out and nothing more: the
+// tower's bridge-approach accents wear their storey's accent colour instead
+// (towerSockets.js). The sewer hangs none: every gallery door there is a
+// bulkhead, so a sign would mark all of them; its chambers carry plant
+// plates instead.
 export const EXIT_SIGN_W = 0.72
 export const EXIT_SIGN_H = 0.24
 export const EXIT_SIGN_T = 0.07
 // Housing centre height: clears the door head-cap ledge by 0.03 so the sign
-// mounts on the header casing, never overlapping the cap. Shared by the
-// office edge dressing and the tower lit-accent sockets.
+// mounts on the header casing, never overlapping the cap. Shared by the edge
+// dressing's exit signs and the tower's lit accents, which take the same
+// header band.
 export const EXIT_SIGN_Y = DOOR_H + DOOR_CAP_H + 0.03 + EXIT_SIGN_H / 2 // 2.64
 // Hanging blade signs in corridors/lobbies: a perpendicular double-faced
 // panel on a ceiling hanger, bottom edge above door-head height.
@@ -722,18 +733,20 @@ export const VENT_CHANCE = 0.12
 export const VENT_W = 1.2
 export const VENT_D = 0.8
 export const VENT_H = 0.06
-// Wall-mounted props, one roll per wall edge per face, by adjacent cell kind:
-// clocks + notice boards in rooms/lobbies, extinguisher cabinets in corridors.
-// All shallower than the door casings that already stand proud of the walls.
-export const CLOCK_CHANCE = 0.06
+// Wall-mounted props by adjacent cell kind: clocks, notice boards and prints
+// in rooms/lobbies (each room's composition, objects/dressing/edges.js:
+// WALL_ITEM_RATE of its fill slots before the room's persona and wear scale
+// it), extinguisher cabinets in corridors every EXT_STEP cells, alternating
+// between the corridor's two walls. All shallower than the door casings
+// that already stand proud of the walls.
+export const WALL_ITEM_RATE = 0.3
 export const CLOCK_SIZE = 0.34
 export const CLOCK_Y = 2.05
-export const BOARD_CHANCE = 0.08
 export const BOARD_W = 1.3
 export const BOARD_H = 0.85
 export const BOARD_Y = 1.5
 export const PROP_PLATE_T = 0.05 // flat wall plates (clock, board)
-export const EXT_CHANCE = 0.06
+export const EXT_STEP = 8
 export const EXT_W = 0.3
 export const EXT_H = 0.55
 export const EXT_T = 0.14

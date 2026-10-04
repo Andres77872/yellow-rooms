@@ -6,4 +6,4 @@
 // shared frames) plus their public push/collect APIs consumed by mesh.js.
 export { pushFurnitureModel, FURN_TINT } from './furniture/index.js'
 export { collectInteriorDressing, PROP_TINT, SIGN_TINT } from './dressing/index.js'
-export { pushDoorFrame, pushDoorLeaves, pushWindowTrim } from './joinery/index.js'
+export { pushDoorFrame, pushDoorLeaves, pushWindowTrim, doorKit } from './joinery/index.js'

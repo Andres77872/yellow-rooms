@@ -3,7 +3,8 @@ import { generateChunk } from './generate.js'
 import { latticeStructureSlice } from './structures/latticeStamp.js'
 import { resolveMapFamily } from './mapFamily.js'
 import { MAP_FAMILY_LATTICE } from './mapTypes.js'
-import { buildChunkMeshes, buildFurniturePart, disposeFurniturePart } from './mesh.js'
+import { buildChunkMeshes, buildFurniturePart, disposeFurniturePart, emptyChunkMeshes } from './mesh.js'
+import { buildSurfaceZoneMap, worldSurfaceSet } from './surfaceSet.js'
 import {
   RENDER_DETAIL_FULL,
   RENDER_DETAIL_REDUCED,
@@ -12,6 +13,8 @@ import {
 } from './renderDetail.js'
 import { buildStairCells } from './structures/stairCells.js'
 import { validatedRuntimeStructure } from './structures/contract.js'
+import { isSolidMassChunk } from './tiles/solidChunk.js'
+import { massFastPathOf } from './tiles/massMask.js'
 
 function worldApertureRegion(region, cx, cz) {
   return {
@@ -97,7 +100,9 @@ function structureApertureRegions(
 const modelCount = (models) => models?.geometries?.size ?? 0
 
 export class Chunk {
-  constructor(cx, cy, cz, seed, materials, geom, exitCell, config, clearings, models = null) {
+  // `neighbour(dx, dz)` returns the loaded same-floor ChunkData at that
+  // offset (or null): it fills the zone map's border halo.
+  constructor(cx, cy, cz, seed, materials, geom, exitCell, config, clearings, models = null, neighbour = null) {
     this.cx = cx
     this.cy = cy
     this.cz = cz
@@ -109,6 +114,16 @@ export class Chunk {
     // cannot tell a box-batch chunk from an upgraded one; this count can.
     this.furnitureModelCount = modelCount(models)
     this.data = generateChunk(seed, cx, cy, cz, config, exitCell, clearings)
+    // Mass fast path (§9.6a): whole-chunk solid mass of a massFastPath family
+    // skips the surface set, zone map and chunk meshes.
+    if (massFastPathOf(this.data) && isSolidMassChunk(this.data)) {
+      this._initSolidMass()
+      return
+    }
+    // Per-room finishes: the world's surface set (pure in family + seed, the
+    // same set the renderer painted) resolved per cell into the zone map.
+    this.surfaceSet = worldSurfaceSet(this.data.mapFamily, seed)
+    this.zoneBytes = buildSurfaceZoneMap(this.data, this.surfaceSet, neighbour)
 
     const mesh = buildChunkMeshes(
       this.data,
@@ -117,7 +132,8 @@ export class Chunk {
       cx * CHUNK_WORLD,
       layerY(cy),
       cz * CHUNK_WORLD,
-      models
+      models,
+      this.zoneBytes
     )
     this.group = mesh.group
     this.lamps = mesh.lamps // world Vector3 of LIT lamps (for the light pool), tagged .cy
@@ -153,6 +169,39 @@ export class Chunk {
     this._registerStructureAperture(seed, config)
   }
 
+  // The solid-mass chunk: only the shared floor and ceiling planes (sight may
+  // reach it through glass across a thin band of mass), no surface set or
+  // zone map, no stair cells and no apertures. Every reader below tolerates it.
+  _initSolidMass() {
+    const mesh = emptyChunkMeshes(
+      this._geom,
+      this._materials,
+      this.cx * CHUNK_WORLD,
+      layerY(this.cy),
+      this.cz * CHUNK_WORLD
+    )
+    this.surfaceSet = null
+    this.zoneBytes = null
+    this.group = mesh.group
+    this.lamps = mesh.lamps
+    this.exitWorld = mesh.exitWorld
+    this._mesh = mesh
+    this.renderParts = mesh.parts
+    this.renderDetail = RENDER_DETAIL_FULL
+    this.bevelDetail = true
+    this.stairCells = new Map()
+    this.structure = this.data.structure
+    this.apertures = []
+  }
+
+  // Rewrite the zone map's halo from neighbours that streamed in after this
+  // chunk was built (wall faces on the border read the room across it).
+  refreshZoneHalo(neighbour) {
+    if (!this.zoneBytes) return
+    buildSurfaceZoneMap(this.data, this.surfaceSet, neighbour, this.zoneBytes)
+    if (this._mesh?.zoneMap) this._mesh.zoneMap.needsUpdate = true
+  }
+
   // Lower only decorative child batches; the chunk group remains under the
   // cross-floor visibility contract owned by ChunkManager. Shell geometry,
   // emissive cues, live fixtures and the exit anomaly are never hidden.
@@ -163,14 +212,20 @@ export class Chunk {
     const reduced = next === RENDER_DETAIL_REDUCED
     const shell = next === RENDER_DETAIL_SHELL
     const lattice = this.data.mapFamily === MAP_FAMILY_LATTICE
-    const p = this.renderParts
+    const p = this.renderParts ?? {}
 
     // Lattice frames include guard-rail caps and posts, so its reduced tier
     // retains that silhouette while other families shed ornamental joinery.
     if (p.frames) p.frames.visible = next === RENDER_DETAIL_FULL || (lattice && reduced)
     if (p.props) p.props.visible = next === RENDER_DETAIL_FULL
+    // Printed plates hang on props (clock cases, boards, frames) and their
+    // raised numerals are props: they come and go together.
+    if (p.decals) p.decals.visible = next === RENDER_DETAIL_FULL
     if (p.deadPanels) p.deadPanels.visible = next === RENDER_DETAIL_FULL
     if (p.leaves) p.leaves.visible = !shell
+    if (p.veneer) p.veneer.visible = !shell
+    if (p.hardware) p.hardware.visible = next === RENDER_DETAIL_FULL
+    if (p.glass) p.glass.visible = !shell
     if (p.furniture) p.furniture.visible = !shell
 
     // These references are explicit rather than inferred from child order so
@@ -194,7 +249,7 @@ export class Chunk {
     const next = on !== false
     if (next === this.bevelDetail) return false
     this.bevelDetail = next
-    this._swapDetailGeometry(Object.values(this.renderParts))
+    this._swapDetailGeometry(Object.values(this.renderParts ?? {}))
     return true
   }
 
@@ -204,7 +259,7 @@ export class Chunk {
     const [from, to] = this.bevelDetail ? [detailUnitSharp, detailUnit] : [detailUnit, detailUnitSharp]
     for (const part of parts) {
       part?.traverse((object) => {
-        if (object.geometry === from) object.geometry = to
+        if (object.geometry === from && !object.userData.keepGeometry) object.geometry = to
       })
     }
   }
@@ -215,7 +270,7 @@ export class Chunk {
   refreshFurniture(models = this._models) {
     this._models = models
     this.furnitureModelCount = modelCount(models)
-    const oldPart = this.renderParts.furniture
+    const oldPart = this.renderParts?.furniture
     const nextPart = buildFurniturePart(this.data, this._geom, this._materials, this._models)
     disposeFurniturePart(oldPart) // also detaches from this.group
     if (nextPart) {
@@ -301,7 +356,7 @@ export class Chunk {
     // _mesh.dispose() only knows the build-time furniture part; after a model
     // upgrade the live batch is a different node whose instance buffers would
     // otherwise never be released.
-    disposeFurniturePart(this.renderParts.furniture)
-    this._mesh.dispose()
+    disposeFurniturePart(this.renderParts?.furniture)
+    this._mesh?.dispose()
   }
 }

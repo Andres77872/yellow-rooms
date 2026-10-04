@@ -14,7 +14,8 @@ import {
   vIdx,
 } from '../constants.js'
 import { hash3i } from '../core/hash.js'
-import { isBadTube, lampTint } from '../lampCharacter.js'
+import { applyLampRecordTint, lampIsBad, lampTint } from '../lampCharacter.js'
+import { cellRole } from '../surfaceSet.js'
 import {
   COLUMN_MONUMENTAL,
   COLUMN_STANDARD,
@@ -353,13 +354,16 @@ export class LightGrid {
       const gz = cz * CHUNK + l.lz
       const wx = (gx + 0.5) * CELL
       const wz = (gz + 0.5) * CELL
-      const role = data.spaceRole?.[cIdx(l.lx, l.lz)] ?? 0
+      // The room's role, as mesh.js tags the lamp: CPU and GPU tints agree.
+      const role = data.spaceRole ? cellRole(data, l.lx, l.lz) : 0
       lampTint(wx, wz, cy, this._tint, role)
+      applyLampRecordTint(this._tint, l.tint) // the record's authored colour, as mesh.js applies it
       const e = texelIndex(gx, gz, cy) * 4
       this.lamp[e] = Math.min(255, Math.round(this._tint[0] * TINT_SCALE * 255))
       this.lamp[e + 1] = Math.min(255, Math.round(this._tint[1] * TINT_SCALE * 255))
       this.lamp[e + 2] = Math.min(255, Math.round(this._tint[2] * TINT_SCALE * 255))
-      this.lamp[e + 3] = encodeFlicker(isBadTube(wx, wz, cy), hash3i(0xf11c, gx, gz, cy) & 127)
+      // Bad-tube bit: the same wear/circuit answer mesh.js tags the lamp with.
+      this.lamp[e + 3] = encodeFlicker(lampIsBad(data, l.lx, l.lz), hash3i(0xf11c, gx, gz, cy) & 127)
       this.edge[e + 2] |= FLAG_LAMP
     }
     this._writeOcc(rec)

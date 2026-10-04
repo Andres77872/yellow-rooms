@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { ChunkData } from '../ChunkData.js'
 import { collectInteriorDressing, PROP_TINT, SIGN_TINT } from '../objects/dressing/index.js'
+import { ACCENT_CYCLE } from '../objects/dressing/palette.js'
 import { mergeCollinearBoxes } from '../objects/wallShell.js'
 import {
   CELL,
@@ -34,6 +35,8 @@ import {
   COLUMN_STANDARD,
   COLUMN_MONUMENTAL,
   MAP_FAMILY_TOWER,
+  SPACE_CLASS_CIRCULATION,
+  SPACE_CLASS_ROOM,
 } from '../mapTypes.js'
 
 const DOOR_H = WALL_H - HEADER_H
@@ -108,13 +111,23 @@ describe('collectInteriorDressing', () => {
     expect(strips.map((s) => s.pz).sort((a, b) => a - b)).toEqual([7.5 * CELL, 8.5 * CELL])
   })
 
-  it('hangs exit signs above the door head, in pairs, on a subset of doors', () => {
+  it('hangs exit signs above the door head, in pairs, on the escape route\'s doors only', () => {
     const data = walledChunk()
     for (let z = 0; z < CHUNK; z++) data.setPassageV(5, z, PASSAGE_DOOR)
+    // Rows 0..6: an office (west) off a corridor (east); rows 7..13: the
+    // corridor continues through the wall — its fire doors.
+    for (let z = 0; z < CHUNK; z++) {
+      for (const [x, room] of [[4, z < 7], [5, false]]) {
+        const i = z * CHUNK + x
+        data.cellKind[i] = room ? CELL_ROOM : CELL_CORRIDOR
+        data.spaceId[i] = room ? 7 : 9
+        data.spaceClass[i] = room ? SPACE_CLASS_ROOM : SPACE_CLASS_CIRCULATION
+      }
+    }
     const { signs } = collectInteriorDressing(data)
     const exits = signs.filter((s) => s.tint === SIGN_TINT.exit)
-    expect(exits.length).toBeGreaterThan(0)
-    expect(exits.length % 2).toBe(0) // one glowing face per wall face
+    expect(exits).toHaveLength(7 * 2) // one glowing face per wall face
+    for (const s of exits) expect(s.pz).toBeGreaterThan(7 * CELL)
     for (const s of exits) {
       expect(s.py - s.sy / 2).toBeGreaterThan(DOOR_H)
       expect(s.py + s.sy / 2).toBeLessThan(WALL_H)
@@ -268,11 +281,65 @@ describe('collectInteriorDressing', () => {
     expect(second).toEqual(first)
     expect(data.structure).toEqual(descriptorBefore)
     expect(first.signs.some(isTint(SIGN_TINT.blade))).toBe(true)
-    expect(first.signs.some(isTint(SIGN_TINT.exit))).toBe(true)
+    // The bridge-approach accent glows in its storey's colour, never exit green.
+    const accent = first.signs.filter(isTint(ACCENT_CYCLE[4 % ACCENT_CYCLE.length]))
+    expect(accent).toHaveLength(1)
+    expect(accent[0].pz).toBe(8.5 * CELL)
+    expect(first.signs.filter(isTint(SIGN_TINT.exit)).every((s) => Math.abs(s.pz - 10.5 * CELL) < CELL / 2)).toBe(true)
     expect(first.props.some(isTint(PROP_TINT.clock))).toBe(true)
     expect(data.passageVAt(5, 10)).toBe(PASSAGE_DOOR)
     expect(data.lamps).toContainEqual({ lx: 7, lz: 12, lit: true })
     expect(data).not.toHaveProperty('towerLandmarks')
+  })
+
+  it('mounts a Tower lit accent on a wall or a door header and hangs it across an open mouth, in the storey colour', () => {
+    const cy = 3
+    const data = new ChunkData(0, cy, 0, ZONE_OFFICE, undefined, MAP_FAMILY_TOWER)
+    data.setV(5, 2, 1, PASSAGE_WALL)
+    data.setPassageV(5, 6, PASSAGE_DOOR)
+    data.setPassageV(5, 10, PASSAGE_WIDE)
+    data.setV(5, 12, 1, PASSAGE_WALL, WALL_RAIL)
+    const socket = (gz) => Object.freeze({ slot: 'bridgeApproach', kind: 'litAccent', gx: 5, gz, cy, axis: 'x', side: -1, salt: 0x745103 })
+    data.structure = Object.freeze({
+      id: 18,
+      family: MAP_FAMILY_TOWER,
+      kind: 'towerSkybridge',
+      landmarkSockets: Object.freeze([socket(2), socket(6), socket(10), socket(12)]),
+    })
+    const { signs } = collectInteriorDressing(data)
+    const at = (lz) => signs.filter((s) => Math.abs(s.pz - (lz + 0.5) * CELL) < CELL / 2 && s.px < 5 * CELL && s.px > 4 * CELL)
+    const accent = ACCENT_CYCLE[cy % ACCENT_CYCLE.length]
+    // Exit green only over the door (an egress door between open floor).
+    expect(signs.filter(isTint(SIGN_TINT.exit)).every((s) => Math.abs(s.pz - 6.5 * CELL) < 1e-9)).toBe(true)
+    for (const lz of [2, 6, 10, 12]) {
+      const parts = at(lz)
+      const faces = parts.filter(isTint(accent))
+      expect(faces, `accent at ${lz}`).toHaveLength(1)
+      const face = faces[0]
+      expect(face.py - face.sy / 2).toBeGreaterThan(DOOR_H)
+      expect(face.py + face.sy / 2).toBeLessThan(WALL_H)
+      const rods = parts.filter((s) => s.tint === SIGN_TINT.frame && Math.abs(s.py + s.sy / 2 - WALL_H) < 1e-9)
+      if (lz === 2 || lz === 6) {
+        // A plain wall or a door header behind it: flat on the face, no rods.
+        expect(Math.abs(5 * CELL - face.px - THICK / 2 - 0.04 - face.sx / 2), `mounted at ${lz}`).toBeLessThan(1e-9)
+        expect(rods).toEqual([])
+        if (lz === 6) {
+          // This door is on the escape route: its exit sign keeps the
+          // header's lower band, the accent's housing clears it above.
+          const exit = parts.find(isTint(SIGN_TINT.exit))
+          expect(exit).toBeDefined()
+          expect(exit.py + exit.sy / 2 + 0.03).toBeLessThan(face.py - face.sy / 2 - 0.03)
+        }
+      } else {
+        // Nothing behind it (a wide mouth, a guard rail): hung from the
+        // ceiling by two rods, glowing through both faces of its housing.
+        expect(rods, `hung at ${lz}`).toHaveLength(2)
+        const housing = parts.find((s) => s.tint === SIGN_TINT.frame && s.py === face.py)
+        expect(housing.px).toBe(face.px)
+        expect(face.sx).toBeGreaterThan(housing.sx)
+        for (const rod of rods) expect(rod.px).toBe(face.px)
+      }
+    }
   })
 })
 

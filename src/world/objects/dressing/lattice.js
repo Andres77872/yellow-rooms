@@ -11,9 +11,17 @@ import {
 import {
   CELL_ATRIUM,
   CELL_BRIDGE,
+  CELL_VOID,
+  SPACE_ROLE_SERVER,
+  WALL_PLAIN,
   WALL_RAIL,
 } from '../../mapTypes.js'
+import { ZONE_SERVICE } from '../../surfaceSet.js'
+import { hash2i } from '../../core/hash.js'
+import { safetyCell, signCell, wayfindingCell } from '../../decalKinds.js'
 import { ACCENT_CYCLE, LATTICE_TINT } from './palette.js'
+import { arrowLabel, faceKey, plateFace, pushPlate, signagePlan, storeyNumber } from './notices.js'
+import { dressDoorExits, dressStairExits } from './edges.js'
 
 // Lattice dressing — the exposed-steel span language the family was missing:
 // rail posts and kick plates so decks read as built gantries, deck seam
@@ -26,6 +34,8 @@ import { ACCENT_CYCLE, LATTICE_TINT } from './palette.js'
 // from global coordinates, collision-free by construction.
 
 const SEAM_STEP = 4 // cells between deck seams (< the 8-cell boundary-cue cap)
+const LEVEL_STEP = 6 // cells between the storey plates along a core wall
+const NOTICE_SALT = 0x1a77
 const POST_S = 0.09
 const KICK_H = 0.05
 
@@ -33,8 +43,17 @@ export function collectLatticeDressing(data) {
   const trim = []
   const props = []
   const signs = []
+  const decals = []
   const structure = data.structure
-  if (!structure?.anchors) return { trim, props, signs }
+  // The escape route reads as in every built family: exit signs over its fire
+  // doors and at the stair mouths (edges.js).
+  const plan = signagePlan(data)
+  dressDoorExits(data, plan, signs)
+  dressStairExits(data, plan, signs)
+  if (!structure?.anchors) {
+    latticeNotices(data, props, decals, plan)
+    return { trim, props, signs, decals }
+  }
 
   const kindAt = (lx, lz) =>
     lx >= 0 && lx < CHUNK && lz >= 0 && lz < CHUNK
@@ -132,5 +151,69 @@ export function collectLatticeDressing(data) {
     }
   }
 
-  return { trim, props, signs }
+  latticeNotices(data, props, decals, plan)
+  return { trim, props, signs, decals }
+}
+
+// Level plates, safety notices and wayfinding arrows on the plain core walls
+// (never over a void or an atrium drop, beside the stair flight or where a
+// door leaf opens flat — notices.js plateFace), each by place rather than by
+// dice: the storey's LEVEL plate (its number set from data.cy) at the stair
+// ends and on a fixed cadence along the core, fall-hazard notices where the
+// deck meets the drop, keep-clear notices at the stairs, authorised-only
+// (high voltage at the switch rooms) on plant-room walls, and arrows that
+// follow the walk to this storey's stairs.
+function latticeNotices(data, props, decals, plan = signagePlan(data)) {
+  const chunkGx = data.cx * CHUNK
+  const chunkGz = data.cz * CHUNK
+  const cy = data.cy | 0
+  const level = signCell('level', data.mapFamily)
+  const kindAt = (lx, lz) => (lx >= 0 && lx < CHUNK && lz >= 0 && lz < CHUNK ? data.cellKind[cIdx(lx, lz)] : -1)
+  const walkable = (lx, lz) => {
+    if (lx < 0 || lx >= CHUNK || lz < 0 || lz >= CHUNK) return false
+    return data.cellKind[cIdx(lx, lz)] !== CELL_ATRIUM && !data.hasFloorHole(lx, lz)
+  }
+  const drop = (lx, lz) => {
+    const k = kindAt(lx, lz)
+    return k === CELL_ATRIUM || k === CELL_VOID || k === CELL_BRIDGE || (k >= 0 && data.hasFloorHole(lx, lz))
+  }
+  const exposed = (lx, lz) => drop(lx - 1, lz) || drop(lx + 1, lz) || drop(lx, lz - 1) || drop(lx, lz + 1)
+  const notice = (vertical, line, cell) => {
+    const gx = chunkGx + (vertical ? line : cell)
+    const gz = chunkGz + (vertical ? cell : line)
+    const plane = line * CELL
+    const along = (cell + 0.5) * CELL
+    for (const side of [-1, 1]) {
+      const lx = vertical ? line + (side > 0 ? 0 : -1) : cell
+      const lz = vertical ? cell : line + (side > 0 ? 0 : -1)
+      if (!walkable(lx, lz) || !plateFace(data, plan, vertical, line, cell, side)) continue
+      const r = hash2i(NOTICE_SALT ^ (side > 0 ? 0x11 : 0x22), gx, gz) / 4294967296
+      const stairEnd = plan.levelFaces.has(faceKey(vertical ? 'v' : 'h', line, cell, side))
+      const cadence = (((vertical ? gz : gx) % LEVEL_STEP) + LEVEL_STEP) % LEVEL_STEP === (side > 0 ? 0 : LEVEL_STEP >> 1)
+      if (level >= 0 && (stairEnd || (cadence && r < 0.35))) {
+        pushPlate(decals, props, vertical, plane, side, along, 1.9, 0.6, 0.2, level, { rough: 0.5, number: data.levelLabel ?? storeyNumber(cy) })
+      } else if (exposed(lx, lz) && r < 0.25) {
+        pushPlate(decals, null, vertical, plane, side, along, 1.5, 0.3, 0.4, safetyCell('fallHazard'), { rough: 0.6 })
+      } else if (r < 0.2 && (plan.nearStair(lx, lz) || plan.ctxAt(lx, lz).category === ZONE_SERVICE)) {
+        const ctx = plan.ctxAt(lx, lz)
+        const id = ctx.category !== ZONE_SERVICE ? 'doNotBlock' : ctx.role === SPACE_ROLE_SERVER ? 'highVoltage' : 'authorized'
+        pushPlate(decals, null, vertical, plane, side, along, 1.5, 0.3, 0.4, safetyCell(id), { rough: 0.6 })
+      } else if (r < 0.04) {
+        const arrow = plan.arrow(vertical, side, lx, lz)
+        if (arrow) pushPlate(decals, null, vertical, plane, side, along, 2.1, 0.75, 0.25, wayfindingCell(arrowLabel(cy, arrow.target), arrow.dir), { rough: 0.5 })
+      }
+    }
+  }
+  for (let lx = 1; lx < CHUNK; lx++) {
+    for (let z = 0; z < CHUNK; z++) {
+      const i = vIdx(lx, z)
+      if (data.wallV[i] === 1 && data.wallFeatureV[i] === WALL_PLAIN) notice(true, lx, z)
+    }
+  }
+  for (let lz = 1; lz < CHUNK; lz++) {
+    for (let x = 0; x < CHUNK; x++) {
+      const i = hIdx(x, lz)
+      if (data.wallH[i] === 1 && data.wallFeatureH[i] === WALL_PLAIN) notice(false, lz, x)
+    }
+  }
 }

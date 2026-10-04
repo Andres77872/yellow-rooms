@@ -1,0 +1,427 @@
+{
+ "underpass:proto": {
+  "ok": true,
+  "sha": "4b0ec82ce04d0f16",
+  "len": 2327
+ },
+ "underpass:lobby": {
+  "ok": true,
+  "sha": "5834984eab199f6a",
+  "len": 2327
+ },
+ "underpass:same": {
+  "ok": true,
+  "sha": "abd1dbcd7fce2ab4",
+  "len": 2322
+ },
+ "underpass:liminal-0": {
+  "ok": true,
+  "sha": "709fbca700c71551",
+  "len": 2327
+ },
+ "underpass:liminal-3": {
+  "ok": true,
+  "sha": "b7f322ad24ebd455",
+  "len": 2360
+ },
+ "parking:proto": {
+  "ok": true,
+  "sha": "b64f64fb9bf330a6",
+  "len": 6697
+ },
+ "parking:lobby": {
+  "ok": true,
+  "sha": "0e7f2912afe370a8",
+  "len": 6697
+ },
+ "parking:same": {
+  "ok": true,
+  "sha": "ca75f57400064cc5",
+  "len": 6696
+ },
+ "parking:liminal-0": {
+  "ok": true,
+  "sha": "a838e13665b9634d",
+  "len": 6701
+ },
+ "parking:liminal-3": {
+  "ok": true,
+  "sha": "68249be21dad1ed0",
+  "len": 6701
+ },
+ "mall:proto": {
+  "ok": true,
+  "sha": "82c83bcb6d805b25",
+  "len": 15679
+ },
+ "mall:lobby": {
+  "ok": true,
+  "sha": "6bb58f4273893a1e",
+  "len": 15677
+ },
+ "mall:same": {
+  "ok": true,
+  "sha": "59fa7e699e49b58a",
+  "len": 15542
+ },
+ "mall:liminal-0": {
+  "ok": true,
+  "sha": "9e4cdd3a18ed8168",
+  "len": 15679
+ },
+ "mall:liminal-3": {
+  "ok": true,
+  "sha": "d286eb9557e7f802",
+  "len": 15915
+ },
+ "hospital:proto": {
+  "ok": true,
+  "sha": "b55c2b4363c6b860",
+  "len": 3348
+ },
+ "hospital:lobby": {
+  "ok": true,
+  "sha": "3ad47deba0e94abc",
+  "len": 3348
+ },
+ "hospital:same": {
+  "ok": true,
+  "sha": "064a0d7d928d95e8",
+  "len": 3350
+ },
+ "hospital:liminal-0": {
+  "ok": true,
+  "sha": "2a933960485f1cf4",
+  "len": 3355
+ },
+ "hospital:liminal-3": {
+  "ok": true,
+  "sha": "09f4eb4f34a5d8e0",
+  "len": 3352
+ },
+ "school:proto": {
+  "ok": true,
+  "sha": "a199e4ab4ccac8c1",
+  "len": 4879
+ },
+ "school:lobby": {
+  "ok": true,
+  "sha": "9e4b5746ef433cd9",
+  "len": 4879
+ },
+ "school:same": {
+  "ok": true,
+  "sha": "4a0ff4b7ed184f1c",
+  "len": 4878
+ },
+ "school:liminal-0": {
+  "ok": true,
+  "sha": "86739f70af3d158b",
+  "len": 4883
+ },
+ "school:liminal-3": {
+  "ok": true,
+  "sha": "943545b2b9e7a034",
+  "len": 4883
+ },
+ "stairwell:proto": {
+  "ok": true,
+  "sha": "e2d5d47e34dd56dc",
+  "len": 35012
+ },
+ "stairwell:lobby": {
+  "ok": true,
+  "sha": "8c43dc5f5e9f1223",
+  "len": 36073
+ },
+ "stairwell:same": {
+  "ok": true,
+  "sha": "128027b2d7316dff",
+  "len": 36464
+ },
+ "stairwell:liminal-0": {
+  "ok": true,
+  "sha": "1d6d9631e71f1771",
+  "len": 36032
+ },
+ "stairwell:liminal-3": {
+  "ok": true,
+  "sha": "6be332a411ae6d7b",
+  "len": 41697
+ },
+ "nightlot:proto": {
+  "ok": true,
+  "sha": "c96a61f62e8b896b",
+  "len": 35770
+ },
+ "nightlot:lobby": {
+  "ok": true,
+  "sha": "aebc8f28b7f96e84",
+  "len": 39337
+ },
+ "nightlot:same": {
+  "ok": true,
+  "sha": "b4b9a9dc29b69ea3",
+  "len": 38361
+ },
+ "nightlot:liminal-0": {
+  "ok": true,
+  "sha": "99e500182ffe7185",
+  "len": 42803
+ },
+ "nightlot:liminal-3": {
+  "ok": true,
+  "sha": "27174879489d8267",
+  "len": 38359
+ },
+ "showroom:proto": {
+  "ok": true,
+  "sha": "b986c04b4e56b578",
+  "len": 19519
+ },
+ "showroom:lobby": {
+  "ok": true,
+  "sha": "a7cd9fda38c59f37",
+  "len": 19579
+ },
+ "showroom:same": {
+  "ok": true,
+  "sha": "ede3d10b55aea3ac",
+  "len": 19560
+ },
+ "showroom:liminal-0": {
+  "ok": true,
+  "sha": "381a4b2de6b82c30",
+  "len": 18871
+ },
+ "showroom:liminal-3": {
+  "ok": true,
+  "sha": "89b495df8f7da43a",
+  "len": 19263
+ },
+ "poolrooms:proto": {
+  "ok": true,
+  "sha": "39ce5ba7b05b5210",
+  "len": 35552
+ },
+ "poolrooms:lobby": {
+  "ok": true,
+  "sha": "598023dfd53bb52c",
+  "len": 29007
+ },
+ "poolrooms:same": {
+  "ok": true,
+  "sha": "ed1e11b1c4181901",
+  "len": 31478
+ },
+ "poolrooms:liminal-0": {
+  "ok": true,
+  "sha": "7a4dfe3d578d8569",
+  "len": 31895
+ },
+ "poolrooms:liminal-3": {
+  "ok": true,
+  "sha": "802936cecfd02ac8",
+  "len": 36594
+ },
+ "babel:proto": {
+  "ok": true,
+  "sha": "9b2a988b8f0fba4a",
+  "len": 318415
+ },
+ "babel:lobby": {
+  "ok": true,
+  "sha": "46eba900f99f7752",
+  "len": 310134
+ },
+ "babel:same": {
+  "ok": true,
+  "sha": "47d35b040ce8c1db",
+  "len": 318213
+ },
+ "babel:liminal-0": {
+  "ok": true,
+  "sha": "39a129e33278d582",
+  "len": 318089
+ },
+ "babel:liminal-3": {
+  "ok": true,
+  "sha": "ad1266b61a39e116",
+  "len": 318191
+ },
+ "suburb:proto": {
+  "ok": true,
+  "sha": "e095ae35aa78dd45",
+  "len": 24873
+ },
+ "suburb:lobby": {
+  "ok": true,
+  "sha": "5d02c7f7857d615a",
+  "len": 24922
+ },
+ "suburb:same": {
+  "ok": true,
+  "sha": "2e736f0fd2c9f875",
+  "len": 24914
+ },
+ "suburb:liminal-0": {
+  "ok": true,
+  "sha": "3678739e62baeb35",
+  "len": 25115
+ },
+ "suburb:liminal-3": {
+  "ok": true,
+  "sha": "2755495a0d9a1973",
+  "len": 25279
+ },
+ "terminal:proto": {
+  "ok": true,
+  "sha": "7ed210b3c175ddf3",
+  "len": 18035
+ },
+ "terminal:lobby": {
+  "ok": true,
+  "sha": "b71c4ad731941249",
+  "len": 17718
+ },
+ "terminal:same": {
+  "ok": true,
+  "sha": "b5aacbe395a8c0ee",
+  "len": 17990
+ },
+ "terminal:liminal-0": {
+  "ok": true,
+  "sha": "8cf6078262ba879c",
+  "len": 18011
+ },
+ "terminal:liminal-3": {
+  "ok": true,
+  "sha": "43c8e6bb4cca1e62",
+  "len": 17758
+ },
+ "theater:proto": {
+  "ok": true,
+  "sha": "3057eadb454ff32b",
+  "len": 47403
+ },
+ "theater:lobby": {
+  "ok": true,
+  "sha": "85dfc1e820202550",
+  "len": 57209
+ },
+ "theater:same": {
+  "ok": true,
+  "sha": "fa10883a9ae35f34",
+  "len": 58172
+ },
+ "theater:liminal-0": {
+  "ok": true,
+  "sha": "5088986eda33ac6c",
+  "len": 51962
+ },
+ "theater:liminal-3": {
+  "ok": true,
+  "sha": "45d8ec88c436506d",
+  "len": 46949
+ },
+ "playplace:proto": {
+  "ok": true,
+  "sha": "d57344169cc6ac3d",
+  "len": 16397
+ },
+ "playplace:lobby": {
+  "ok": true,
+  "sha": "9a1a7d5fc07230fa",
+  "len": 12630
+ },
+ "playplace:same": {
+  "ok": true,
+  "sha": "97d7db74afe5ea52",
+  "len": 16528
+ },
+ "playplace:liminal-0": {
+  "ok": true,
+  "sha": "ec3465e808d95f9e",
+  "len": 17347
+ },
+ "playplace:liminal-3": {
+  "ok": true,
+  "sha": "70a9393db92e6956",
+  "len": 13950
+ },
+ "train:proto": {
+  "ok": true,
+  "sha": "e174137d0bca1102",
+  "len": 4150
+ },
+ "train:lobby": {
+  "ok": true,
+  "sha": "088724b39742fe19",
+  "len": 4130
+ },
+ "train:same": {
+  "ok": true,
+  "sha": "91372eebacfb3ad0",
+  "len": 4104
+ },
+ "train:liminal-0": {
+  "ok": true,
+  "sha": "7fce633b364ee784",
+  "len": 4280
+ },
+ "train:liminal-3": {
+  "ok": true,
+  "sha": "45c3650d0f6a4f89",
+  "len": 4231
+ },
+ "house:proto": {
+  "ok": true,
+  "sha": "f3d4f59dbec17610",
+  "len": 10936
+ },
+ "house:lobby": {
+  "ok": true,
+  "sha": "117983c83f36e2a3",
+  "len": 10984
+ },
+ "house:same": {
+  "ok": true,
+  "sha": "a6ba9ada26c1abe0",
+  "len": 11062
+ },
+ "house:liminal-0": {
+  "ok": true,
+  "sha": "52891b15d72c72aa",
+  "len": 11057
+ },
+ "house:liminal-3": {
+  "ok": true,
+  "sha": "f615b7e3a9832b5c",
+  "len": 11040
+ },
+ "funhouse:proto": {
+  "ok": true,
+  "sha": "89e5acd701441270",
+  "len": 11918
+ },
+ "funhouse:lobby": {
+  "ok": true,
+  "sha": "756e0f63e02da68d",
+  "len": 11926
+ },
+ "funhouse:same": {
+  "ok": true,
+  "sha": "17b7ba8c3c4a73a9",
+  "len": 13951
+ },
+ "funhouse:liminal-0": {
+  "ok": true,
+  "sha": "8be58e60414f2604",
+  "len": 11943
+ },
+ "funhouse:liminal-3": {
+  "ok": true,
+  "sha": "682d3a34898db450",
+  "len": 12648
+ }
+}

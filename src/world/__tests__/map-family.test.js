@@ -5,12 +5,18 @@ import {
   MAP_FAMILY_ORDER,
   requiresVoidSafety,
   resolveMapFamily,
+  rollbackMapFamily,
   worldConfigForFamily,
   worldConfigForFamilyOrOffice,
 } from '../mapFamily.js'
 import { WORLD_GEN_VERSION, ZONE_OFFICE } from '../constants.js'
 import { fmix32 } from '../core/hash.js'
 import { buildChunk } from '../pipeline.js'
+import { PINNED_VERSION } from './support/goldens.js'
+import { LIMINAL_FAMILY_IDS } from '../families/ids.js'
+import { familyRecord } from '../families/registry.js'
+import { forcedFamilyConfig } from '../families/forced.js'
+import { selectableFamilies } from '../families/select.js'
 
 const COMPLETE_PROFILES = {
   office: {
@@ -196,6 +202,12 @@ describe('family digest identity', () => {
     expect(fmix32(foldInput('sewer'))).not.toBe(fmix32(foldInput('office')))
     expect(fmix32(foldInput('tower'))).not.toBe(fmix32(foldInput('sewer')))
   })
+
+  it('appends the 12 liminal families after the legacy 5 with codes 5..16', () => {
+    expect(MAP_FAMILY_ORDER).toEqual(['office', 'sewer', 'tower', 'lattice', 'hotel', ...LIMINAL_FAMILY_IDS])
+    LIMINAL_FAMILY_IDS.forEach((family, i) => expect(MAP_FAMILY_CODES[family], family).toBe(5 + i))
+    expect(new Set(Object.values(MAP_FAMILY_CODES)).size).toBe(MAP_FAMILY_ORDER.length)
+  })
 })
 
 describe('void-safety family eligibility', () => {
@@ -211,7 +223,13 @@ describe('void-safety family eligibility', () => {
       lattice: true,
       hotel: false,
     })
-    expect(WORLD_GEN_VERSION).toBe(28)
+    // Every registered family, liminal included: the gate follows the
+    // record's lethal trait, and no liminal family is lethal (I6).
+    for (const family of MAP_FAMILY_ORDER) {
+      expect(requiresVoidSafety(family), family).toBe(familyRecord(family).traits.lethal)
+    }
+    for (const family of LIMINAL_FAMILY_IDS) expect(requiresVoidSafety(family), family).toBe(false)
+    expect(WORLD_GEN_VERSION).toBe(PINNED_VERSION)
     expect(DEFAULT_WORLD_CONFIG.mapFamily.profiles).toMatchObject({
       office: { enabled: true },
       sewer: { enabled: true },
@@ -225,12 +243,50 @@ describe('untrusted family selection with office fallback', () => {
   it('round-trips every canonical family against the shipped default config', () => {
 
     for (const kind of MAP_FAMILY_ORDER) {
+      const enabled = DEFAULT_WORLD_CONFIG.mapFamily.profiles[kind].enabled === true
       const { family, config, fellBack } = worldConfigForFamilyOrOffice(kind)
-      expect(family).toBe(kind)
-      expect(fellBack).toBe(false)
-      expect(config.mapFamily.selected).toBe(kind)
-      expect(resolveMapFamily(config)).toMatchObject({ family: kind, enabled: true })
+      // A family whose shipped profile is disabled (the liminal 12 until
+      // the release) falls back to Office instead of throwing.
+      expect(family).toBe(enabled ? kind : 'office')
+      expect(fellBack).toBe(!enabled)
+      expect(config.mapFamily.selected).toBe(family)
+      expect(resolveMapFamily(config)).toMatchObject({ family, enabled: true })
     }
+    expect(selectableFamilies(DEFAULT_WORLD_CONFIG)).toEqual(
+      MAP_FAMILY_ORDER.filter((kind) => DEFAULT_WORLD_CONFIG.mapFamily.profiles[kind].enabled === true)
+    )
+  })
+
+  it('normalizes a liminal profile only as exactly {enabled: boolean}', () => {
+    for (const kind of LIMINAL_FAMILY_IDS) {
+      // Shape only (exactly one boolean key); the shipped value is the I5
+      // gate, pinned in families/__tests__/registry.drift.test.js.
+      const shipped = DEFAULT_WORLD_CONFIG.mapFamily.profiles[kind]
+      expect(Object.keys(shipped), kind).toEqual(['enabled'])
+      expect(typeof shipped.enabled, kind).toBe('boolean')
+      const forced = forcedFamilyConfig(kind)
+      expect(resolveMapFamily(forced)).toEqual({ family: kind, enabled: true })
+
+      const selected = (profile) => {
+        const config = structuredClone(DEFAULT_WORLD_CONFIG)
+        config.mapFamily.selected = kind
+        config.mapFamily.profiles[kind] = profile
+        return config
+      }
+      expect(resolveMapFamily(selected({ family: kind, enabled: true }))).toEqual({ family: kind, enabled: true })
+      expectConfigError(() => resolveMapFamily(selected({ enabled: false })), 'disabled')
+      expectConfigError(() => resolveMapFamily(selected({ enabled: 'yes' })), 'incomplete')
+      expectConfigError(() => resolveMapFamily(selected({ enabled: true, levels: 3 })), 'invalid')
+      expectConfigError(() => resolveMapFamily(selected({ family: 'office', enabled: true })), 'invalid')
+    }
+  })
+
+  it('rolls a liminal family back to Office like any other non-office emitter', () => {
+    const forced = structuredClone(forcedFamilyConfig('stairwell'))
+    const rolled = rollbackMapFamily('stairwell', forced)
+    expect(rolled.mapFamily.selected).toBe('office')
+    expect(rolled.mapFamily.profiles.stairwell.enabled).toBe(false)
+    expect(forced.mapFamily.profiles.stairwell.enabled).toBe(true)
   })
 
   it('projects the sewer profile onto the shared zone surface', () => {

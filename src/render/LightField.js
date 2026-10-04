@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { LIGHT_MAX, LAMP_QUERY_R, EYE_H, layerY } from '../world/constants.js'
-import { FLICKER_SAFE, lampFlicker, lampTint } from '../world/lampCharacter.js'
+import { FLICKER_SAFE, applyLampRecordTint, isBadTube, lampFlicker, lampTint } from '../world/lampCharacter.js'
 
 // Feeds the deferred lighting pass: each refresh it gathers the nearest lit
 // lamps to the player and writes their world positions into the source lamp
@@ -19,6 +19,9 @@ import { FLICKER_SAFE, lampFlicker, lampTint } from '../world/lampCharacter.js'
 // multiplier recomputed from the UPLOADED world positions — so the shimmer
 // stays smooth between the 12 Hz candidate refreshes and a fixture's cast
 // light always agrees with its emissive panel (which mesh.js tints at build).
+// Whether a tube is bad comes from the candidate's `bad` tag (mesh.js,
+// lampIsBad: the wear of its room and circuit), the same answer the panel
+// and the light grid's flicker byte use.
 export class LightField {
   constructor(uniforms) {
     this.u = uniforms // the full makeLampUniforms() set
@@ -32,6 +35,9 @@ export class LightField {
     // candidates' `cy` tag does not survive the copy; the per-frame flicker
     // must hash the same (x, z, cy) as the tint and the emissive panel.
     this._cy = new Int32Array(LIGHT_MAX)
+    // Bad-tube flag per uploaded slot, for the same reason. Candidates without
+    // a tag (tools, synthetic sets) fall back to the position-only lottery.
+    this._bad = new Uint8Array(LIGHT_MAX)
     // Bad-tube strobe rate/depth (lampCharacter FLICKER_SAFE / FLICKER_FULL),
     // set by Engine from the reduceFlicker setting. Must match the GPU twin's
     // uBadStrobe (DeferredRenderer.setFlickerProfile).
@@ -77,7 +83,9 @@ export class LightField {
         const v = cand[order[i]]
         pos[i].copy(v)
         this._cy[i] = v.cy ?? 0
+        this._bad[i] = (v.bad ?? isBadTube(v.x, v.z, v.cy ?? 0)) ? 1 : 0
         lampTint(v.x, v.z, v.cy ?? 0, this._tint, v.role ?? 0)
+        applyLampRecordTint(this._tint, v.tint) // authored lamp colour (mesh.js tags it)
         char[i].set(this._tint[0], this._tint[1], this._tint[2], char[i].w)
       }
       this.u.uLampCount.value = n
@@ -100,10 +108,11 @@ export class LightField {
     const pos = this.u.uLampPos.value
     const raw = this.u.lampFlickerRaw
     const cy = this._cy
+    const bad = this._bad
     const profile = this.flicker
     for (let i = 0; i < n; i++) {
       const v = pos[i]
-      raw[i] = lampFlicker(v.x, v.z, cy[i], this._time, profile)
+      raw[i] = lampFlicker(v.x, v.z, cy[i], this._time, profile, bad[i] === 1)
     }
   }
 }

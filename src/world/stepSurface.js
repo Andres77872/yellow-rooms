@@ -1,4 +1,5 @@
 import { familyPalette } from './familyPalette.js'
+import { stepClassFor } from './families/registry.js'
 import {
   CELL_BRIDGE,
   CELL_OPEN,
@@ -36,7 +37,9 @@ export function resolveStepSurface({
   cellKind = CELL_OPEN,
   spaceRole = SPACE_ROLE_NONE,
 } = {}) {
-  const base = familyPalette(family).floor.style
+  // Liminal palettes use richer floor styles (polished, mosaic, …); the
+  // registry maps every style onto the four classes (§9.3, identity for these).
+  const base = stepClassFor(familyPalette(family).floor.style, family)
   // Stair treads are bare structure — carpet stops at the flight.
   if (cellKind === CELL_STAIR) {
     return base === SURFACE_CARPET ? SURFACE_CONCRETE : base

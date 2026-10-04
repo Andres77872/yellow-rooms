@@ -1,0 +1,1853 @@
+{
+  "schema": 1,
+  "pack": "furniture",
+  "generator": {
+    "blender": "5.2.2 LTS",
+    "blenderHash": "d13f752e3b9c",
+    "exporter": "5.2.40",
+    "script": "build_pack.py"
+  },
+  "budget": {
+    "tris": 20000,
+    "bytes": 650000
+  },
+  "totals": {
+    "tris": 18598,
+    "bytes": 621548
+  },
+  "kinds": [
+    {
+      "kind": "desk",
+      "kindKey": "FURN_DESK",
+      "file": "desk.glb",
+      "class": "B",
+      "collision": {
+        "w": 1.7,
+        "d": 0.85
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.36,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.85,
+          0.0,
+          -0.425
+        ],
+        "max": [
+          0.85,
+          1.319,
+          0.425
+        ]
+      },
+      "tris": 1320,
+      "bytes": 41344,
+      "materials": [
+        "yr_laminate",
+        "yr_panel",
+        "yr_legMetal",
+        "yr_drawerFace",
+        "yr_keyDark",
+        "yr_screen",
+        "yr_slotDark",
+        "yr_shade",
+        "yr_paperWhite",
+        "yr_potClay"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.85,
+          "u1": 0.85,
+          "v0": -0.425,
+          "v1": 0.425,
+          "y0": 0.0,
+          "y1": 1.36
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.835,
+          "u1": 0.835,
+          "v0": -0.425,
+          "v1": 0.425,
+          "y0": 0.04,
+          "y1": 0.78,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.51,
+          "u1": 0.11,
+          "v0": -0.204,
+          "v1": -0.116,
+          "y0": 0.951,
+          "y1": 1.319,
+          "t": 0
+        }
+      ],
+      "sha256": "b2bbd596e774ba2e134ac4effe1f0b86d60ddeb53dee25e1df643d8e2ca0e34b"
+    },
+    {
+      "kind": "chair",
+      "kindKey": "FURN_CHAIR",
+      "file": "chair.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.55,
+        "d": 0.55
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 0.92,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.2725,
+          0.0,
+          -0.2797
+        ],
+        "max": [
+          0.2725,
+          0.9377,
+          0.2731
+        ]
+      },
+      "tris": 1036,
+      "bytes": 31012,
+      "materials": [
+        "yr_fabric",
+        "yr_keyDark",
+        "yr_legMetal"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.275,
+          "u1": 0.275,
+          "v0": -0.275,
+          "v1": 0.275,
+          "y0": 0.0,
+          "y1": 0.92
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.246,
+          "u1": 0.246,
+          "v0": -0.252,
+          "v1": 0.237,
+          "y0": 0.409,
+          "y1": 0.532,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.224,
+          "u1": 0.224,
+          "v0": -0.261,
+          "v1": -0.12,
+          "y0": 0.562,
+          "y1": 0.938,
+          "t": 0
+        }
+      ],
+      "sha256": "6aafb3400a75d68ccbd81f8d83606e49e46856cc952b5a8ab15a92b95d4da9b2"
+    },
+    {
+      "kind": "table",
+      "kindKey": "FURN_TABLE",
+      "file": "table.glb",
+      "class": "B",
+      "collision": {
+        "w": 2.2,
+        "d": 1.1
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 0.74,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -1.1,
+          0.0,
+          -0.55
+        ],
+        "max": [
+          1.1,
+          0.7475,
+          0.55
+        ]
+      },
+      "tris": 702,
+      "bytes": 25156,
+      "materials": [
+        "yr_laminate",
+        "yr_panel",
+        "yr_legMetal",
+        "yr_keyDark"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -1.1,
+          "u1": 1.1,
+          "v0": -0.55,
+          "v1": 0.55,
+          "y0": 0.0,
+          "y1": 0.74
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -1.1,
+          "u1": 1.1,
+          "v0": -0.55,
+          "v1": 0.55,
+          "y0": 0.585,
+          "y1": 0.74,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -1.03,
+          "u1": 1.03,
+          "v0": -0.48,
+          "v1": 0.48,
+          "y0": 0.0,
+          "y1": 0.585,
+          "t": 7
+        }
+      ],
+      "sha256": "7a88818de481d9c9566112f6b1f4219175f2e2851ac5a0b181cecfee1e13f2e3"
+    },
+    {
+      "kind": "cabinet",
+      "kindKey": "FURN_CABINET",
+      "file": "cabinet.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.95,
+        "d": 0.45
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.85,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.475,
+          0.0,
+          -0.225
+        ],
+        "max": [
+          0.475,
+          1.858,
+          0.267
+        ]
+      },
+      "tris": 424,
+      "bytes": 14732,
+      "materials": [
+        "yr_legMetal",
+        "yr_cabinetPaint",
+        "yr_panel",
+        "yr_slotDark",
+        "yr_paperWhite",
+        "yr_chrome"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.475,
+          "u1": 0.475,
+          "v0": -0.225,
+          "v1": 0.225,
+          "y0": 0.0,
+          "y1": 1.85
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.475,
+          "u1": 0.475,
+          "v0": -0.225,
+          "v1": 0.25,
+          "y0": 0.0,
+          "y1": 1.858,
+          "t": 0
+        }
+      ],
+      "sha256": "a77f54470207233a99d2cd0b8a6c8ca24d635efad2e2c607d0c0eb2ced891ed5"
+    },
+    {
+      "kind": "copier",
+      "kindKey": "FURN_COPIER",
+      "file": "copier.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.85,
+        "d": 0.7
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.1,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.428,
+          0.0,
+          -0.35
+        ],
+        "max": [
+          0.425,
+          1.0972,
+          0.4603
+        ]
+      },
+      "tris": 538,
+      "bytes": 18712,
+      "materials": [
+        "yr_slotDark",
+        "yr_copierBody",
+        "yr_drawerFace",
+        "yr_panel",
+        "yr_paperWhite",
+        "yr_keyDark",
+        "yr_screen"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.425,
+          "u1": 0.425,
+          "v0": -0.35,
+          "v1": 0.35,
+          "y0": 0.0,
+          "y1": 1.1
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.425,
+          "u1": 0.425,
+          "v0": -0.35,
+          "v1": 0.364,
+          "y0": 0.0,
+          "y1": 1.055,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.31,
+          "u1": 0.31,
+          "v0": 0.34,
+          "v1": 0.46,
+          "y0": 0.596,
+          "y1": 0.624,
+          "t": 0
+        }
+      ],
+      "sha256": "a7a51ea1aa4717e6e1bdec741293a5730924d6a9f323441ede46ed1c12f2db2a"
+    },
+    {
+      "kind": "cooler",
+      "kindKey": "FURN_COOLER",
+      "file": "cooler.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.42,
+        "d": 0.42
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.4,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.21,
+          0.0,
+          -0.21
+        ],
+        "max": [
+          0.276,
+          1.395,
+          0.285
+        ]
+      },
+      "tris": 830,
+      "bytes": 26740,
+      "materials": [
+        "yr_coolerWhite",
+        "yr_slotDark",
+        "yr_legMetal",
+        "yr_bookRed",
+        "yr_bottleBlue"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.21,
+          "u1": 0.21,
+          "v0": -0.21,
+          "v1": 0.21,
+          "y0": 0.0,
+          "y1": 1.4
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.21,
+          "u1": 0.21,
+          "v0": -0.21,
+          "v1": 0.21,
+          "y0": 0.0,
+          "y1": 0.925,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.15,
+          "u1": 0.15,
+          "v0": -0.146,
+          "v1": 0.146,
+          "y0": 0.925,
+          "y1": 1.395,
+          "t": 0
+        }
+      ],
+      "sha256": "a65822a719cbac1b9568c4d1f19b0768db170d67264c7dad08951c43a584c5a6"
+    },
+    {
+      "kind": "plant",
+      "kindKey": "FURN_PLANT",
+      "file": "plant.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.5,
+        "d": 0.5
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.15,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.2058,
+          0.0,
+          -0.2019
+        ],
+        "max": [
+          0.2816,
+          1.098,
+          0.2019
+        ]
+      },
+      "tris": 746,
+      "bytes": 26956,
+      "materials": [
+        "yr_potClay",
+        "yr_soil",
+        "yr_leafGreen"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.25,
+          "u1": 0.25,
+          "v0": -0.25,
+          "v1": 0.25,
+          "y0": 0.0,
+          "y1": 1.15
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.185,
+          "u1": 0.185,
+          "v0": -0.185,
+          "v1": 0.185,
+          "y0": 0.0,
+          "y1": 0.38,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.2,
+          "u1": 0.09,
+          "v0": -0.11,
+          "v1": 0.09,
+          "y0": 0.38,
+          "y1": 0.83,
+          "t": 3
+        }
+      ],
+      "sha256": "cf56aa1d7a3efd159381b39d83a4e835f7537f559db3ea36e7020e919345e028"
+    },
+    {
+      "kind": "rack",
+      "kindKey": "FURN_RACK",
+      "file": "rack.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.9,
+        "d": 0.7
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.9,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.45,
+          0.0,
+          -0.35
+        ],
+        "max": [
+          0.45,
+          1.905,
+          0.39
+        ]
+      },
+      "tris": 340,
+      "bytes": 18160,
+      "materials": [
+        "yr_legMetal",
+        "yr_rackDark",
+        "yr_rackFace",
+        "yr_slotDark",
+        "yr_ledGreen",
+        "yr_bookRed"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.45,
+          "u1": 0.45,
+          "v0": -0.35,
+          "v1": 0.35,
+          "y0": 0.0,
+          "y1": 1.9
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.45,
+          "u1": 0.45,
+          "v0": -0.35,
+          "v1": 0.368,
+          "y0": 0.0,
+          "y1": 1.905,
+          "t": 0
+        }
+      ],
+      "sha256": "bb63b055fe7ceccb0abf5fe43d559d326c85ac9ff63461ce6d8121c11c046a37"
+    },
+    {
+      "kind": "sofa",
+      "kindKey": "FURN_SOFA",
+      "file": "sofa.glb",
+      "class": "B",
+      "collision": {
+        "w": 1.6,
+        "d": 0.75
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 0.9,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.8,
+          0.0,
+          -0.3956
+        ],
+        "max": [
+          0.8,
+          0.9092,
+          0.375
+        ]
+      },
+      "tris": 936,
+      "bytes": 24552,
+      "materials": [
+        "yr_woodDark",
+        "yr_sofa",
+        "yr_sofaCushion",
+        "yr_rug"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.8,
+          "u1": 0.8,
+          "v0": -0.375,
+          "v1": 0.375,
+          "y0": 0.0,
+          "y1": 0.9
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.8,
+          "u1": 0.8,
+          "v0": -0.377,
+          "v1": 0.345,
+          "y0": 0.11,
+          "y1": 0.67,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.64,
+          "u1": 0.64,
+          "v0": -0.396,
+          "v1": 0.007,
+          "y0": 0.67,
+          "y1": 0.909,
+          "t": 0
+        }
+      ],
+      "sha256": "d4e1cf8371b16c92f203cc800bed7de2e41ec6fa63df3cd3c6ae76a4e6f74b7a"
+    },
+    {
+      "kind": "bookshelf",
+      "kindKey": "FURN_BOOKSHELF",
+      "file": "bookshelf.glb",
+      "class": "B",
+      "collision": {
+        "w": 1.15,
+        "d": 0.35
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.85,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.595,
+          0.0,
+          -0.19
+        ],
+        "max": [
+          0.595,
+          1.8575,
+          0.19
+        ]
+      },
+      "tris": 1354,
+      "bytes": 66276,
+      "materials": [
+        "yr_shelfWood",
+        "yr_panel",
+        "yr_woodDark",
+        "yr_bookRed",
+        "yr_bookBlue",
+        "yr_bookTan",
+        "yr_paperWhite",
+        "yr_potClay",
+        "yr_leafGreen"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.575,
+          "u1": 0.575,
+          "v0": -0.175,
+          "v1": 0.175,
+          "y0": 0.0,
+          "y1": 1.85
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.595,
+          "u1": 0.595,
+          "v0": -0.19,
+          "v1": 0.19,
+          "y0": 0.0,
+          "y1": 1.858,
+          "t": 0
+        }
+      ],
+      "sha256": "0f945cb725f1ccf3808b9f666f21efd5e80177bf2cf4a5881ce56b5864dbc88f"
+    },
+    {
+      "kind": "whiteboard",
+      "kindKey": "FURN_WHITEBOARD",
+      "file": "whiteboard.glb",
+      "class": "B",
+      "collision": {
+        "w": 1.8,
+        "d": 0.1
+      },
+      "overhang": {
+        "w": 0.06,
+        "d": 0.0
+      },
+      "heightBudget": 1.86,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.935,
+          0.6325,
+          -0.028
+        ],
+        "max": [
+          0.935,
+          1.85,
+          0.101
+        ]
+      },
+      "tris": 658,
+      "bytes": 23944,
+      "materials": [
+        "yr_boardWhite",
+        "yr_legMetal",
+        "yr_keyDark",
+        "yr_bookBlue",
+        "yr_bookRed",
+        "yr_paperWhite",
+        "yr_panel"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.9,
+          "u1": 0.9,
+          "v0": -0.05,
+          "v1": 0.05,
+          "y0": 0.0,
+          "y1": 1.86
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.935,
+          "u1": 0.935,
+          "v0": -0.028,
+          "v1": 0.032,
+          "y0": 0.65,
+          "y1": 1.85,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.7,
+          "u1": 0.7,
+          "v0": 0.0,
+          "v1": 0.101,
+          "y0": 0.632,
+          "y1": 0.675,
+          "t": 0
+        }
+      ],
+      "sha256": "fb80a7287a9724a95d040347525df7860a2b0e1e90809ae5c958da57a723009a"
+    },
+    {
+      "kind": "bed",
+      "kindKey": "FURN_BED",
+      "file": "bed.glb",
+      "class": "B",
+      "collision": {
+        "w": 1.5,
+        "d": 2.1
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.3,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.7825,
+          0.0,
+          -1.06
+        ],
+        "max": [
+          0.7825,
+          1.19,
+          1.0724
+        ]
+      },
+      "tris": 1260,
+      "bytes": 30376,
+      "materials": [
+        "yr_bedFrame",
+        "yr_woodMid",
+        "yr_mattress",
+        "yr_pillow",
+        "yr_blanket"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.75,
+          "u1": 0.75,
+          "v0": -1.05,
+          "v1": 1.05,
+          "y0": 0.0,
+          "y1": 1.3
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.783,
+          "u1": 0.783,
+          "v0": -1.06,
+          "v1": 1.072,
+          "y0": 0.19,
+          "y1": 0.601,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.77,
+          "u1": 0.77,
+          "v0": -1.06,
+          "v1": -0.945,
+          "y0": 0.08,
+          "y1": 1.19,
+          "t": 0
+        }
+      ],
+      "sha256": "41f566d07b5f09c5adf2a366d59e6b46c2510cb7d55204b5b4c6868c4bffd12f"
+    },
+    {
+      "kind": "nightstand",
+      "kindKey": "FURN_NIGHTSTAND",
+      "file": "nightstand.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.5,
+        "d": 0.5
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 0.9,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.25
+        ],
+        "max": [
+          0.25,
+          0.88,
+          0.271
+        ]
+      },
+      "tris": 518,
+      "bytes": 18932,
+      "materials": [
+        "yr_woodDark",
+        "yr_woodMid",
+        "yr_chrome",
+        "yr_slotDark",
+        "yr_shade",
+        "yr_bookTan"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.25,
+          "u1": 0.25,
+          "v0": -0.25,
+          "v1": 0.25,
+          "y0": 0.0,
+          "y1": 0.9
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.25,
+          "u1": 0.25,
+          "v0": -0.25,
+          "v1": 0.25,
+          "y0": 0.0,
+          "y1": 0.6,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.14,
+          "u1": 0.065,
+          "v0": -0.111,
+          "v1": 0.083,
+          "y0": 0.75,
+          "y1": 0.88,
+          "t": 0
+        }
+      ],
+      "sha256": "e38f84ff8e48616ba6e54f1e7e9e5d23d4ca74921ea68db229d9974cc94780a7"
+    },
+    {
+      "kind": "wardrobe",
+      "kindKey": "FURN_WARDROBE",
+      "file": "wardrobe.glb",
+      "class": "B",
+      "collision": {
+        "w": 1.25,
+        "d": 0.62
+      },
+      "overhang": {
+        "w": 0.06,
+        "d": 0.0
+      },
+      "heightBudget": 2.05,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.655,
+          0.0,
+          -0.33
+        ],
+        "max": [
+          0.655,
+          2.0505,
+          0.363
+        ]
+      },
+      "tris": 526,
+      "bytes": 17720,
+      "materials": [
+        "yr_woodDark",
+        "yr_woodMid",
+        "yr_slotDark",
+        "yr_chrome"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.625,
+          "u1": 0.625,
+          "v0": -0.31,
+          "v1": 0.31,
+          "y0": 0.0,
+          "y1": 2.05
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.655,
+          "u1": 0.655,
+          "v0": -0.33,
+          "v1": 0.337,
+          "y0": 0.0,
+          "y1": 2.05,
+          "t": 0
+        }
+      ],
+      "sha256": "d0e318f2d92f299a94c0c67d67ca5f4032eec2ca4f0b22acb258db78290cde16"
+    },
+    {
+      "kind": "toilet",
+      "kindKey": "FURN_TOILET",
+      "file": "toilet.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.45,
+        "d": 0.72
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 0.78,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.235,
+          0.0,
+          -0.37
+        ],
+        "max": [
+          0.235,
+          0.8186,
+          0.286
+        ]
+      },
+      "tris": 982,
+      "bytes": 29036,
+      "materials": [
+        "yr_porcelain",
+        "yr_chrome",
+        "yr_mirror"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.225,
+          "u1": 0.225,
+          "v0": -0.36,
+          "v1": 0.36,
+          "y0": 0.0,
+          "y1": 0.78
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.187,
+          "u1": 0.187,
+          "v0": -0.105,
+          "v1": 0.25,
+          "y0": 0.0,
+          "y1": 0.512,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.235,
+          "u1": 0.235,
+          "v0": -0.37,
+          "v1": -0.105,
+          "y0": 0.43,
+          "y1": 0.8,
+          "t": 0
+        }
+      ],
+      "sha256": "5378b38e6e8219b0de0400714d636c8a79074269790b489413d5ec5400b4a236"
+    },
+    {
+      "kind": "sink",
+      "kindKey": "FURN_SINK",
+      "file": "sink.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.75,
+        "d": 0.5
+      },
+      "overhang": {
+        "w": 0.08,
+        "d": 0.0
+      },
+      "heightBudget": 2.0,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.375,
+          0.0,
+          -0.255
+        ],
+        "max": [
+          0.4416,
+          1.98,
+          0.268
+        ]
+      },
+      "tris": 1144,
+      "bytes": 34236,
+      "materials": [
+        "yr_slotDark",
+        "yr_woodDark",
+        "yr_woodMid",
+        "yr_chrome",
+        "yr_porcelain",
+        "yr_mirror",
+        "yr_towel",
+        "yr_paperWhite"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.375,
+          "u1": 0.375,
+          "v0": -0.25,
+          "v1": 0.25,
+          "y0": 0.0,
+          "y1": 2.0
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.375,
+          "u1": 0.375,
+          "v0": -0.25,
+          "v1": 0.255,
+          "y0": 0.0,
+          "y1": 0.888,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.36,
+          "u1": 0.36,
+          "v0": -0.255,
+          "v1": -0.215,
+          "y0": 1.188,
+          "y1": 1.98,
+          "t": 0
+        }
+      ],
+      "sha256": "c106c8af6327a1e1303a61ba5c3f7df5bacbc2e51fe4f4da953088f66e4f306a"
+    },
+    {
+      "kind": "tub",
+      "kindKey": "FURN_TUB",
+      "file": "tub.glb",
+      "class": "B",
+      "collision": {
+        "w": 1.65,
+        "d": 0.75
+      },
+      "overhang": {
+        "w": 0.06,
+        "d": 0.06
+      },
+      "heightBudget": 0.8,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.825,
+          0.0,
+          -0.375
+        ],
+        "max": [
+          0.825,
+          0.736,
+          0.375
+        ]
+      },
+      "tris": 800,
+      "bytes": 20812,
+      "materials": [
+        "yr_porcelain",
+        "yr_chrome"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.825,
+          "u1": 0.825,
+          "v0": -0.375,
+          "v1": 0.375,
+          "y0": 0.0,
+          "y1": 0.8
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.825,
+          "u1": 0.825,
+          "v0": -0.375,
+          "v1": 0.375,
+          "y0": 0.0,
+          "y1": 0.562,
+          "t": 0
+        }
+      ],
+      "sha256": "7b23dbd39a4aaf44cc87d16d62840cfba4dd83f61b6774e71f0ea1f45bcdfbf5"
+    },
+    {
+      "kind": "counter",
+      "kindKey": "FURN_COUNTER",
+      "file": "counter.glb",
+      "class": "B",
+      "collision": {
+        "w": 1.25,
+        "d": 0.65
+      },
+      "overhang": {
+        "w": 0.04,
+        "d": 0.0
+      },
+      "heightBudget": 1.1,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.645,
+          0.0,
+          -0.325
+        ],
+        "max": [
+          0.645,
+          1.105,
+          0.347
+        ]
+      },
+      "tris": 830,
+      "bytes": 24116,
+      "materials": [
+        "yr_slotDark",
+        "yr_woodDark",
+        "yr_woodMid",
+        "yr_chrome",
+        "yr_counterTop",
+        "yr_shelfWood",
+        "yr_applianceSteel"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.625,
+          "u1": 0.625,
+          "v0": -0.325,
+          "v1": 0.325,
+          "y0": 0.0,
+          "y1": 1.1
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.645,
+          "u1": 0.645,
+          "v0": -0.325,
+          "v1": 0.325,
+          "y0": 0.0,
+          "y1": 0.9,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.645,
+          "u1": 0.645,
+          "v0": -0.325,
+          "v1": -0.147,
+          "y0": 0.9,
+          "y1": 1.08,
+          "t": 0
+        }
+      ],
+      "sha256": "a2e2717f3701656c0c4fee17b9e89203e12661d473ec1050a88505ece1745399"
+    },
+    {
+      "kind": "stove",
+      "kindKey": "FURN_STOVE",
+      "file": "stove.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.65,
+        "d": 0.65
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.16,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.325,
+          0.0,
+          -0.325
+        ],
+        "max": [
+          0.325,
+          1.14,
+          0.382
+        ]
+      },
+      "tris": 918,
+      "bytes": 37460,
+      "materials": [
+        "yr_slotDark",
+        "yr_applianceWhite",
+        "yr_applianceSteel",
+        "yr_burner",
+        "yr_chrome",
+        "yr_screen"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.325,
+          "u1": 0.325,
+          "v0": -0.325,
+          "v1": 0.325,
+          "y0": 0.0,
+          "y1": 1.16
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.325,
+          "u1": 0.325,
+          "v0": -0.325,
+          "v1": 0.34,
+          "y0": 0.0,
+          "y1": 0.883,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.325,
+          "u1": 0.325,
+          "v0": -0.32,
+          "v1": -0.27,
+          "y0": 0.883,
+          "y1": 1.14,
+          "t": 0
+        }
+      ],
+      "sha256": "8fcf62e28310b4d3c068ce6af646d3646b108340212ff5067d6eb2ae34a13f83"
+    },
+    {
+      "kind": "fridge",
+      "kindKey": "FURN_FRIDGE",
+      "file": "fridge.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.75,
+        "d": 0.72
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.85,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.375,
+          0.0,
+          -0.36
+        ],
+        "max": [
+          0.375,
+          1.84,
+          0.418
+        ]
+      },
+      "tris": 458,
+      "bytes": 18272,
+      "materials": [
+        "yr_slotDark",
+        "yr_applianceSteel",
+        "yr_applianceWhite",
+        "yr_paperWhite",
+        "yr_bookRed",
+        "yr_bookBlue",
+        "yr_bottleBlue"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.375,
+          "u1": 0.375,
+          "v0": -0.36,
+          "v1": 0.36,
+          "y0": 0.0,
+          "y1": 1.85
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.375,
+          "u1": 0.375,
+          "v0": -0.36,
+          "v1": 0.367,
+          "y0": 0.0,
+          "y1": 1.84,
+          "t": 0
+        }
+      ],
+      "sha256": "cb73f5e1fd2847361ca611e29536f284aad8f9a82237f9cf48d88fb7dd28b4d4"
+    },
+    {
+      "kind": "tv",
+      "kindKey": "FURN_TV",
+      "file": "tv.glb",
+      "class": "B",
+      "collision": {
+        "w": 1.45,
+        "d": 0.45
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.35,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.73,
+          0.0,
+          -0.23
+        ],
+        "max": [
+          0.73,
+          1.38,
+          0.2785
+        ]
+      },
+      "tris": 690,
+      "bytes": 23432,
+      "materials": [
+        "yr_legMetal",
+        "yr_woodDark",
+        "yr_woodMid",
+        "yr_chrome",
+        "yr_slotDark",
+        "yr_keyDark",
+        "yr_ledGreen",
+        "yr_tvBlack",
+        "yr_screen"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.725,
+          "u1": 0.725,
+          "v0": -0.225,
+          "v1": 0.225,
+          "y0": 0.0,
+          "y1": 1.35
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.73,
+          "u1": 0.73,
+          "v0": -0.225,
+          "v1": 0.241,
+          "y0": 0.0,
+          "y1": 0.505,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.62,
+          "u1": 0.62,
+          "v0": -0.125,
+          "v1": -0.04,
+          "y0": 0.7,
+          "y1": 1.38,
+          "t": 0
+        }
+      ],
+      "sha256": "32c28ceeaa5c4ace390f08eecc885eb6eda420c096a75859e9b8a787a7c3192d"
+    },
+    {
+      "kind": "armchair",
+      "kindKey": "FURN_ARMCHAIR",
+      "file": "armchair.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.85,
+        "d": 0.85
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 0.9,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.4699,
+          0.0,
+          -0.4456
+        ],
+        "max": [
+          0.425,
+          0.9092,
+          0.425
+        ]
+      },
+      "tris": 818,
+      "bytes": 21916,
+      "materials": [
+        "yr_woodDark",
+        "yr_sofa",
+        "yr_sofaCushion",
+        "yr_rug"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.425,
+          "u1": 0.425,
+          "v0": -0.425,
+          "v1": 0.425,
+          "y0": 0.0,
+          "y1": 0.9
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.46,
+          "u1": 0.425,
+          "v0": -0.425,
+          "v1": 0.395,
+          "y0": 0.11,
+          "y1": 0.67,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.285,
+          "u1": 0.285,
+          "v0": -0.446,
+          "v1": -0.102,
+          "y0": 0.67,
+          "y1": 0.909,
+          "t": 0
+        }
+      ],
+      "sha256": "0f39f8844a16b9d5f88401cb852c3c8a7d3da9d81f3c8522be20f25ec0dc21db"
+    },
+    {
+      "kind": "washer",
+      "kindKey": "FURN_WASHER",
+      "file": "washer.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.62,
+        "d": 0.62
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 0.85,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.31,
+          0.0,
+          -0.31
+        ],
+        "max": [
+          0.31,
+          0.85,
+          0.355
+        ]
+      },
+      "tris": 770,
+      "bytes": 27656,
+      "materials": [
+        "yr_slotDark",
+        "yr_applianceWhite",
+        "yr_applianceSteel",
+        "yr_burner",
+        "yr_screen",
+        "yr_keyDark",
+        "yr_chrome"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.31,
+          "u1": 0.31,
+          "v0": -0.31,
+          "v1": 0.31,
+          "y0": 0.0,
+          "y1": 0.85
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.31,
+          "u1": 0.31,
+          "v0": -0.31,
+          "v1": 0.34,
+          "y0": 0.0,
+          "y1": 0.85,
+          "t": 0
+        }
+      ],
+      "sha256": "fb610885f844ff74869759d80d2cdc8ad213684c3c9d2ec1f9992256eb350432"
+    }
+  ]
+}

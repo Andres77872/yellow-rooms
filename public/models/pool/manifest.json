@@ -1,0 +1,495 @@
+{
+  "schema": 1,
+  "pack": "pool",
+  "generator": {
+    "blender": "5.2.2 LTS",
+    "blenderHash": "d13f752e3b9c",
+    "exporter": "5.2.40",
+    "script": "build_pack.py"
+  },
+  "budget": {
+    "tris": 4800,
+    "bytes": 190000
+  },
+  "totals": {
+    "tris": 3102,
+    "bytes": 118964
+  },
+  "kinds": [
+    {
+      "kind": "starting_block",
+      "kindKey": "PROP_STARTING_BLOCK",
+      "file": "starting_block.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.5,
+        "d": 0.75
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 0.75,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 800,
+        "bytes": 30000
+      },
+      "bounds": {
+        "min": [
+          -0.251,
+          0.0,
+          -0.3788
+        ],
+        "max": [
+          0.251,
+          0.7724,
+          0.3788
+        ]
+      },
+      "tris": 348,
+      "bytes": 15508,
+      "materials": [
+        "yr_poolTile",
+        "yr_tileGrout",
+        "yr_poolGrip",
+        "yr_applianceWhite",
+        "yr_chrome"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.25,
+          "u1": 0.25,
+          "v0": -0.375,
+          "v1": 0.375,
+          "y0": 0.0,
+          "y1": 0.75
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.25,
+          "u1": 0.25,
+          "v0": -0.35,
+          "v1": 0.11,
+          "y0": 0.0,
+          "y1": 0.72,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.25,
+          "u1": 0.25,
+          "v0": -0.38,
+          "v1": 0.38,
+          "y0": 0.6,
+          "y1": 0.64,
+          "t": 0
+        }
+      ],
+      "sha256": "c20f5fff3fcd563c4f04a258c69ba7488ebce8beace717398b470d2f754a62a7"
+    },
+    {
+      "kind": "lifeguard_chair",
+      "kindKey": "PROP_LIFEGUARD_CHAIR",
+      "file": "lifeguard_chair.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.9,
+        "d": 1.1
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 2.05,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 800,
+        "bytes": 30000
+      },
+      "bounds": {
+        "min": [
+          -0.448,
+          0.0,
+          -0.5789
+        ],
+        "max": [
+          0.525,
+          2.0013,
+          0.55
+        ]
+      },
+      "tris": 704,
+      "bytes": 25224,
+      "materials": [
+        "yr_applianceWhite",
+        "yr_rescueRed",
+        "yr_tileGrout",
+        "yr_poolGrip",
+        "yr_woodMid",
+        "yr_woodDark",
+        "yr_chrome"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.45,
+          "u1": 0.45,
+          "v0": -0.55,
+          "v1": 0.55,
+          "y0": 0.0,
+          "y1": 2.05
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.445,
+          "u1": 0.445,
+          "v0": -0.55,
+          "v1": 0.55,
+          "y0": 0.0,
+          "y1": 1.46,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.38,
+          "u1": 0.38,
+          "v0": -0.54,
+          "v1": -0.44,
+          "y0": 1.42,
+          "y1": 1.86,
+          "t": 0
+        }
+      ],
+      "sha256": "cfbb4dec994edb0e9c33bc986300b12118c3c143f1de2c5a6e393c22ee50b8ea"
+    },
+    {
+      "kind": "lounger",
+      "kindKey": "PROP_LOUNGER",
+      "file": "lounger.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.7,
+        "d": 1.95
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 0.45,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 800,
+        "bytes": 30000
+      },
+      "bounds": {
+        "min": [
+          -0.34,
+          0.0,
+          -0.96
+        ],
+        "max": [
+          0.34,
+          0.4446,
+          0.96
+        ]
+      },
+      "tris": 700,
+      "bytes": 28984,
+      "materials": [
+        "yr_applianceWhite",
+        "yr_tileGrout",
+        "yr_keyDark",
+        "yr_towel"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.35,
+          "u1": 0.35,
+          "v0": -0.975,
+          "v1": 0.975,
+          "y0": 0.0,
+          "y1": 0.45
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.33,
+          "u1": 0.33,
+          "v0": -0.96,
+          "v1": 0.97,
+          "y0": 0.19,
+          "y1": 0.29,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.32,
+          "u1": 0.32,
+          "v0": -0.87,
+          "v1": -0.53,
+          "y0": 0.22,
+          "y1": 0.42,
+          "t": 0
+        }
+      ],
+      "sha256": "7f2135477254d2af53bd0d2d51e366c40eee6d3bc458862e6059da552a65f9c5"
+    },
+    {
+      "kind": "kickboard",
+      "kindKey": "PROP_KICKBOARD",
+      "file": "kickboard.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.3,
+        "d": 0.45
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 0.03,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 300,
+        "bytes": 15000
+      },
+      "bounds": {
+        "min": [
+          -0.15,
+          0.0,
+          -0.225
+        ],
+        "max": [
+          0.15,
+          0.0305,
+          0.225
+        ]
+      },
+      "tris": 146,
+      "bytes": 5552,
+      "materials": [
+        "yr_floatYellow",
+        "yr_floatBlue"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.15,
+          "u1": 0.15,
+          "v0": -0.225,
+          "v1": 0.225,
+          "y0": 0.0,
+          "y1": 0.03
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.15,
+          "u1": 0.15,
+          "v0": -0.225,
+          "v1": 0.225,
+          "y0": 0.0,
+          "y1": 0.03,
+          "t": 0
+        }
+      ],
+      "sha256": "77b9aafe3a313e02c0d9e9d8eadc2b8c688f2c9745111bfbe74790faaacdec7a"
+    },
+    {
+      "kind": "lost_bin",
+      "kindKey": "PROP_LOST_BIN",
+      "file": "lost_bin.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.6,
+        "d": 0.45
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 0.85,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 800,
+        "bytes": 30000
+      },
+      "bounds": {
+        "min": [
+          -0.3,
+          0.0,
+          -0.237
+        ],
+        "max": [
+          0.3,
+          0.878,
+          0.223
+        ]
+      },
+      "tris": 490,
+      "bytes": 20548,
+      "materials": [
+        "yr_crateBlue",
+        "yr_paperWhite",
+        "yr_keyDark",
+        "yr_slotDark",
+        "yr_towel",
+        "yr_floatYellow",
+        "yr_floatBlue"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.3,
+          "u1": 0.3,
+          "v0": -0.225,
+          "v1": 0.225,
+          "y0": 0.0,
+          "y1": 0.85
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.3,
+          "u1": 0.3,
+          "v0": -0.225,
+          "v1": 0.225,
+          "y0": 0.0,
+          "y1": 0.87,
+          "t": 0
+        }
+      ],
+      "sha256": "fb65d8cf5222e29be62765d25fcad23f6438d5004d24dfee28a0e7d0db9ccdad"
+    },
+    {
+      "kind": "bandai",
+      "kindKey": "PROP_BANDAI",
+      "file": "bandai.glb",
+      "class": "B",
+      "collision": {
+        "w": 1.2,
+        "d": 0.9
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.6,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 800,
+        "bytes": 30000
+      },
+      "bounds": {
+        "min": [
+          -0.605,
+          0.0,
+          -0.45
+        ],
+        "max": [
+          0.605,
+          1.58,
+          0.46
+        ]
+      },
+      "tris": 714,
+      "bytes": 23148,
+      "materials": [
+        "yr_woodDark",
+        "yr_woodMid",
+        "yr_tatami",
+        "yr_fabric",
+        "yr_chrome",
+        "yr_slotDark",
+        "yr_paperWhite",
+        "yr_keyDark"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.6,
+          "u1": 0.6,
+          "v0": -0.45,
+          "v1": 0.45,
+          "y0": 0.0,
+          "y1": 1.6
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.6,
+          "u1": 0.6,
+          "v0": -0.44,
+          "v1": 0.43,
+          "y0": 0.0,
+          "y1": 1.14,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.6,
+          "u1": 0.6,
+          "v0": 0.15,
+          "v1": 0.46,
+          "y0": 1.1,
+          "y1": 1.2,
+          "t": 0
+        }
+      ],
+      "sha256": "545f68b0d6ab98fbe3702ed6c4d5184882e1006698bd88106686c01a29a0f737"
+    }
+  ]
+}

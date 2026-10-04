@@ -9,6 +9,7 @@ import { DeferredRenderer } from '../../render/DeferredRenderer.js'
 import { LightGrid } from '../../world/lightGrid/LightGrid.js'
 import { furnitureProxyBoxes } from '../../world/objects/furniture/proxies.js'
 import { GRAPHICS_PRESETS, resolveGraphics } from '../../core/graphics.js'
+import { createFurnitureModelLibrary, loadFurnitureModels, loadPropModels } from '../../render/furnitureModels.js'
 
 // 3D preview of the edited document. Reuses the game's chunk mesher
 // (world/mesh.js) verbatim. Two modes (engine-improvement gap G8):
@@ -48,6 +49,24 @@ const PREVIEW_PRESET = 'high'
 // preview panel reads as bright as the game's on average.
 const PANEL_HUM_MEAN = 0.92
 
+// The palette a document renders with: a kind-lab map's own palette id
+// (map.meta.palette, world/familyPalette.js MAP_PALETTES) over its family's.
+export const previewPaletteKey = (meta) => meta?.palette ?? meta?.family
+
+// The Blender models (furniture + the liminal prop packs), loaded once per
+// page and shared by every preview: closing and reopening the preview never
+// refetches them. Furniture lands first; `ready` settles when every prop
+// pack has loaded or fallen back to boxes. Never rejects.
+let previewModels = null
+export function previewModelLibrary() {
+  if (!previewModels) {
+    const library = createFurnitureModelLibrary()
+    const furniture = loadFurnitureModels(library)
+    previewModels = { library, furniture, ready: furniture.then(() => loadPropModels(library)) }
+  }
+  return previewModels
+}
+
 // The look's fixture brightness and troffer face on the panel material. The
 // game sets both every frame (Engine._updateFlicker), and so does the preview
 // (render): a look whose lighting build differs commits asynchronously, so
@@ -58,8 +77,8 @@ export function applyPreviewPanelLook(materials, deferred) {
   if (u.uPanelPattern) u.uPanelPattern.value = deferred.panelPattern ?? 0
 }
 
-function buildMaterials(renderer, family) {
-  const pal = familyPalette(family)
+function buildMaterials(renderer, paletteKey) {
+  const pal = familyPalette(paletteKey)
   const aniso = renderer.capabilities.getMaxAnisotropy()
   const tex = {
     floor: floorTexture(aniso, pal.floor),
@@ -78,6 +97,8 @@ function buildMaterials(renderer, family) {
     prop: lambert({ color: 0xffffff }),
     signGlow: new THREE.MeshBasicMaterial({ color: 0xffffff }),
     furniture: lambert({ color: 0xffffff }),
+    // GLB furniture/props: baked part colours x the per-instance batch tint.
+    furnitureModel: lambert({ color: 0xffffff, vertexColors: true }),
     exit: new THREE.MeshBasicMaterial({ color: 0xeafff2 }),
   }
 }
@@ -97,8 +118,8 @@ export class Preview3D {
     dir.position.set(0.6, 1, 0.35)
     this.scene.add(dir)
     this.geom = createGeometries()
-    this.materials = buildMaterials(this.renderer, app.previewSource().meta.family)
-    this._family = app.previewSource().meta.family
+    this._palette = previewPaletteKey(app.previewSource().meta)
+    this.materials = buildMaterials(this.renderer, this._palette)
     this.mode = PREVIEW_GEOMETRY
     this.game = null // { scene, materials, grid, deferred } while a look is previewed
     this._ceiling = true
@@ -109,6 +130,21 @@ export class Preview3D {
     this._bind()
     this.resize()
     this.fit()
+    // Chunks mesh with whatever the shared library holds and re-mesh as more
+    // arrives (ChunkManager.upgradeFurnitureModels does the same in game).
+    const models = previewModelLibrary()
+    this.models = models.library
+    this._modelCount = this.models.geometries.size
+    const upgrade = () => this._upgradeModels()
+    models.furniture.then(upgrade)
+    models.ready.then(upgrade)
+  }
+
+  // Rebuild every resident chunk once newly loaded models change what the
+  // furniture batches would draw. No-op after dispose or when nothing landed.
+  _upgradeModels() {
+    if (this._disposed || this.models.geometries.size === this._modelCount) return
+    this.sync(null)
   }
 
   resize() {
@@ -138,9 +174,9 @@ export class Preview3D {
   }
 
   _createGame(look) {
-    const family = this._family
+    const paletteKey = this._palette
     const scene = new THREE.Scene()
-    const materials = createGBufferMaterials(this.renderer, family)
+    const materials = createGBufferMaterials(this.renderer, paletteKey)
     const grid = new LightGrid()
     // Furniture occupancy, as ChunkManager wires it: box shadows, box AO and
     // contact ownership need the proxies. Only together with the quality
@@ -149,7 +185,7 @@ export class Preview3D {
     grid.proxyBoxes = furnitureProxyBoxes
     const deferred = new DeferredRenderer(this.renderer, scene, this.camera)
     deferred.bindLightGrid(grid)
-    deferred.applyPalette(familyPalette(family))
+    deferred.applyPalette(familyPalette(paletteKey))
     deferred.setLook(look)
     const preset = GRAPHICS_PRESETS[PREVIEW_PRESET]
     deferred.applyQuality(
@@ -296,10 +332,11 @@ export class Preview3D {
   // Rebuild chunks whose data changed; drop chunks deleted from the document.
   sync(dirtyKeys = null) {
     const map = this.app.previewSource()
-    if (map.meta.family !== this._family) {
-      this._family = map.meta.family
+    const paletteKey = previewPaletteKey(map.meta)
+    if (paletteKey !== this._palette) {
+      this._palette = paletteKey
       for (const m of Object.values(this.materials)) m.dispose?.()
-      this.materials = buildMaterials(this.renderer, this._family)
+      this.materials = buildMaterials(this.renderer, this._palette)
       if (this.game) {
         const look = this.mode
         this._disposeGame()
@@ -312,6 +349,7 @@ export class Preview3D {
     const scene = game ? game.scene : this.scene
     const materials = game ? game.materials : this.materials
     if (dirtyKeys === null) {
+      this._modelCount = this.models?.geometries.size ?? 0
       for (const [, built] of this.built) this._drop(built)
       this.built.clear()
       if (game) game.grid.reset()
@@ -328,7 +366,8 @@ export class Preview3D {
       if (!d) continue
       const built = buildChunkMeshes(
         d, this.geom, materials,
-        d.cx * CHUNK_WORLD, layerY(d.cy), d.cz * CHUNK_WORLD
+        d.cx * CHUNK_WORLD, layerY(d.cy), d.cz * CHUNK_WORLD,
+        this.models
       )
       built.cx = d.cx
       built.cy = d.cy
@@ -367,12 +406,19 @@ export class Preview3D {
   }
 
   dispose() {
+    this._disposed = true // the shared model library outlives this preview
     this.setHighlight(null)
     for (const [, built] of this.built) this._drop(built)
     this.built.clear()
     this._disposeGame()
     disposeGeometries(this.geom)
     for (const m of Object.values(this.materials)) m.dispose?.()
+    // Every shared model this renderer drew holds its 'dispose' listener
+    // (three's WebGLGeometries), which would keep the closed context and its
+    // buffers alive from the module-level library. Firing dispose frees this
+    // renderer's GPU copies only: the CPU data stays for the next preview,
+    // which re-uploads it (one preview exists at a time).
+    for (const g of this.models?.geometries.values() ?? []) g.dispose()
     this.renderer.dispose()
     this.renderer.domElement.remove()
   }

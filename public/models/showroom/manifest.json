@@ -1,0 +1,185 @@
+{
+  "schema": 1,
+  "pack": "showroom",
+  "generator": {
+    "blender": "5.2.2 LTS",
+    "blenderHash": "d13f752e3b9c",
+    "exporter": "5.2.40",
+    "script": "build_pack.py"
+  },
+  "budget": {
+    "tris": 20000,
+    "bytes": 650000
+  },
+  "totals": {
+    "tris": 1494,
+    "bytes": 56184
+  },
+  "kinds": [
+    {
+      "kind": "bag_bin",
+      "kindKey": "PROP_BAG_BIN",
+      "file": "bag_bin.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.7,
+        "d": 0.5
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 0.9,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 800,
+        "bytes": 30000
+      },
+      "bounds": {
+        "min": [
+          -0.35,
+          0.0,
+          -0.25
+        ],
+        "max": [
+          0.35,
+          0.904,
+          0.3006
+        ]
+      },
+      "tris": 784,
+      "bytes": 26780,
+      "materials": [
+        "yr_legMetal",
+        "yr_keyDark",
+        "yr_returnBin",
+        "yr_paperWhite",
+        "yr_bagYellow"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.35,
+          "u1": 0.35,
+          "v0": -0.25,
+          "v1": 0.25,
+          "y0": 0.0,
+          "y1": 0.9
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.35,
+          "u1": 0.35,
+          "v0": -0.25,
+          "v1": 0.25,
+          "y0": 0.1,
+          "y1": 0.71,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.32,
+          "u1": 0.32,
+          "v0": -0.23,
+          "v1": 0.23,
+          "y0": 0.71,
+          "y1": 0.83,
+          "t": 0
+        }
+      ],
+      "sha256": "9173187e5e389642e9ea031e68d9e13110b19674e96b312b7b09fffd8debe9af"
+    },
+    {
+      "kind": "flatpack",
+      "kindKey": "PROP_FLATPACK",
+      "file": "flatpack.glb",
+      "class": "B",
+      "collision": {
+        "w": 1.2,
+        "d": 0.8
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 0.6,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 800,
+        "bytes": 30000
+      },
+      "bounds": {
+        "min": [
+          -0.6,
+          0.0,
+          -0.4
+        ],
+        "max": [
+          0.6,
+          0.5995,
+          0.4
+        ]
+      },
+      "tris": 710,
+      "bytes": 29404,
+      "materials": [
+        "yr_shelfWood",
+        "yr_woodMid",
+        "yr_bookTan",
+        "yr_paperWhite",
+        "yr_keyDark",
+        "yr_flatpackCard"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.6,
+          "u1": 0.6,
+          "v0": -0.4,
+          "v1": 0.4,
+          "y0": 0.0,
+          "y1": 0.6
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.6,
+          "u1": 0.6,
+          "v0": -0.4,
+          "v1": 0.4,
+          "y0": 0.0,
+          "y1": 0.464,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.54,
+          "u1": 0.48,
+          "v0": -0.32,
+          "v1": 0.3,
+          "y0": 0.464,
+          "y1": 0.6,
+          "t": 0
+        }
+      ],
+      "sha256": "bd8f02f03130d492dbd73ba3224e37044e2b0e4ef36f99edc6134d3e927e5dfa"
+    }
+  ]
+}

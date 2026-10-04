@@ -11,16 +11,20 @@ import {
   cIdx,
 } from '../../constants.js'
 import { COLUMN_MONUMENTAL, COLUMN_FURNITURE } from '../../mapTypes.js'
+import { fastPathMassMask } from '../../tiles/massMask.js'
 
 // Column dressing: bases and capitals so freestanding posts and monumental
 // piers read as designed structure instead of bare extrusions.
 export function dressColumns(data, trim) {
+  // Sealed mass of a massFastPath family has no column to trim (§9.6b).
+  const massMask = fastPathMassMask(data)
   for (let z = 0; z < CHUNK; z++) {
     for (let x = 0; x < CHUNK; x++) {
       const kind = data.cols[cIdx(x, z)]
       // Furniture cells are dressed by their own models (objects/furniture/);
       // only structural columns get a base + capital.
       if (!kind || kind === COLUMN_FURNITURE) continue
+      if (massMask?.[cIdx(x, z)]) continue
       const half = kind === COLUMN_MONUMENTAL ? MONUMENTAL_COL_HALF : COL_HALF
       const px = (x + 0.5) * CELL
       const pz = (z + 0.5) * CELL

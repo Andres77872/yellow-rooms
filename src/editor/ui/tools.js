@@ -76,7 +76,8 @@ export class SelectTool {
         const lamp = app.map.lampAt(from.gx, cy, from.gz)
         if (lamp && !app.map.lampAt(p.gx, cy, p.gz) && !app.guardCeiling(p.gx, cy, p.gz)) {
           app.map.setLamp(from.gx, cy, from.gz, null)
-          app.map.setLamp(p.gx, cy, p.gz, lamp.rec.lit)
+          // The tint travels with the fixture (undefined: an untinted lamp).
+          app.map.setLamp(p.gx, cy, p.gz, lamp.rec.lit, lamp.rec.tint)
           from.gx = p.gx; from.gz = p.gz
           this._drag.moved = true
         }

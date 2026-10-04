@@ -1,0 +1,352 @@
+{
+  "schema": 1,
+  "pack": "suburb",
+  "generator": {
+    "blender": "5.2.2 LTS",
+    "blenderHash": "d13f752e3b9c",
+    "exporter": "5.2.40",
+    "script": "build_pack.py"
+  },
+  "budget": {
+    "tris": 7500,
+    "bytes": 300000
+  },
+  "totals": {
+    "tris": 2348,
+    "bytes": 90376
+  },
+  "kinds": [
+    {
+      "kind": "mailbox",
+      "kindKey": "PROP_MAILBOX",
+      "file": "mailbox.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.35,
+        "d": 0.55
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.2,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 300,
+        "bytes": 15000
+      },
+      "bounds": {
+        "min": [
+          -0.106,
+          0.0,
+          -0.24
+        ],
+        "max": [
+          0.126,
+          1.19,
+          0.265
+        ]
+      },
+      "tris": 259,
+      "bytes": 13832,
+      "materials": [
+        "yr_mailboxSteel",
+        "yr_chrome",
+        "yr_paperWhite",
+        "yr_keyDark",
+        "yr_mailFlag",
+        "yr_woodMid",
+        "yr_woodDark"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.175,
+          "u1": 0.175,
+          "v0": -0.275,
+          "v1": 0.275,
+          "y0": 0.0,
+          "y1": 1.2
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.1,
+          "u1": 0.1,
+          "v0": -0.24,
+          "v1": 0.252,
+          "y0": 0.9,
+          "y1": 1.14,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.045,
+          "u1": 0.045,
+          "v0": -0.105,
+          "v1": -0.015,
+          "y0": 0.0,
+          "y1": 0.9,
+          "t": 0
+        }
+      ],
+      "sha256": "fbc4c746dde5948164199d7ae586520ff3fb01dc4b616b26bb19cbfe1e73d910"
+    },
+    {
+      "kind": "kids_bike",
+      "kindKey": "PROP_KIDS_BIKE",
+      "file": "kids_bike.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.45,
+        "d": 1.2
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 0.75,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 800,
+        "bytes": 30000
+      },
+      "bounds": {
+        "min": [
+          -0.22,
+          0.0,
+          -0.57
+        ],
+        "max": [
+          0.22,
+          0.7067,
+          0.57
+        ]
+      },
+      "tris": 735,
+      "bytes": 28044,
+      "materials": [
+        "yr_keyDark",
+        "yr_bikePlastic",
+        "yr_bikeTeal",
+        "yr_chrome"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.225,
+          "u1": 0.225,
+          "v0": -0.6,
+          "v1": 0.6,
+          "y0": 0.0,
+          "y1": 0.75
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.035,
+          "u1": 0.05,
+          "v0": -0.57,
+          "v1": 0.57,
+          "y0": 0.0,
+          "y1": 0.6,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.22,
+          "u1": 0.22,
+          "v0": 0.1,
+          "v1": 0.13,
+          "y0": 0.64,
+          "y1": 0.71,
+          "t": 0
+        }
+      ],
+      "sha256": "b2342c5c0ce80c51050560f652ed788bb959cab84c1b04c7f0759e14e31a4548"
+    },
+    {
+      "kind": "gnome",
+      "kindKey": "PROP_GNOME",
+      "file": "gnome.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.3,
+        "d": 0.3
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 0.45,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 800,
+        "bytes": 30000
+      },
+      "bounds": {
+        "min": [
+          -0.12,
+          0.0,
+          -0.12
+        ],
+        "max": [
+          0.12,
+          0.448,
+          0.122
+        ]
+      },
+      "tris": 670,
+      "bytes": 22424,
+      "materials": [
+        "yr_gnomeStone",
+        "yr_keyDark",
+        "yr_gnomeBlue",
+        "yr_chrome",
+        "yr_gnomeSkin",
+        "yr_porcelain",
+        "yr_gnomeRed"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.15,
+          "u1": 0.15,
+          "v0": -0.15,
+          "v1": 0.15,
+          "y0": 0.0,
+          "y1": 0.45
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.12,
+          "u1": 0.12,
+          "v0": -0.1,
+          "v1": 0.12,
+          "y0": 0.0,
+          "y1": 0.3,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.06,
+          "u1": 0.06,
+          "v0": -0.06,
+          "v1": 0.04,
+          "y0": 0.3,
+          "y1": 0.41,
+          "t": 0
+        }
+      ],
+      "sha256": "cb6ce30b92e23bf97c348f0c1c69787300f4765875beeffb11febf7a88d0a70d"
+    },
+    {
+      "kind": "doghouse",
+      "kindKey": "PROP_DOGHOUSE",
+      "file": "doghouse.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.9,
+        "d": 1.1
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.0,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 800,
+        "bytes": 30000
+      },
+      "bounds": {
+        "min": [
+          -0.4888,
+          0.0,
+          -0.56
+        ],
+        "max": [
+          0.4888,
+          0.9875,
+          0.56
+        ]
+      },
+      "tris": 684,
+      "bytes": 26076,
+      "materials": [
+        "yr_woodDark",
+        "yr_kennelRed",
+        "yr_slotDark",
+        "yr_paperWhite",
+        "yr_keyDark",
+        "yr_roofShingle"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.45,
+          "u1": 0.45,
+          "v0": -0.55,
+          "v1": 0.55,
+          "y0": 0.0,
+          "y1": 1.0
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.44,
+          "u1": 0.44,
+          "v0": -0.55,
+          "v1": 0.55,
+          "y0": 0.56,
+          "y1": 0.94,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.38,
+          "u1": 0.38,
+          "v0": -0.46,
+          "v1": 0.45,
+          "y0": 0.05,
+          "y1": 0.6,
+          "t": 0
+        }
+      ],
+      "sha256": "d0d24ea9db331faa9993dab30c2bfeb2f56ed5274b0b2f63f0e0e855035b9c16"
+    }
+  ]
+}

@@ -1,0 +1,450 @@
+{
+  "schema": 1,
+  "pack": "playplace",
+  "generator": {
+    "blender": "5.2.2 LTS",
+    "blenderHash": "d13f752e3b9c",
+    "exporter": "5.2.40",
+    "script": "build_pack.py"
+  },
+  "budget": {
+    "tris": 7600,
+    "bytes": 305000
+  },
+  "totals": {
+    "tris": 3708,
+    "bytes": 114708
+  },
+  "kinds": [
+    {
+      "kind": "child_table",
+      "kindKey": "PROP_CHILD_TABLE",
+      "file": "child_table.glb",
+      "class": "B",
+      "collision": {
+        "w": 1.2,
+        "d": 0.8
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 0.55,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 800,
+        "bytes": 30000
+      },
+      "bounds": {
+        "min": [
+          -0.6,
+          0.0,
+          -0.4
+        ],
+        "max": [
+          0.6,
+          0.55,
+          0.4
+        ]
+      },
+      "tris": 418,
+      "bytes": 15572,
+      "materials": [
+        "yr_playYellow",
+        "yr_playRed",
+        "yr_playBlue",
+        "yr_playGreen",
+        "yr_keyDark"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.6,
+          "u1": 0.6,
+          "v0": -0.4,
+          "v1": 0.4,
+          "y0": 0.0,
+          "y1": 0.55
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.6,
+          "u1": 0.6,
+          "v0": -0.4,
+          "v1": 0.4,
+          "y0": 0.4,
+          "y1": 0.55,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.53,
+          "u1": 0.53,
+          "v0": -0.34,
+          "v1": 0.34,
+          "y0": 0.06,
+          "y1": 0.3,
+          "t": 0
+        }
+      ],
+      "sha256": "6765a77f4027f6397a44d75631e6924b2f4e0205b164532957bfbf2026fbef30"
+    },
+    {
+      "kind": "child_chair",
+      "kindKey": "PROP_CHILD_CHAIR",
+      "file": "child_chair.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.38,
+        "d": 0.38
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 0.6,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 300,
+        "bytes": 15000
+      },
+      "bounds": {
+        "min": [
+          -0.19,
+          0.0,
+          -0.192
+        ],
+        "max": [
+          0.19,
+          0.6,
+          0.19
+        ]
+      },
+      "tris": 244,
+      "bytes": 7492,
+      "materials": [
+        "yr_playRed",
+        "yr_keyDark"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.19,
+          "u1": 0.19,
+          "v0": -0.19,
+          "v1": 0.19,
+          "y0": 0.0,
+          "y1": 0.6
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.18,
+          "u1": 0.18,
+          "v0": -0.19,
+          "v1": -0.145,
+          "y0": 0.0,
+          "y1": 0.6,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.19,
+          "u1": 0.19,
+          "v0": -0.19,
+          "v1": 0.19,
+          "y0": 0.265,
+          "y1": 0.315,
+          "t": 0
+        }
+      ],
+      "sha256": "a2d1c1f2e6179451534bfdab969ded7ec77c8faccffa949996cb5cd1802c070b"
+    },
+    {
+      "kind": "arcade",
+      "kindKey": "PROP_ARCADE",
+      "file": "arcade.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.75,
+        "d": 0.85
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.85,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 800,
+        "bytes": 30000
+      },
+      "bounds": {
+        "min": [
+          -0.378,
+          0.0,
+          -0.425
+        ],
+        "max": [
+          0.378,
+          1.84,
+          0.425
+        ]
+      },
+      "tris": 540,
+      "bytes": 23720,
+      "materials": [
+        "yr_arcadeBody",
+        "yr_keyDark",
+        "yr_arcadeScreen",
+        "yr_arcadeGlow",
+        "yr_playRed",
+        "yr_playBlue",
+        "yr_chrome",
+        "yr_playYellow",
+        "yr_playGreen",
+        "yr_slotDark"
+      ],
+      "sockets": [
+        {
+          "name": "socket_screen_0",
+          "at": [
+            0.0,
+            1.255,
+            0.105
+          ],
+          "yrSocket": "screen"
+        },
+        {
+          "name": "socket_glow_0",
+          "at": [
+            0.0,
+            1.25,
+            0.45
+          ],
+          "yrSocket": "glow"
+        }
+      ],
+      "colliders": [
+        {
+          "u0": -0.375,
+          "u1": 0.375,
+          "v0": -0.425,
+          "v1": 0.425,
+          "y0": 0.0,
+          "y1": 1.85
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.375,
+          "u1": 0.375,
+          "v0": -0.425,
+          "v1": 0.21,
+          "y0": 0.0,
+          "y1": 1.84,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.345,
+          "u1": 0.345,
+          "v0": 0.21,
+          "v1": 0.425,
+          "y0": 0.875,
+          "y1": 0.985,
+          "t": 0
+        }
+      ],
+      "sha256": "583438a9bbab4077e17673dc181d63f04d2c8997cf9662f861f041005742e0cd"
+    },
+    {
+      "kind": "punch_bag",
+      "kindKey": "PROP_PUNCH_BAG",
+      "file": "punch_bag.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.8,
+        "d": 0.8
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.6,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 800,
+        "bytes": 30000
+      },
+      "bounds": {
+        "min": [
+          -0.385,
+          0.0,
+          -0.385
+        ],
+        "max": [
+          0.385,
+          1.6,
+          0.385
+        ]
+      },
+      "tris": 606,
+      "bytes": 18700,
+      "materials": [
+        "yr_playYellow",
+        "yr_playRed",
+        "yr_playBlue"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.4,
+          "u1": 0.4,
+          "v0": -0.4,
+          "v1": 0.4,
+          "y0": 0.0,
+          "y1": 1.6
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.2,
+          "u1": 0.2,
+          "v0": -0.2,
+          "v1": 0.2,
+          "y0": 0.17,
+          "y1": 1.6,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.385,
+          "u1": 0.385,
+          "v0": -0.385,
+          "v1": 0.385,
+          "y0": 0.0,
+          "y1": 0.19,
+          "t": 0
+        }
+      ],
+      "sha256": "10994dee6192a2d3a72beb5dbfc0f4b07d5506ecf56bdf161952d44dc2edc42a"
+    },
+    {
+      "kind": "mascot",
+      "kindKey": "PROP_MASCOT",
+      "file": "mascot.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.8,
+        "d": 0.7
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.9,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.44,
+          0.0,
+          -0.35
+        ],
+        "max": [
+          0.4,
+          1.805,
+          0.352
+        ]
+      },
+      "tris": 1900,
+      "bytes": 49224,
+      "materials": [
+        "yr_playBlue",
+        "yr_playYellow",
+        "yr_mascotFur",
+        "yr_mascotCream",
+        "yr_keyDark",
+        "yr_playRed"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.4,
+          "u1": 0.4,
+          "v0": -0.35,
+          "v1": 0.35,
+          "y0": 0.0,
+          "y1": 1.9
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.25,
+          "u1": 0.24,
+          "v0": -0.18,
+          "v1": 0.21,
+          "y0": 0.24,
+          "y1": 1.57,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.4,
+          "u1": 0.4,
+          "v0": -0.35,
+          "v1": 0.35,
+          "y0": 0.0,
+          "y1": 0.24,
+          "t": 0
+        }
+      ],
+      "sha256": "d9f1c8c2cfb04d3e565df00da54e8b429b016c44dad8421c5092a8b5c99b0080"
+    }
+  ]
+}

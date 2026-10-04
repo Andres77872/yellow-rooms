@@ -4,4 +4,5 @@
 // back). Doors (casing + leaves) in doors.js, gallery windows in windows.js,
 // the shared emit helper in frame.js.
 export { pushDoorFrame, pushDoorLeaves } from './doors.js'
+export { doorKit } from './doorKit.js'
 export { pushWindowTrim } from './windows.js'

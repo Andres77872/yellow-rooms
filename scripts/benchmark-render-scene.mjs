@@ -13,11 +13,13 @@ import { createGeometries, disposeGeometries } from '../src/render/geometries.js
 import { ChunkManager } from '../src/world/ChunkManager.js'
 import { WORLD_GEN_VERSION, SPAWN_WORLD } from '../src/world/constants.js'
 import { hashStr } from '../src/world/core/hash.js'
-import {
-  MAP_FAMILY_ORDER,
-  worldConfigForFamily,
-} from '../src/world/mapFamily.js'
+import { worldConfigForFamily } from '../src/world/mapFamily.js'
 import { RENDER_DETAIL_LEVELS } from '../src/world/renderDetail.js'
+import { familiesWith } from '../src/world/families/registry.js'
+
+// Benchmarks iterate the building families only (spec §11.4); the liminal
+// families are benchmarked through benchmark-map-families --family <id>.
+const BUILDING_FAMILIES = familiesWith('buildingMatrices')
 
 const DEFAULT_FAMILY = 'office'
 const DEFAULT_SEED_TEXT = 'render-benchmark'
@@ -82,7 +84,7 @@ function usage() {
   return `Usage: npm run benchmark:render-scene -- [options]
 
 Options:
-  --family <${MAP_FAMILY_ORDER.join('|')}>  Map family (default: ${DEFAULT_FAMILY})
+  --family <${BUILDING_FAMILIES.join('|')}>  Map family (default: ${DEFAULT_FAMILY})
   --seed <text>                         Game seed text (default: ${DEFAULT_SEED_TEXT})
   --profile <${WORLD_DETAIL_ORDER.join('|')}>    World-detail profile (default: ${DEFAULT_PROFILE})
   --models <procedural|glb>             Furniture path (default: procedural)
@@ -161,8 +163,8 @@ function parseOptions(args) {
         options.models = read.value
       } else if (name === '--family') {
         const family = read.value.trim().toLowerCase()
-        if (!MAP_FAMILY_ORDER.includes(family)) {
-          throw new Error(`--family requires ${MAP_FAMILY_ORDER.join(', ')}`)
+        if (!BUILDING_FAMILIES.includes(family)) {
+          throw new Error(`--family requires ${BUILDING_FAMILIES.join(', ')}`)
         }
         options.family = family
       } else if (name === '--profile') {

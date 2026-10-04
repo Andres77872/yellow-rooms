@@ -1,0 +1,186 @@
+{
+  "schema": 1,
+  "pack": "babel",
+  "generator": {
+    "blender": "5.2.2 LTS",
+    "blenderHash": "d13f752e3b9c",
+    "exporter": "5.2.40",
+    "script": "build_pack.py"
+  },
+  "budget": {
+    "tris": 20000,
+    "bytes": 650000
+  },
+  "totals": {
+    "tris": 1822,
+    "bytes": 83932
+  },
+  "kinds": [
+    {
+      "kind": "corner_shelf",
+      "kindKey": "PROP_CORNER_SHELF",
+      "file": "corner_shelf.glb",
+      "class": "B",
+      "collision": {
+        "w": 1.15,
+        "d": 1.15
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.85,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.575,
+          0.0,
+          -0.575
+        ],
+        "max": [
+          0.575,
+          1.85,
+          0.575
+        ]
+      },
+      "tris": 1406,
+      "bytes": 68596,
+      "materials": [
+        "yr_shelfWood",
+        "yr_panel",
+        "yr_woodDark",
+        "yr_bookTan",
+        "yr_paperWhite",
+        "yr_bookRed",
+        "yr_bookBlue"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.575,
+          "u1": 0.575,
+          "v0": -0.575,
+          "v1": 0.575,
+          "y0": 0.0,
+          "y1": 1.85
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.575,
+          "u1": 0.55,
+          "v0": -0.575,
+          "v1": 0.0,
+          "y0": 0.0,
+          "y1": 1.85,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.575,
+          "u1": 0.0,
+          "v0": -0.575,
+          "v1": 0.55,
+          "y0": 0.0,
+          "y1": 1.85,
+          "t": 0
+        }
+      ],
+      "sha256": "3bf61d23305f51aa0c50c587f77a7b0942c372df2a2219863b265dd05454ce1a"
+    },
+    {
+      "kind": "lectern",
+      "kindKey": "PROP_LECTERN",
+      "file": "lectern.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.6,
+        "d": 0.5
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.2,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 800,
+        "bytes": 30000
+      },
+      "bounds": {
+        "min": [
+          -0.3,
+          0.0,
+          -0.25
+        ],
+        "max": [
+          0.3,
+          1.1859,
+          0.2578
+        ]
+      },
+      "tris": 416,
+      "bytes": 15336,
+      "materials": [
+        "yr_woodDark",
+        "yr_shelfWood",
+        "yr_woodMid",
+        "yr_bookRed",
+        "yr_paperWhite"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.3,
+          "u1": 0.3,
+          "v0": -0.25,
+          "v1": 0.25,
+          "y0": 0.0,
+          "y1": 1.2
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.18,
+          "u1": 0.18,
+          "v0": -0.15,
+          "v1": 0.15,
+          "y0": 0.0,
+          "y1": 0.96,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.3,
+          "u1": 0.3,
+          "v0": -0.25,
+          "v1": 0.25,
+          "y0": 0.96,
+          "y1": 1.2,
+          "t": 0
+        }
+      ],
+      "sha256": "6d7dd66b52374d7e4d926068cffabad234f36af27291cd2f3a4885bd8a8d85a4"
+    }
+  ]
+}

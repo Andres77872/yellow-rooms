@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { CELL, CHUNK_WORLD, LIGHT_RANGE } from '../../world/constants.js'
-import { lampTint } from '../../world/lampCharacter.js'
+import { applyLampRecordTint, lampTint } from '../../world/lampCharacter.js'
 import { mirrorMaterial } from '../../debug/PbrReference.js'
 import { FLASH_HAND_OFFSET } from '../flashFrame.js'
 
@@ -139,6 +139,7 @@ export function panelLights({
   const { kept, culled } = selectLamps(candidates, eye, lightRadius, maxLights)
   const lights = kept.map((lamp) => {
     lampTint(lamp.x, lamp.z, lamp.cy ?? floor, _tint, lamp.role ?? 0)
+    applyLampRecordTint(_tint, lamp.tint)
     return {
       color: [_tint[0] * lampColor.r, _tint[1] * lampColor.g, _tint[2] * lampColor.b],
       intensity: lampPower / PANEL_AREA,
@@ -345,7 +346,7 @@ export class ProxySceneBuilder {
       const root = chunk.group
       root.updateWorldMatrix(true, true)
       root.traverse((node) => {
-        if (!node.isMesh || node.isSkinnedMesh || !visibleBelow(node, root)) return
+        if (!node.isMesh || node.isSkinnedMesh || node.userData.forwardOnly || !visibleBelow(node, root)) return
         const geometry = this._geometry(node.geometry)
         const material = this._material(node.material)
         let proxy
@@ -354,7 +355,11 @@ export class ProxySceneBuilder {
           proxy = new THREE.InstancedMesh(geometry, material, node.count)
           // Read-only share: the tracer reads matrices/colours at setScene.
           proxy.instanceMatrix = node.instanceMatrix
-          if (node.instanceColor) proxy.instanceColor = node.instanceColor
+          // Decal batches carry atlas cells in instanceColor; their traced
+          // albedo comes from userData.ptColors (world/mesh.js).
+          const pt = node.userData.ptColors
+          if (pt) proxy.instanceColor = new THREE.InstancedBufferAttribute(pt, 3)
+          else if (node.instanceColor) proxy.instanceColor = node.instanceColor
           stats.instances += node.count
           stats.triangles += triangleCount(geometry) * node.count
         } else {

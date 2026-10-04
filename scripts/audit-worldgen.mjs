@@ -32,10 +32,20 @@ import {
   validateActivationEvidence,
 } from '../src/world/familyAudit.js'
 import { worldConfigForFamily } from '../src/world/mapFamily.js'
+import { LEGACY_FAMILIES } from '../src/world/families/registry.js'
 import { structureAt } from '../src/world/structures/contract.js'
 import { structureAdapterFor } from '../src/world/structures/contract.js'
 import { LATTICE_STRUCTURE_KIND } from '../src/world/structures/lattice.js'
 import { TOWER_LANDMARK_SOCKET_KINDS } from '../src/world/structures/tower.js'
+import { digestChunk } from '../src/world/__tests__/support/chunkDigest.js'
+import {
+  GOLDEN,
+  HOTEL_GOLDEN,
+  LATTICE_GOLDEN,
+  MAX_HEIGHT_GOLDEN,
+  SEWER_GOLDEN,
+  TOWER_GOLDEN,
+} from '../src/world/__tests__/support/goldens.js'
 import {
   COLUMN_FURNITURE,
   MAP_FAMILY_HOTEL,
@@ -86,13 +96,18 @@ const radius = readPositiveInt('--radius', 4)
 const wideSeeds = readPositiveInt('--wide-seeds', 32)
 const wideRadius = readPositiveInt('--wide-radius', 80)
 const level = readPositiveInt('--level', 1)
+// --print-pins [--as-version n]: print the pin digests behind the release
+// evidence (representative goldens, forced corpus, global and maximum-height
+// goldens). --as-version folds/serialises n in place of the generator
+// version, so a version bump can be proven value-neutral (repin-world.mjs).
+const printPins = process.argv.includes('--print-pins')
+const asVersion = process.argv.includes('--as-version')
+  ? readPositiveInt('--as-version', WORLD_GEN_VERSION)
+  : null
 const explicitlyRequestedFamilies = readFamilySelection()
-const requestedFamilies = [
-  MAP_FAMILY_SEWER,
-  MAP_FAMILY_TOWER,
-  MAP_FAMILY_LATTICE,
-  MAP_FAMILY_HOTEL,
-].filter((family) =>
+// The building families' corpus rows (office is the base corpus). Phase R
+// switches this to selectableFamilies once the liminal rows exist (§11.4).
+const requestedFamilies = LEGACY_FAMILIES.filter((family) => family !== MAP_FAMILY_OFFICE).filter((family) =>
   explicitlyRequestedFamilies.includes(family) ||
   CONFIG.mapFamily.profiles[family].enabled === true
 )
@@ -219,8 +234,22 @@ function sewerPinSnapshot(data) {
   }
 }
 
+// --as-version: rewrite every `version` field of the pin snapshots before
+// hashing. Identity when the flag is absent, so default output is unchanged.
+function pinVersioned(value) {
+  if (asVersion === null || !value || typeof value !== 'object') return value
+  if (Array.isArray(value)) return value.map(pinVersioned)
+  const out = {}
+  for (const [key, child] of Object.entries(value)) {
+    out[key] = key === 'version' && child === WORLD_GEN_VERSION
+      ? asVersion
+      : pinVersioned(child)
+  }
+  return out
+}
+
 const sewerCorpusDigest = (snapshots) => createHash('sha256')
-  .update(JSON.stringify(snapshots))
+  .update(JSON.stringify(pinVersioned(snapshots)))
   .digest('hex')
 
 const TOWER_AUDIT_SEEDS = Object.freeze([0x5a17, 0x7157, 0xc0ffee])
@@ -262,7 +291,7 @@ function towerPinSnapshot(data) {
 }
 
 const towerCorpusDigest = (snapshots) => createHash('sha256')
-  .update(JSON.stringify(snapshots))
+  .update(JSON.stringify(pinVersioned(snapshots)))
   .digest('hex')
 
 const LATTICE_AUDIT_SEEDS = Object.freeze([
@@ -297,7 +326,7 @@ function latticePinSnapshot(data) {
 }
 
 const latticeCorpusDigest = (snapshots) => createHash('sha256')
-  .update(JSON.stringify(snapshots))
+  .update(JSON.stringify(pinVersioned(snapshots)))
   .digest('hex')
 
 const hotelWorldSeed = (index) => hashStr(`audit-hotel-${index}#${level}`)
@@ -328,7 +357,7 @@ function hotelPinSnapshot(data) {
 }
 
 const hotelCorpusDigest = (snapshots) => createHash('sha256')
-  .update(JSON.stringify(snapshots))
+  .update(JSON.stringify(pinVersioned(snapshots)))
   .digest('hex')
 
 function forcedHotelAuditConfig() {
@@ -1391,6 +1420,46 @@ function runForcedHotelCorpus() {
       },
     },
   }
+}
+
+if (printPins) {
+  const sha256Json = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
+  const fold = asVersion === null ? {} : { version: asVersion }
+  const global = {}
+  for (const key of Object.keys(GOLDEN)) {
+    const [cx, cy, cz] = key.split(',').map(Number)
+    global[key] = digestChunk(buildChunk(12345, cx, cy, cz, CONFIG), fold)
+  }
+  const maximumHeight = {}
+  for (const keys of Object.values(MAX_HEIGHT_GOLDEN)) {
+    for (const key of keys) maximumHeight[key] = global[key]
+  }
+  const representative = (family, table) => {
+    const config = worldConfigForFamily(family)
+    return sha256Json(Object.fromEntries(table.map((fixture) => [
+      fixture.key,
+      digestChunk(buildChunk(fixture.seed, fixture.cx, fixture.cy, fixture.cz, config), fold),
+    ])))
+  }
+  const globalDigest = sha256Json(global)
+  const maxHeightDigest = sha256Json(maximumHeight)
+  const row = (family, table, runner) => ({
+    representative: representative(family, table),
+    corpus: runner().row.corpus.pin.digest,
+    global: globalDigest,
+    maxHeight: maxHeightDigest,
+  })
+  console.log(JSON.stringify({
+    generatorVersion: WORLD_GEN_VERSION,
+    asVersion,
+    rows: {
+      [MAP_FAMILY_SEWER]: row(MAP_FAMILY_SEWER, SEWER_GOLDEN, runForcedSewerCorpus),
+      [MAP_FAMILY_TOWER]: row(MAP_FAMILY_TOWER, TOWER_GOLDEN, runForcedTowerCorpus),
+      [MAP_FAMILY_LATTICE]: row(MAP_FAMILY_LATTICE, LATTICE_GOLDEN, runForcedLatticeCorpus),
+      [MAP_FAMILY_HOTEL]: row(MAP_FAMILY_HOTEL, HOTEL_GOLDEN, runForcedHotelCorpus),
+    },
+  }, null, 2))
+  process.exit(0)
 }
 
 function scanZones(seed, sampleRadius) {

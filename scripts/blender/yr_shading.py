@@ -1,5 +1,5 @@
 # Yellow Rooms — shared "painted" vertex shading + GLB compaction for the
-# Blender asset pipelines (build_furniture.py, build_enemies.py).
+# Blender asset pipelines (build_pack.py + packs/*.py, build_enemies.py).
 #
 # Anime background painters shade props with soft value gradients rather than
 # texture detail: a little darker toward the floor, a cool cavity tone where
@@ -28,6 +28,24 @@ SHADE_ATTR = "yr_shade"
 
 # --- Materials -------------------------------------------------------------------
 
+def socket(sockets, identifier):
+    """Node socket by its stable identifier (names repeat across data types:
+    ShaderNodeMix has three inputs called "A")."""
+    for s in sockets:
+        if s.identifier == identifier:
+            return s
+    raise KeyError(f"no socket {identifier!r} in {[s.identifier for s in sockets]}")
+
+
+def ensure_nodes(idblock):
+    """Node tree for a Material/World on every Blender we support: 5.x always
+    has one (use_nodes is deprecated, removal planned for 6.0); older builds
+    need use_nodes switched on to create it."""
+    if getattr(idblock, "node_tree", None) is None and hasattr(idblock, "use_nodes"):
+        idblock.use_nodes = True
+    return idblock.node_tree
+
+
 def shaded_material(name, rgb, metallic=0.0, roughness=0.78):
     """Principled material whose Base Color = ColorAttribute x constant.
 
@@ -36,7 +54,7 @@ def shaded_material(name, rgb, metallic=0.0, roughness=0.78):
     painted shading in the source .blend and the contact sheet.
     """
     m = bpy.data.materials.new(name)
-    m.use_nodes = True
+    ensure_nodes(m)
     # Closed meshes: single-sided export (smaller JSON, correct semantics).
     m.use_backface_culling = True
     nodes, links = m.node_tree.nodes, m.node_tree.links
@@ -50,10 +68,10 @@ def shaded_material(name, rgb, metallic=0.0, roughness=0.78):
     mix.data_type = "RGBA"
     mix.blend_type = "MULTIPLY"
     mix.location = (-260, 260)
-    mix.inputs["Factor"].default_value = 1.0
-    mix.inputs[7].default_value = (rgb[0], rgb[1], rgb[2], 1.0)  # B_Color
-    links.new(attr.outputs["Color"], mix.inputs[6])               # A_Color
-    links.new(mix.outputs[2], bsdf.inputs["Base Color"])          # Result
+    socket(mix.inputs, "Factor_Float").default_value = 1.0
+    socket(mix.inputs, "B_Color").default_value = (rgb[0], rgb[1], rgb[2], 1.0)
+    links.new(attr.outputs["Color"], socket(mix.inputs, "A_Color"))
+    links.new(socket(mix.outputs, "Result_Color"), bsdf.inputs["Base Color"])
     m.diffuse_color = (rgb[0], rgb[1], rgb[2], 1.0)
     return m
 
@@ -88,7 +106,8 @@ def _smoothstep(e0, e1, x):
 
 def paint(obj, height=None, ao_dist=0.3, ao_floor=0.74, ao_gamma=1.0,
           grad_floor=0.84, grad_span=0.85, rim=0.035, rays=48, floor_weight=0.5,
-          min_value=0.64, cool=(0.10, 0.04), warm=(0.012, 0.035), keep_bright=()):
+          min_value=0.64, cool=(0.10, 0.04), warm=(0.012, 0.035), keep_bright=(),
+          floor_z=0.0):
     """Bake the painted multiplier into a CORNER float color attribute.
 
     obj        joined mesh at the identity transform, Blender Z-up, floor z=0.
@@ -105,6 +124,11 @@ def paint(obj, height=None, ao_dist=0.3, ao_floor=0.74, ao_gamma=1.0,
     cool/warm  (red, green) cut in shadow; (green, blue) cut on the rim, so
                cavities read slightly cool and catch-lights slightly warm.
     keep_bright material names left at 1.0 (LEDs, eyes: pure signal colours).
+    floor_z    z of the virtual floor plane and of the gradient's base: 0 for
+               the floor contract, the model's min z for kits that extend
+               below their origin (a pool ladder, a sunk stair stringer).
+               None drops the virtual floor and bases the gradient on the
+               mesh's own min z.
 
     Values are keyed per (vertex, corner normal): corners that already share
     a vertex AND normal get the same colour, so the exporter never has to
@@ -114,10 +138,12 @@ def paint(obj, height=None, ao_dist=0.3, ao_floor=0.74, ao_gamma=1.0,
     verts = [v.co.copy() for v in mesh.vertices]
     polys = [tuple(p.vertices) for p in mesh.polygons]
     bvh = BVHTree.FromPolygons(verts, polys, all_triangles=False)
+    # The gradient base and virtual floor plane (0 = the floor contract);
+    # floor_z=None has no floor plane, so the gradient starts at the mesh.
+    zmin = floor_z if floor_z is not None else min((v.z for v in verts), default=0.0)
     if height is None:
-        height = max((v.z for v in verts), default=1.0)
+        height = max((v.z for v in verts), default=1.0) - zmin
     height = max(height, 1e-3)
-    zmin = 0.0  # the floor contract: origin on the floor (wall pieces float above it)
 
     corner_normals = [Vector(cn.vector) for cn in mesh.corner_normals]
     bright_idx = {i for i, m in enumerate(mesh.materials) if m and m.name in keep_bright}
@@ -140,7 +166,7 @@ def paint(obj, height=None, ao_dist=0.3, ao_floor=0.74, ao_gamma=1.0,
         if rgb is None:
             rgb = _shade_point(bvh, verts[vi], n, hemi, eps, ao_dist, ao_floor, ao_gamma,
                                height, zmin, grad_floor, grad_span, rim, cool, warm,
-                               floor_weight, min_value)
+                               floor_weight, min_value, floor_z is not None)
             cache[key] = rgb
         colors[li, 0:3] = rgb
 
@@ -155,7 +181,8 @@ def paint(obj, height=None, ao_dist=0.3, ao_floor=0.74, ao_gamma=1.0,
 
 
 def _shade_point(bvh, p, n, hemi, eps, dist, ao_floor, gamma, height, zmin,
-                 grad_floor, grad_span, rim, cool, warm, floor_weight, min_value):
+                 grad_floor, grad_span, rim, cool, warm, floor_weight, min_value,
+                 floor_plane=True):
     if n.length < 1e-6:
         n = Vector((0, 0, 1))
     n = n.normalized()
@@ -173,7 +200,7 @@ def _shade_point(bvh, p, n, hemi, eps, dist, ao_floor, gamma, height, zmin,
             # Starting inside another part (a leg sunk into a top): the ray
             # meets a back face. Treat it as contact — fully occluded.
             hit = 0.0 if hn.dot(d) > 0 else hd
-        if d.z < -1e-4 and origin.z > zmin - 1e-4:
+        if floor_plane and d.z < -1e-4 and origin.z > zmin - 1e-4:
             tf = (origin.z - zmin) / -d.z
             if tf < hit:
                 hit, weight = tf, floor_weight
@@ -203,7 +230,8 @@ def _shade_point(bvh, p, n, hemi, eps, dist, ao_floor, gamma, height, zmin,
 # --- Hidden-face culling ----------------------------------------------------------------
 
 def _buried(bvh, p, n, eps=0.003, probes=((0, 0, 1), (0.7, 0, 0.7), (-0.7, 0, 0.7),
-                                          (0, 0.7, 0.7), (0, -0.7, 0.7)), group=None, key=None):
+                                          (0, 0.7, 0.7), (0, -0.7, 0.7)), group=None, key=None,
+            floor_z=0.0):
     """True when a point just off the surface sits inside another closed part
     (every probe ray meets a back face — of a face in the same `group`, when
     one is given) or under the floor."""
@@ -214,7 +242,7 @@ def _buried(bvh, p, n, eps=0.003, probes=((0, 0, 1), (0.7, 0, 0.7), (-0.7, 0, 0.
     t = a.cross(n).normalized()
     b = n.cross(t)
     origin = p + n * eps
-    if origin.z < -1e-4:
+    if floor_z is not None and origin.z < floor_z - 1e-4:
         return group is None
     for dx, dy, dz in probes:
         d = (t * dx + b * dy + n * dz).normalized()
@@ -226,7 +254,7 @@ def _buried(bvh, p, n, eps=0.003, probes=((0, 0, 1), (0.7, 0, 0.7), (-0.7, 0, 0.
     return True
 
 
-def cull_hidden(obj, floor=True, group=None):
+def cull_hidden(obj, floor=True, group=None, floor_z=0.0):
     """Delete faces nobody can ever see: faces lying on the floor facing down,
     and faces whose corners, edge midpoints and centre are all sunk inside
     another part (book bottoms on shelves, leg tops inside table tops, joint
@@ -237,6 +265,8 @@ def cull_hidden(obj, floor=True, group=None):
     (face index -> key, e.g. its dominant bone) only counts a face as buried
     when every enclosing face shares its key, so a torso patch under a
     shoulder cap survives the shrug that uncovers it.
+    `floor_z` moves the floor plane both rules use (a kit whose origin sits
+    above its lowest point); `floor_z=None` disables the floor rules.
     Returns the number of faces removed."""
     mesh = obj.data
     verts = [v.co.copy() for v in mesh.vertices]
@@ -246,7 +276,7 @@ def cull_hidden(obj, floor=True, group=None):
     for poly in mesh.polygons:
         n = poly.normal
         pts = [verts[i] for i in poly.vertices]
-        if floor and n.z < -0.95 and max(p.z for p in pts) < 0.003:
+        if floor and floor_z is not None and n.z < -0.95 and max(p.z for p in pts) < floor_z + 0.003:
             doomed.append(poly.index)
             continue
         probes = pts + [(pts[i] + pts[(i + 1) % len(pts)]) / 2 for i in range(len(pts))]
@@ -255,7 +285,7 @@ def cull_hidden(obj, floor=True, group=None):
         # a visible neighbour face do not count as buried by accident.
         c = poly.center
         key = group(poly.index) if group else None
-        if all(_buried(bvh, c + (q - c) * 0.96, n, group=group, key=key) for q in probes):
+        if all(_buried(bvh, c + (q - c) * 0.96, n, group=group, key=key, floor_z=floor_z) for q in probes):
             doomed.append(poly.index)
     if not doomed:
         return 0
@@ -483,7 +513,10 @@ def compact_glb(path, rename_animation=None):
             blob.append(0)
         acc.pop("byteOffset", None)
         acc["bufferView"] = len(views)
-        views.append({"buffer": 0, "byteOffset": len(blob), "byteLength": len(data[old])})
+        # Frozen contract: buffer, byteLength, byteOffset is the exporter's own
+        # key order (the committed GLBs use it). Changing it rewrites every
+        # GLB's JSON without changing its content, so leave it alone.
+        views.append({"buffer": 0, "byteLength": len(data[old]), "byteOffset": len(blob)})
         blob.extend(data[old])
         new_accessors.append(acc)
     while len(blob) % 4:

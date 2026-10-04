@@ -89,6 +89,9 @@ export const UI_CSS = `
   border-radius:0; cursor:pointer; transition:border-color .2s; }
 #ui select:focus { border-bottom-color:var(--gold); }
 #ui select option { background:#17120a; color:var(--paper); }
+/* MAP picker group headers (BUILDINGS / EXPERIMENTAL): the popup is not dark
+   by itself, so give them the option rows' ground. */
+#ui select optgroup { background:#17120a; color:var(--gold); font-style:normal; }
 
 /* ── buttons ───────────────────────────────────────────────────── */
 #ui button { pointer-events:auto; cursor:pointer; font-family:inherit;

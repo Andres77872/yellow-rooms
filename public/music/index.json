@@ -1,0 +1,22 @@
+{
+  "songs": [
+    {
+      "id": "gymnopedie1",
+      "file": "gymnopedie1.mid",
+      "title": "Gymnopédie No. 1",
+      "composer": "Erik Satie",
+      "year": 1888,
+      "license": "Public Domain (composition and Mutopia Project edition)",
+      "source": "https://www.mutopiaproject.org/cgibin/piece-info.cgi?id=37"
+    },
+    {
+      "id": "gymnopedie3",
+      "file": "gymnopedie3.mid",
+      "title": "Gymnopédie No. 3",
+      "composer": "Erik Satie",
+      "year": 1888,
+      "license": "Public Domain (composition and Mutopia Project edition)",
+      "source": "https://www.mutopiaproject.org/cgibin/piece-info.cgi?id=39"
+    }
+  ]
+}

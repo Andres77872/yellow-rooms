@@ -19,7 +19,7 @@ import { DEFAULT_WORLD_CONFIG } from '../../world/config.js'
 import { CHUNK, ZONE_OFFICE } from '../../world/constants.js'
 import { ChunkData } from '../../world/ChunkData.js'
 import { buildChunk } from '../../world/pipeline.js'
-import { worldConfigForFamily, MAP_FAMILY_ORDER } from '../../world/mapFamily.js'
+import { worldConfigForFamily } from '../../world/mapFamily.js'
 import {
   CELL_ROOM,
   MAP_FAMILY_LATTICE,
@@ -29,6 +29,11 @@ import { structureAt } from '../../world/structures/contract.js'
 import { discoverTowerFixture } from '../../world/__tests__/tower-fixture.js'
 import { describeCatalogStructure, isCatalogStructure } from '../../world/structures/catalog/engine.js'
 import { structureTag } from '../familyOverlays.js'
+import { familiesWith } from '../../world/families/registry.js'
+
+// Office-semantics matrix: only the building families (spec §11.4). The
+// liminal families have their own per-family suites.
+const BUILDING_FAMILIES = familiesWith('buildingMatrices')
 
 // First v26 catalog structure in a small window of tower-family chunks.
 function findCatalogStructure(family = 'tower') {
@@ -133,7 +138,7 @@ describe('catalog structure detail', () => {
 
   it('formats every family catalog with its own recipe', () => {
     const labels = new Set()
-    for (const family of MAP_FAMILY_ORDER) {
+    for (const family of BUILDING_FAMILIES) {
       const structure = findCatalogStructure(family)
       if (!structure) continue
       expect(structure.kind).toBe(`${family}Catalog`)
@@ -236,7 +241,7 @@ describe('structureAtCell across families', () => {
 
 describe('exploreConfigForFamily', () => {
   it('selects every canonical family and falls back to office on junk', () => {
-    for (const family of MAP_FAMILY_ORDER) {
+    for (const family of BUILDING_FAMILIES) {
       expect(exploreConfigForFamily(family).mapFamily.selected).toBe(family)
     }
     expect(exploreConfigForFamily('hospital').mapFamily.selected).toBe('office')
@@ -326,7 +331,7 @@ describe('collectRoomLabels', () => {
   })
 
   it('reads real generated rooms across families', () => {
-    for (const family of MAP_FAMILY_ORDER) {
+    for (const family of BUILDING_FAMILIES) {
       const { config } = exploreConfigForFamily(family)
       const entries = []
       for (let cx = -2; cx <= 2; cx++) {

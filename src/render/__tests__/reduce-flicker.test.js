@@ -47,7 +47,8 @@ describe('reduceFlicker: CPU lamp path', () => {
   const cm = {
     collectLampsNear(_px, _pz, out) {
       out.length = 0
-      out.push({ x: spot.x, y: 2.9, z: spot.z, cy: 0, role: 0 })
+      // Tagged the way mesh.js tags lit lamps (lampIsBad).
+      out.push({ x: spot.x, y: 2.9, z: spot.z, cy: 0, role: 0, bad: true })
       return out
     },
   }
@@ -63,7 +64,7 @@ describe('reduceFlicker: CPU lamp path', () => {
       for (let i = 0; i < 40; i++) {
         field.update(0.073, 0, 0, 0, cm)
         t += 0.073
-        expect(u.lampFlickerRaw[0]).toBeCloseTo(lampFlicker(spot.x, spot.z, 0, t, profile), 6)
+        expect(u.lampFlickerRaw[0]).toBeCloseTo(lampFlicker(spot.x, spot.z, 0, t, profile, true), 6)
         expect(u.lampFlickerRaw[0]).toBeGreaterThanOrEqual(profile.badLo - 1e-6)
       }
       field._time = 0

@@ -36,6 +36,7 @@ export const PROP_TINT = {
   radiator: [0.82, 0.8, 0.72], // painted enamel
   pipe: [0.35, 0.34, 0.32], // plumbing metal
   caution: [0.85, 0.7, 0.15], // server-room warning plate
+  signInk: [0.86, 0.84, 0.76], // raised numerals on room / level plates
 }
 export const SIGN_TINT = {
   exit: [0.45, 1.0, 0.62], // emergency green
@@ -98,7 +99,7 @@ export const ACCENT_CYCLE = [
   [1.0, 0.5, 0.38], // signal orange
   [0.42, 0.78, 1.0], // cyan
   [1.0, 0.85, 0.4], // amber
-  [0.55, 1.0, 0.62], // green
+  [0.9, 0.95, 1.0], // ice white (not green: exit green marks the escape route only)
   [0.82, 0.55, 1.0], // violet
   [1.0, 0.6, 0.82], // magenta
 ]

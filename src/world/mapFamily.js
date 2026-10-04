@@ -6,6 +6,8 @@ import {
   MAP_FAMILY_SEWER,
   MAP_FAMILY_TOWER,
 } from './mapTypes.js'
+import { LIMINAL_FAMILY_IDS } from './families/ids.js'
+import { isLiminal } from './families/registry.js'
 
 // Keep one canonical family order. Codes, audit rows, and deterministic family
 // projections derive from this order instead of maintaining parallel lists.
@@ -16,6 +18,8 @@ export const MAP_FAMILY_ORDER = Object.freeze([
   MAP_FAMILY_TOWER,
   MAP_FAMILY_LATTICE,
   MAP_FAMILY_HOTEL,
+  // The 12 liminal families (families/ids.js), codes 5..16 — append-only.
+  ...LIMINAL_FAMILY_IDS,
 ])
 
 export const MAP_FAMILY_CODES = Object.freeze(Object.fromEntries(
@@ -160,6 +164,17 @@ function normalizeProfile(family, profile, requireEnabled) {
       maxExposureM: profile.maxExposureM,
       minimumCueCells: profile.minimumCueCells,
     }
+  } else if (isLiminal(family)) {
+    // Liminal profiles carry activation only (spec §4.1, §5.1): exactly
+    // {enabled: boolean}, plus `family` when a caller passes a normalized
+    // profile back in (it must name this family). Stricter than Hotel on
+    // purpose: any other key is rejected as 'invalid' (§4.1); a non-boolean
+    // `enabled` already failed above as 'incomplete'.
+    const ownKey = (key) => key === 'enabled' || (key === 'family' && profile.family === family)
+    if (!Object.keys(profile).every(ownKey)) {
+      throw new MapFamilyConfigError('invalid')
+    }
+    normalized = { family, enabled: profile.enabled }
   } else {
     throw new MapFamilyConfigError('unknown')
   }
@@ -277,7 +292,8 @@ function isRollbackFamily(kind) {
   return kind === MAP_FAMILY_SEWER ||
     kind === MAP_FAMILY_TOWER ||
     kind === MAP_FAMILY_LATTICE ||
-    kind === MAP_FAMILY_HOTEL
+    kind === MAP_FAMILY_HOTEL ||
+    isLiminal(kind)
 }
 
 function restoreOfficeSettingsAfterSewerRollback(config, profile) {

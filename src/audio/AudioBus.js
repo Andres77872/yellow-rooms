@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { AmbientCueDirector } from './ambientCueDirector.js'
+import { MusicPlayer } from './music/MusicPlayer.js'
 import {
   MAP_FAMILY_HOTEL,
   MAP_FAMILY_LATTICE,
@@ -13,9 +14,12 @@ import {
   SURFACE_DECK,
   SURFACE_TILE,
 } from '../world/stepSurface.js'
+import { byFamily, familyAudio } from '../world/families/registry.js'
 
-// Entirely procedural audio — no asset files. One shared AudioContext (owned by
-// the THREE.AudioListener), gated behind the Start button to satisfy the browser
+// Procedural audio — every effect and bed is synthesised; the only assets are
+// the public-domain MIDI scores the PA music plays (music/MusicPlayer.js),
+// which are note data, not recordings. One shared AudioContext (owned by the
+// THREE.AudioListener), gated behind the Start button to satisfy the browser
 // autoplay policy.
 //
 // Mix philosophy: the building should sound EMPTY, not loud. Everything is
@@ -63,7 +67,7 @@ const FAMILY_GLIDE = 1.2
 //     sewer, a tritone for the steel lattice. Tension thins it out.
 //   oneShot/interval: the family's texture sound. Atmosphere only — threat
 //     pacing stays with the cue director.
-const FAMILY_SPACES = Object.freeze({
+export const FAMILY_SPACES = Object.freeze({
   [MAP_FAMILY_OFFICE]: {
     decay: 0.55, wet: 0.08, tone: 2400, damp: 0.75, hum: 1, oneShot: null,
     bed: { rumble: 0.12, rumbleLP: 240, air: 0.03, airF: 650, wind: 0, water: 0 },
@@ -218,6 +222,10 @@ export class AudioBus {
     this.convolver.connect(this.revTone)
     this.revTone.connect(this.revWet)
     this.revWet.connect(this.master)
+
+    // Public-domain MIDI through a distant PA speaker. Builds its own nodes
+    // only once a song has loaded (see MusicPlayer).
+    this.music = new MusicPlayer(this)
   }
 
   _node(node) {
@@ -243,6 +251,7 @@ export class AudioBus {
       node.disconnect()
     }
     this._nodes.clear()
+    this.music.dispose()
     this._padOsc = []
     this.voices = 0
     this.whiteBuf = null
@@ -325,7 +334,8 @@ export class AudioBus {
   }
 
   get _space() {
-    return FAMILY_SPACES[this.family] ?? FAMILY_SPACES[MAP_FAMILY_OFFICE]
+    // A liminal family's own record row first, then its base family's (§5.1).
+    return familyAudio(this.family)?.space ?? byFamily(FAMILY_SPACES, this.family)
   }
 
   _applySpace() {
@@ -507,11 +517,17 @@ export class AudioBus {
     this._scheduleAmbient()
     this.master.gain.setValueAtTime(0, ctx.currentTime)
     this.master.gain.linearRampToValueAtTime(this.volume, ctx.currentTime + 1.5)
+    this.music.load()
   }
 
   setVolume(v) {
     this.volume = v
     if (this.started) this._applyMaster(0.1)
+  }
+
+  // PA music level, on top of the master volume (0 stops new songs).
+  setMusicVolume(v) {
+    this.music.setVolume(v)
   }
 
   // Fade the whole mix out (title backdrop after quitting a run); the next
@@ -538,6 +554,7 @@ export class AudioBus {
 
   setTension(t) {
     this.tension = t
+    this.music.setTension(t)
     if (!this.started) return
     // Calm rooms carry almost no sub; it swells only with real danger (the
     // old 0.12 floor + 0.5 swing was a constant rumble that pumped the limiter
@@ -557,6 +574,7 @@ export class AudioBus {
   // every level boundary.
   setFamily(family) {
     this.family = family
+    this.music.setFamily(family)
     if (this.started) this._applySpace()
     this._scheduleAmbient()
   }
@@ -934,6 +952,7 @@ export class AudioBus {
       tension: this.tension,
     })
     if (cue === 'distant') this._distantEvent()
+    if (!this._stalled()) this.music.update(dt)
     // Family texture (drips/creaks/gusts) runs on its own clock; it is scenery,
     // so unlike the fake-outs it doesn't pause for danger.
     this._ambT -= dt

@@ -33,6 +33,7 @@ import {
   WALL_RAIL,
 } from './mapTypes.js'
 import { MAP_FAMILY_ORDER, requiresVoidSafety } from './mapFamily.js'
+import { LIMINAL_FAMILY_IDS } from './families/ids.js'
 import { borderPairMode } from './border.js'
 import {
   LETHAL_VOID_REASON_ORDER,
@@ -1973,6 +1974,10 @@ const FAMILY_ADAPTERS = Object.freeze({
     MAP_FAMILY_HOTEL,
     [STRUCTURE_KIND_OFFICE, CATALOG_KINDS[MAP_FAMILY_HOTEL]]
   ),
+  // Liminal families (spec §5.1): stair descriptors carry no structure kind,
+  // so each family registers only its own '<id>Catalog' volumes.
+  ...Object.fromEntries(LIMINAL_FAMILY_IDS.map((family) =>
+    [family, makeFamilyAdapter(family, [CATALOG_KINDS[family]])])),
 })
 
 const KIND_ADAPTERS = Object.freeze({
@@ -1984,7 +1989,7 @@ const KIND_ADAPTERS = Object.freeze({
   [STRUCTURE_KIND_TOWER]: makeTowerKindAdapter(),
   [STRUCTURE_KIND_LATTICE]: makeLatticeKindAdapter(),
   ...Object.fromEntries(
-    [MAP_FAMILY_OFFICE, MAP_FAMILY_HOTEL, MAP_FAMILY_SEWER, MAP_FAMILY_TOWER, MAP_FAMILY_LATTICE]
+    [MAP_FAMILY_OFFICE, MAP_FAMILY_HOTEL, MAP_FAMILY_SEWER, MAP_FAMILY_TOWER, MAP_FAMILY_LATTICE, ...LIMINAL_FAMILY_IDS]
       .map((family) => [CATALOG_KINDS[family], makeCatalogKindAdapter(family)])
   ),
 })

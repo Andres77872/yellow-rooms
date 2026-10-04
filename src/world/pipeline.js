@@ -30,6 +30,8 @@ import {
   sewerStairConfig,
 } from './zones/sewer.js'
 import { structureAt } from './structures/contract.js'
+import { familyGenerator } from './families/generators.js'
+import { buildFamilyChunk } from './tiles/familyChunk.js'
 
 const TOPOLOGY_SALT = 0x74a1
 
@@ -58,12 +60,16 @@ export function buildChunk(seed, cx, cy, cz, config = DEFAULT_WORLD_CONFIG, exit
   // constructed. Explicit invalid/disabled selections therefore fail closed
   // instead of producing a partially tagged office chunk.
   const profile = resolveMapFamily(config)
+  // Liminal families (spec §6.7) build from tile bakes; null for the legacy 5.
+  const familyGen = familyGenerator(profile.family)
+  if (familyGen) return buildFamilyChunk(familyGen, profile, seed >>> 0, cx, cy, cz, config, exitCell, clearings)
   const lseed = layerSeed(seed, cy)
   const layerCtx = { rootSeed: seed >>> 0, layerSeed: lseed, cy }
 
   // L1 — zone select
   const zone = selectZone(cx, cz, lseed, config)
   let data = new ChunkData(cx, cy, cz, zone, config.version, profile.family)
+  data.worldSeed = seed >>> 0
 
   // L2 — border contracts. This chunk OWNS its West line (lx=0) and North line
   // (lz=0); East/South borders are owned by the neighbours (their line 0).
@@ -118,6 +124,7 @@ export function buildChunk(seed, cx, cy, cz, config = DEFAULT_WORLD_CONFIG, exit
     ) {
       const candidateSeed = candidateSeeds[attempt]
       data = new ChunkData(cx, cy, cz, zone, config.version, profile.family)
+      data.worldSeed = seed >>> 0
       installOwnedBorders(data, cW, cN)
       generateZone(data, candidateSeed)
     }

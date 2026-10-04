@@ -100,8 +100,8 @@ describe('structure templates', () => {
         const out = []
         for (let gz = r.z0; gz <= r.z1; gz++) {
           for (let gx = r.x0; gx <= r.x1; gx++) {
-            const f = map.furnitureAt(gx, 0, gz)
-            if (f) out.push(`${gx - r.x0},${gz - r.z0}:${f.rec.kind}:${(f.rec.x % CELL).toFixed(3)}`)
+            // Every record of a cell: a stacked cell copies whole.
+            for (const f of map.furnitureListAt(gx, 0, gz)) out.push(`${gx - r.x0},${gz - r.z0}:${f.rec.kind}:${(f.rec.x % CELL).toFixed(3)}`)
           }
         }
         return out.join('|')

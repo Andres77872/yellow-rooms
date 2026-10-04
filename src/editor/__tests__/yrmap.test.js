@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { CHUNK, DOOR_LEAF_FRACTION } from '../../world/constants.js'
+import { collectDoorways } from '../../world/doors.js'
 import { SPACE_ROLE_BREAK } from '../../world/mapTypes.js'
+import { roomContext } from '../../world/surfaceSet.js'
 import { EditorMap } from '../EditorMap.js'
 import { createRoom } from '../roomBuilder.js'
 import { decodeMapFile, deserializeMap, encodeMapFile, serializeMap } from '../format/yrmap.js'
@@ -40,8 +43,43 @@ function expectSameMap(a, b) {
     expect(JSON.stringify(db.structure)).toBe(JSON.stringify(da.structure))
     expect(JSON.stringify(db.structureUp)).toBe(JSON.stringify(da.structureUp))
     expect(JSON.stringify(db.structureDown)).toBe(JSON.stringify(da.structureDown))
+    // The finish context the room finishes and door schedule key off.
+    expect(db.spaceClass, `${key}.spaceClass`).toEqual(da.spaceClass)
+    expect(db.district).toEqual(da.district)
+    expect(db.worldSeed).toBe(da.worldSeed)
+    expect(db.mapFamily).toBe(da.mapFamily)
   }
 }
+
+// Everything the finishes and the door dressing resolve for a document.
+function dressing(map) {
+  const out = {}
+  for (const [key, d] of map.chunks) {
+    const cells = []
+    for (let lz = 0; lz < CHUNK; lz++) for (let lx = 0; lx < CHUNK; lx++) cells.push(roomContext(d, lx, lz))
+    out[key] = { cells, doors: collectDoorways(d, DOOR_LEAF_FRACTION) }
+  }
+  return out
+}
+
+// A two-chunk office document written by the serializer before the finish
+// section existed: a bake of chunk 0,0,0 from seed 4242 and a room drawn on
+// storey 1 (gzip container).
+const OLD_OFFICE_FILE = [
+  'WVJNMQEBH4sIAAAAAAAAA51UTWhcVRT+vnPuve9nJokJjwhB2vJWWWQ3/uBAOvNcuXWniAs1HRkIKVRNa0JBxChCuxGppLgV',
+  'XIgb3Wmh2HGjM1ioRrqSuAhduChiuqog976XmTdqiro475z7ne+ec+99937p2fW1U2d7vf7LZ1zp3n8IeEQao51PP5gDEDkH',
+  '4q1rh3vEAlQA4u73f3yjWALiCMSHd94bEQtOrc/tvXvr2xRxqhqDuH7lzg9zwKylr7J787dbc0AWKUH8cumTK024zNDPO/h6',
+  '9zDBQmZC7vLn199ULGWAz1GMMb61xE2+tJ2v9c/l7dZKvv7ixlp/45W8vZ2vX8jbT6zk61t5u3VxJT/3+kbefr6EHx/D5fix',
+  'o/ELK/mZC/3XjqY/eoRfFN92QDKCUCFjLyATCA1IDVZitoq1ws04Lrk+z6rGJCZnwTDf1OpLlffzoik/YEzCch6WDWhgEaSD',
+  'MgmzlBkcF0PsKvOxGXOjagUK5aLfIyIKlDL2EnpQqljK1VBZz4ZYg/e/ZzIKXkoOq4qT2HNnqrWYWj+pGKZaz8QPGINiMU+L',
+  'Rjgzga/vqEjK3sjosBhiF07D5ylmzKW6ahVKxSIHHBDV5wSoGagPw++QKqBaiCqoDVBTiC7VcqEa6C+3nij/iM6QEtNpTFE1',
+  'VB97rG7W8yT+Gzpg7CwYlV916V++xpnY1rxzMuVnoXThvDTcIGKmslA7vGL+fGNvaEx4wwxv9zhcA+4ejIf3/mDcBNwELeB/',
+  'zLqgGfK/srMB0aAzNuhLxQnqwqAqZVZDVkJccmzgxP8CmQfYBK3QKGMlDNQwMmwaxhFNzGZMSegSpgnjBptNzmtqgfsF8HYx',
+  'Gja7o+GlDhqJnty5XQDLxWg4XO31DjqijQaQPuWtxktL3v0Jj9b6WqvpG8XV3dudq7vPdfy12N/6sgA+KvzY4xpF9un9r0Jf',
+  'AB1vSpMCzxYnd36fzDVRup1dCz16vYPTrdarHTUi95bTArjbrWHOj7ezjws/9jiNunvL7dB3zFNpeN70PiS9cdic2ocaG21n',
+  'lwvgi3rfuOzxY71H7M9pCoMXNwaBQvmWg1rGx/jNwLFsVZrT9+NKHeNj/CY9x6IVtETQn1KPU5VKzEL1HVblk5qdLzFJanb+',
+  'H3n+Llkn2mp91/UbXU1/Ou1NEiP+Z+1v3eyOhsMO0O1AjfGYt/HhijW/PrN5hHW8qajJPntyCpOjMyP+BA41uKn8BwAA',
+].join('')
 
 describe('yrmap payload round-trip', () => {
   it('round-trips an authored map with rooms', () => {
@@ -74,6 +112,41 @@ describe('yrmap payload round-trip', () => {
       if (groups.has(key)) expect(d.structure).toBe(groups.get(key))
       else groups.set(key, d.structure)
     }
+  })
+
+  it('keeps every room finish and doorway of a baked document', async () => {
+    const map = new EditorMap({ name: 'finishes' })
+    map.bakeChunks({ seed: 4242, family: 'hotel', coords: [0, 1, 2].flatMap((cz) => [0, 1, 2].map((cx) => ({ cx, cy: 0, cz }))) })
+    // A second bake in another family and world: those chunks keep theirs.
+    map.bakeChunks({ seed: 77, family: 'tower', coords: [{ cx: 3, cy: 1, cz: 0 }, { cx: 4, cy: 1, cz: 0 }] })
+    expect(map.meta.family).toBe('tower')
+    expect(map.chunkAt(0, 0, 0).district).toBeTruthy()
+    const restored = await decodeMapFile(await encodeMapFile(map))
+    expectSameMap(map, restored)
+    expect(restored.chunkAt(1, 0, 1).mapFamily).toBe('hotel')
+    expect(restored.chunkAt(1, 0, 1).worldSeed).toBe(4242)
+    expect(restored.chunkAt(3, 1, 0).worldSeed).toBe(77)
+    expect(dressing(restored)).toEqual(dressing(map))
+  })
+
+  it('loads a file written before the finish section', async () => {
+    const map = await decodeMapFile(Uint8Array.from(atob(OLD_OFFICE_FILE), (c) => c.charCodeAt(0)))
+    expect(map.meta).toMatchObject({ name: 'old office', family: 'office', seed: 4242 })
+    expect(map.chunks.size).toBe(2)
+    expect(map.rooms.length).toBeGreaterThan(1)
+    const baked = map.chunkAt(0, 0, 0)
+    expect(baked.spaceId.some(Boolean)).toBe(true)
+    for (const d of map.chunks.values()) {
+      // The bake's world, from the document seed; no district to key by.
+      expect(d.worldSeed).toBe(4242)
+      expect(d.district).toBeNull()
+      expect(d.spaceClass.every((c) => c === 0)).toBe(true)
+    }
+    expect(() => dressing(map)).not.toThrow()
+    // Saved again, it carries the finish section and round-trips exactly.
+    const again = deserializeMap(serializeMap(map))
+    expectSameMap(map, again)
+    expect(dressing(again)).toEqual(dressing(map))
   })
 
   it('skips pristine chunks', () => {

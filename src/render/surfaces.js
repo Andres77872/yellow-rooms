@@ -21,6 +21,8 @@
 // relationships (carpet never glares, chrome has no diffuse, porcelain is
 // smoother than laminate) under the semi-realistic look profile.
 
+import { PROP_PACKS } from '../world/props/index.js'
+
 export const SURFACE_SCHEMA_VERSION = 1
 
 // Lowest perceptual roughness the deferred BRDF evaluates. GGX at roughness
@@ -62,6 +64,39 @@ export const SURFACE_STYLES = Object.freeze({
   steel: style(0.44, 0.15, { roughnessVar: 0.1, normalStrength: 2.4, cavity: 0.4 }),
   // Sewer ceiling: board-formed concrete soffit.
   vault: style(0.9, 0, { roughnessVar: 0.05, normalStrength: 2.0, cavity: 0.4 }),
+
+  // World surface-set variants (world/surfaceSet.js, render/textureStyles.js).
+  // Floors.
+  carpetPattern: style(0.93, 0, { roughnessVar: 0.04, normalStrength: 1.1, cavity: 0.25 }),
+  carpetTile: style(0.92, 0, { roughnessVar: 0.04, normalStrength: 1.2, cavity: 0.25 }),
+  // Waxed vinyl tile and linoleum: semi-gloss faces, rough seams.
+  vct: style(0.38, 0, { roughnessVar: 0.06, lowRoughness: 0.3, normalStrength: 1.6, cavity: 0.3 }),
+  checker: style(0.32, 0, { roughnessVar: 0.05, lowRoughness: 0.3, normalStrength: 1.4, cavity: 0.3 }),
+  // Varnished wood block and boards.
+  parquet: style(0.5, 0, { roughnessVar: 0.08, lowRoughness: 0.15, normalStrength: 2.0, cavity: 0.35 }),
+  planks: style(0.55, 0, { roughnessVar: 0.08, lowRoughness: 0.15, normalStrength: 2.0, cavity: 0.35 }),
+  // Ground and polished terrazzo / concrete.
+  terrazzo: style(0.22, 0, { roughnessVar: 0.05, lowRoughness: 0.2, normalStrength: 1.2, cavity: 0.25 }),
+  polished: style(0.35, 0, { roughnessVar: 0.1, lowRoughness: 0.2, normalStrength: 1.4, cavity: 0.3 }),
+  mosaic: style(0.25, 0, { roughnessVar: 0.05, lowRoughness: 0.6, normalStrength: 2.6, cavity: 0.45 }),
+  // Galvanised bar grating and tread plate.
+  grate: style(0.5, 0.5, { roughnessVar: 0.1, normalStrength: 3.0, cavity: 0.7 }),
+  diamond: style(0.45, 0.4, { roughnessVar: 0.12, normalStrength: 3.0, cavity: 0.4 }),
+  // Walls.
+  stripe: style(0.72, 0, { roughnessVar: 0.04, normalStrength: 0.6, cavity: 0.15 }),
+  damask: style(0.62, 0, { roughnessVar: 0.06, normalStrength: 1.2, cavity: 0.2 }),
+  wainscot: style(0.55, 0, { roughnessVar: 0.06, lowRoughness: 0.1, normalStrength: 1.8, cavity: 0.3 }),
+  tileWainscot: style(0.3, 0, { roughnessVar: 0.05, lowRoughness: 0.55, normalStrength: 2.4, cavity: 0.4 }),
+  subway: style(0.2, 0, { roughnessVar: 0.05, lowRoughness: 0.6, normalStrength: 2.6, cavity: 0.45 }),
+  plaster: style(0.82, 0, { roughnessVar: 0.05, normalStrength: 1.0, cavity: 0.2 }),
+  cmu: style(0.8, 0, { roughnessVar: 0.06, lowRoughness: 0.08, normalStrength: 2.6, cavity: 0.5 }),
+  woodPanel: style(0.52, 0, { roughnessVar: 0.08, lowRoughness: 0.12, normalStrength: 2.2, cavity: 0.35 }),
+  formwork: style(0.88, 0, { roughnessVar: 0.06, normalStrength: 2.2, cavity: 0.45 }),
+  corrugated: style(0.5, 0.35, { roughnessVar: 0.1, normalStrength: 3.2, cavity: 0.4 }),
+  // Ceilings.
+  acoustic: style(0.95, 0, { roughnessVar: 0.03, normalStrength: 1.6, cavity: 0.35 }),
+  slats: style(0.6, 0, { roughnessVar: 0.06, normalStrength: 2.4, cavity: 0.6 }),
+  exposed: style(0.9, 0, { roughnessVar: 0.05, normalStrength: 2.2, cavity: 0.45 }),
 })
 
 const DEFAULT_STYLE = SURFACE_STYLES.wallpaper
@@ -75,7 +110,7 @@ const gltf = (roughness, metalness = 0) => Object.freeze({ roughness, metalness 
 // Blender material vocabulary (scripts/blender/yr_shading.py MATERIALS and
 // build_enemies.py). Exposed metal is metallic; painted or enamelled metal is
 // a dielectric paint layer until it wears through (chapter 03 §3).
-export const GLTF_SURFACES = Object.freeze({
+const BASE_GLTF_SURFACES = {
   // Bare and plated metals.
   yr_chrome: gltf(0.16, 1),
   yr_mirror: gltf(0.05, 1),
@@ -138,7 +173,37 @@ export const GLTF_SURFACES = Object.freeze({
   yr_enemy_ashBody: gltf(0.88),
   yr_enemy_ashRidge: gltf(0.9),
   yr_enemy_voidFace: gltf(0.7),
-})
+}
+
+// Prop packs (world/props) declare the material names they introduce as
+// `surfaces: { yr_<key>: [roughness, metalness] }`, so a pack never edits
+// this file. Guarded merge: a malformed entry, a pack redefining a base name
+// with other values, or two packs disagreeing keeps the earlier definition
+// and is reported in `conflicts` (the prop-models test requires none).
+export function mergePackSurfaces(base, packs) {
+  const surfaces = { ...base }
+  const conflicts = []
+  for (const { pack, surfaces: own } of packs) {
+    for (const [name, value] of Object.entries(own ?? {})) {
+      const [roughness, metalness = 0] = Array.isArray(value) ? value : []
+      if (!Number.isFinite(roughness) || !Number.isFinite(metalness)) {
+        conflicts.push(`${pack}: ${name} is not [roughness, metalness]`)
+        continue
+      }
+      const prev = surfaces[name]
+      if (prev && (prev.roughness !== roughness || prev.metalness !== metalness)) {
+        conflicts.push(`${pack}: ${name} redefines an earlier surface`)
+        continue
+      }
+      surfaces[name] ??= gltf(roughness, metalness)
+    }
+  }
+  return { surfaces: Object.freeze(surfaces), conflicts }
+}
+
+const merged = mergePackSurfaces(BASE_GLTF_SURFACES, PROP_PACKS)
+export const GLTF_SURFACE_CONFLICTS = Object.freeze(merged.conflicts)
+export const GLTF_SURFACES = merged.surfaces
 
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v)
 

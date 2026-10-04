@@ -37,6 +37,7 @@ import {
 import { structureKind } from '../world/structures/contract.js'
 import { structureAdapterFor } from '../world/structures/contract.js'
 import { worldConfigForFamilyOrOffice } from '../world/mapFamily.js'
+import { byFamily } from '../world/families/registry.js'
 import { TOWER_STRUCTURE_KIND } from '../world/structures/tower.js'
 import { LATTICE_STRUCTURE_KIND } from '../world/structures/lattice.js'
 import { describeCatalogStructure, isCatalogStructure } from '../world/structures/catalog/engine.js'
@@ -166,6 +167,10 @@ export const STRUCTURE_FAMILY_COLORS = {
   [MAP_FAMILY_LATTICE]: '#c884e0',
   [MAP_FAMILY_HOTEL]: '#e8a07f',
 }
+
+// Structure colour of any family: its own row, then its base family's, then
+// office's (§5.1). A liminal family's structures draw in its base colour.
+export const structureFamilyColor = (family) => byFamily(STRUCTURE_FAMILY_COLORS, family)
 
 export const SPACE_ROLE_PALETTE = {
   [SPACE_ROLE_MEETING]: '#7fbfff',

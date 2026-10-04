@@ -59,15 +59,19 @@ export function buildSelectionCard(app) {
       build(sel)
     }
     if (!sel) return
-    titleText.textContent = sel.type === 'furniture' ? 'Selected piece' : sel.type === 'lamp' ? 'Selected lamp' : 'Selected room'
+    // A furniture selection is a cell; a stacked cell (several records, e.g.
+    // a back-to-back gondola) acts as one unit.
+    const stacked = sel.type === 'furniture' && app.map.furnitureListAt(sel.gx, sel.cy, sel.gz).length > 1
+    titleText.textContent = sel.type === 'furniture' ? (stacked ? 'Selected pieces' : 'Selected piece') : sel.type === 'lamp' ? 'Selected lamp' : 'Selected room'
     info.set(app.describeSelection())
     if (roomSel && document.activeElement !== roomSel) roomSel.value = String(app.map.roomById(sel.id)?.role ?? 0)
     if (rotateBtn) {
       // R turns the piece-to-place while the Furniture tool is active.
       const objectTool = app.tool.id === 'object'
+      const what = stacked ? 'Turns every piece of the cell 90° about its centre.' : 'Turns the selected piece 90°.'
       rotateBtn.el.dataset.tip = objectTool
-        ? 'Turns the selected piece 90°. Undoable. (The R key currently turns the Furniture tool’s next piece instead.)'
-        : 'Turns the selected piece 90°. Undoable.'
+        ? `${what} Undoable. (The R key currently turns the Furniture tool’s next piece instead.)`
+        : `${what} Undoable.`
       if (objectTool) delete rotateBtn.el.dataset.tipKeys
       else rotateBtn.el.dataset.tipKeys = 'R'
     }

@@ -46,6 +46,9 @@ import { fridge } from './fridge.js'
 import { tv } from './tv.js'
 import { armchair } from './armchair.js'
 import { washer } from './washer.js'
+import { builder } from './frame.js'
+import { FURN_TINT } from './palette.js'
+import { PROP_KINDS } from '../../props/index.js'
 
 // Furniture model registry — the object-definition half of the furniture
 // layer (placement lives in world/furniture.js). Each builder turns one
@@ -77,6 +80,19 @@ const BUILDERS = {
   [FURN_ARMCHAIR]: armchair,
   [FURN_WASHER]: washer,
 }
+
+// Prop-pack kinds (world/props) carry their box fallback as data: what the
+// editor preview draws before the pack's GLBs exist or load. Tints resolve
+// once here (a FURN_TINT part name or a literal [r, g, b]).
+function propBuilder(kind) {
+  const parts = kind.boxes.map(([u, y, v, su, sy, sv, tint]) =>
+    [u, y, v, su, sy, sv, typeof tint === 'string' ? FURN_TINT[tint] : tint])
+  return (f, out) => {
+    const b = builder(f, out)
+    for (const p of parts) b(...p)
+  }
+}
+for (const kind of PROP_KINDS) BUILDERS[kind.id] ??= propBuilder(kind)
 
 export function pushFurnitureModel(out, f) {
   BUILDERS[f.kind]?.(f, out)

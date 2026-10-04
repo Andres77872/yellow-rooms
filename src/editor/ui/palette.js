@@ -2,7 +2,8 @@ import { commandState, formatChord, fuzzyRank, paletteCommands, runCommand } fro
 import { TEMPLATE_DEFS } from '../templates.js'
 import { PROTOTYPE_KINDS } from '../prototypes.js'
 import { structureKey, summarizeStructure } from '../structureReview.js'
-import { MAP_FAMILY_ORDER } from '../../world/mapFamily.js'
+// Building families only: the liminal ones are editor kinds (spec §11.4).
+import { LEGACY_FAMILIES } from '../../world/families/registry.js'
 import { familyCatalog } from '../catalogLab.js'
 import { h } from './dom.js'
 import { icon } from './icons.js'
@@ -49,14 +50,14 @@ function dynamicItems(app, query) {
       hint: `Replaces the document with a ${k.floors}-floor ${k.label} (kind-lab seed). Undoable.`,
       run: () => app.ui?.generateKind(k.id) })
   }
-  for (const f of MAP_FAMILY_ORDER) {
+  for (const f of LEGACY_FAMILIES) {
     out.push({ id: `family.${f}`, group: 'World', label: `World family: ${familyLabel(f)}`, icon: 'globe',
       hint: 'Sets the world family used by generate, explore and the atlas scan.',
       checked: app.world.family === f,
       run: () => { app.world.family = f; if (app.mode === 'explore') app.enterExplore(); app.panel.refresh() } })
   }
   // v26 structure catalog: find the nearest instance of any family's type.
-  for (const f of MAP_FAMILY_ORDER) {
+  for (const f of LEGACY_FAMILIES) {
     for (const entry of familyCatalog(f)) {
       out.push({ id: `catalog.find.${f}.${entry.type}`, group: 'Structure catalog', label: `Find nearest ${familyLabel(f)} ${entry.label} (${entry.sizeClass})`,
         icon: 'building', hint: `${entry.about} Flies the explorer to the closest instance (read-only).`,

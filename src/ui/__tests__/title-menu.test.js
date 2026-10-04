@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
-import { FAMILY_NOTES, TITLE_HTML, familyNote, stepMenuIndex } from '../titleMenu.js'
+import { FAMILY_NOTES, TITLE_HTML, familyNote, familyOptionsHtml, stepMenuIndex } from '../titleMenu.js'
 import { UI } from '../overlays.js'
 import { Phase } from '../../core/GameState.js'
 import { MAP_FAMILY_ORDER } from '../../world/mapFamily.js'
+import { DEFAULT_WORLD_CONFIG } from '../../world/config.js'
+import { LEGACY_FAMILIES } from '../../world/families/registry.js'
+import { selectableFamilies } from '../../world/families/select.js'
+import { LIMINAL_FAMILY_IDS } from '../../world/families/ids.js'
 
 // Node-env tests (the repo has no jsdom): the title markup is checked as a
 // string, and the UI lifecycle through UI.prototype on hand-built fakes — the
@@ -32,6 +36,22 @@ describe('familyNote', () => {
     expect(Object.keys(FAMILY_NOTES).sort()).toEqual([...MAP_FAMILY_ORDER].sort())
   })
 
+  it('keys the notes in MAP_FAMILY_ORDER order and keeps the legacy notes verbatim', () => {
+    expect(Object.keys(FAMILY_NOTES)).toEqual([...MAP_FAMILY_ORDER])
+    // Independent literals (the pre-registry titleMenu table): the registry
+    // move must not change a word of the shipped legacy notes.
+    expect(LEGACY_FAMILIES.map((f) => familyNote(f))).toEqual([
+      'room districts · empty bullpens · tall atria',
+      'dry galleries · confluences · manhole stairs',
+      'broad galleries · service cores · skybridges',
+      'service alleys · catwalks · transfer plazas',
+      'guest-room wings · corridor loops · atria',
+    ])
+    // Liminal note text is pinned verbatim to spec §4.3 in
+    // families/__tests__/registry.drift.test.js; here only its title shape.
+    for (const f of LIMINAL_FAMILY_IDS) expect(familyNote(f), f).toMatch(/^\S.* · .*\S$/)
+  })
+
   it('returns an empty note for unknown and prototype keys', () => {
     expect(familyNote('bogus')).toBe('')
     expect(familyNote('toString')).toBe('')
@@ -57,10 +77,25 @@ describe('TITLE_HTML', () => {
     }
   })
 
-  it('offers exactly one MAP option per shipped family, in order', () => {
+  it('offers exactly one MAP option per selectable family, in order', () => {
     const select = TITLE_HTML.match(/<select id="family-select"[^>]*>(.*?)<\/select>/s)[1]
     const values = [...select.matchAll(/<option value="([^"]+)">/g)].map((m) => m[1])
-    expect(values).toEqual([...MAP_FAMILY_ORDER])
+    expect(values).toEqual(selectableFamilies(DEFAULT_WORLD_CONFIG))
+  })
+
+  it('keeps the legacy MAP list byte-identical while no liminal family is enabled', () => {
+    const select = TITLE_HTML.match(/<select id="family-select"[^>]*>(.*?)<\/select>/s)[1]
+    if (selectableFamilies(DEFAULT_WORLD_CONFIG).some((f) => LIMINAL_FAMILY_IDS.includes(f))) return
+    expect(select).toBe(LEGACY_FAMILIES.map((f) => `<option value="${f}">${f.toUpperCase()}</option>`).join(''))
+  })
+
+  it('groups the MAP list into BUILDINGS / LIMINAL once a liminal family is selectable', () => {
+    expect(familyOptionsHtml([...LEGACY_FAMILIES])).not.toContain('<optgroup')
+    const html = familyOptionsHtml(['office', 'hotel', 'stairwell', 'nightlot'])
+    expect(html).toBe(
+      '<optgroup label="BUILDINGS"><option value="office">OFFICE</option><option value="hotel">HOTEL</option></optgroup>' +
+      '<optgroup label="LIMINAL"><option value="stairwell">STAIRWELL</option><option value="nightlot">NIGHT LOT</option></optgroup>'
+    )
   })
 
   it('hosts one settings block, inside the side sheet', () => {

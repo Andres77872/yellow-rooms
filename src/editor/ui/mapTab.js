@@ -1,6 +1,6 @@
 import { button, buttonRow, readout, section, slider, textBlock, toggle } from '../../debug/widgets.js'
 import { roomRoleLabel } from '../../debug/mapInspect.js'
-import { MAP_FAMILY_ORDER } from '../../world/mapFamily.js'
+import { LEGACY_FAMILIES } from '../../world/families/registry.js'
 import { WORLD_GEN_VERSION } from '../../world/constants.js'
 import { commandById, runCommand } from './keymap.js'
 import { issueList } from './structurePanel.js'
@@ -61,7 +61,8 @@ export function buildMapTab(app) {
   })
   world.body.appendChild(row('world seed', seedInput))
   const familySelect = selectInput(
-    MAP_FAMILY_ORDER.map((f) => ({ value: f, label: familyLabel(f) })), app.world.family,
+    // Building families only: the liminal ones are editor kinds (spec §11.4).
+    LEGACY_FAMILIES.map((f) => ({ value: f, label: familyLabel(f) })), app.world.family,
     (v) => { app.world.family = v; app.panel.refresh() },
     { label: 'Map family', tip: { title: 'Map family', text: 'Which generator family to use. Each family has its own layout rules and structures.' } },
   )

@@ -22,7 +22,9 @@ runs `scripts/blender/build_enemies.py` in background Blender (tested with
 - skins each figure to its own armature (see *Rig*) and exports its named
   clips (see *Clips*);
 - saves the editable source scene (rigs, actions stashed on NLA tracks) to
-  `assets-src/enemies.blend` and a Cycles contact-sheet render of the rest
+  `assets-src/enemies.blend` only when asked (`YR_SAVE_BLEND=1` or a
+  `<blendOut>` argument: Blender never writes it byte-identically) and a
+  Cycles contact-sheet render of the rest
   poses to `/tmp/yr_enemies_preview.png` (`YR_SKIP_PREVIEW=1` skips it while
   iterating);
 - bakes the same painted `COLOR_0` shading as the furniture

@@ -54,6 +54,8 @@ function drawnTriangles(root) {
   let tris = 0
   root.traverse((n) => {
     if (!n.isMesh || n.isSkinnedMesh) return
+    // Forward-only batches (window glass) are never traced.
+    if (n.userData.forwardOnly) return
     for (let p = n; p && p !== root; p = p.parent) if (!p.visible) return
     const g = n.geometry
     const count = n.isInstancedMesh ? n.count : 1

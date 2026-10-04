@@ -22,7 +22,7 @@ import {
 } from '../../world/mapTypes.js'
 import { STAIR_DX, STAIR_DZ } from '../../world/structures/slab.js'
 import { structureFamily } from '../../world/structures/contract.js'
-import { STRUCTURE_FAMILY_COLORS } from '../../debug/mapInspect.js'
+import { structureFamilyColor } from '../../debug/mapInspect.js'
 import { holeMasks } from '../holeMasks.js'
 import { KIND_FILL, roleFill } from './MapView2D.js'
 
@@ -542,7 +542,7 @@ export class SectionView {
     const across = axis === 'x' ? [b.z0, b.z1] : [b.x0, b.x1]
     if (line < across[0] || line > across[1]) return
     const [u0, u1] = axis === 'x' ? [b.x0, b.x1] : [b.z0, b.z1]
-    const color = STRUCTURE_FAMILY_COLORS[structureFamily(s)] ?? '#d8b24a'
+    const color = structureFamilyColor(structureFamily(s))
     const x0 = this.su(u0 * CELL)
     const x1 = this.su((u1 + 1) * CELL)
     const yTop = this.sh(layerY(s.topCy) + WALL_H)

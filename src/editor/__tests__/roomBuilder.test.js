@@ -3,10 +3,14 @@ import {
   CELL_OPEN,
   CELL_ROOM,
   PASSAGE_DOOR,
+  SPACE_ROLE_KITCHEN,
+  SPACE_ROLE_LIBRARY,
+  SPACE_ROLE_LOUNGE,
   SPACE_ROLE_MEETING,
   SPACE_ROLE_NONE,
   SPACE_ROLE_SERVER,
 } from '../../world/mapTypes.js'
+import { CELL } from '../../world/constants.js'
 import { EditorMap } from '../EditorMap.js'
 import { createRoom, regenerateRoom, removeRoom, roomCells } from '../roomBuilder.js'
 import { ROOM_TYPES } from '../../world/rooms/catalog.js'
@@ -85,6 +89,98 @@ describe('createRoom', () => {
     // Both chunks contributed cells.
     expect(map.chunkAt(0, 0, 0)).toBeTruthy()
     expect(map.chunkAt(1, 0, 0)).toBeTruthy()
+  })
+
+  it('never stacks two pieces in one cell (rows before a conference island)', () => {
+    // Kitchen/library/lounge grammars run wall rows, then a conference op
+    // over the same candidate list: the table and chairs must skip the cells
+    // the rows already filled.
+    for (const role of [SPACE_ROLE_KITCHEN, SPACE_ROLE_LIBRARY, SPACE_ROLE_LOUNGE]) {
+      for (const r of [{ x0: 2, z0: 2, x1: 7, z1: 7 }, { x0: 1, z0: 1, x1: 8, z1: 6 }, { x0: 2, z0: 1, x1: 6, z1: 9 }]) {
+        for (let salt = 0; salt < 8; salt++) {
+          const map = new EditorMap()
+          createRoom(map, { cy: 0, ...r, role, salt })
+          const keys = allFurniture(map).map((p) => `${p.gx},${p.gz}`)
+          expect(new Set(keys).size, `role ${role} salt ${salt}`).toBe(keys.length)
+        }
+      }
+    }
+  })
+
+  // Free room cells not reachable from the room's door cell (walking member
+  // cells through open edges), or every free cell when the door cell is filled.
+  const unreached = (map, room) => {
+    const { door } = room
+    const inside = door.axis === 'h'
+      ? { gx: door.gx, gz: door.gz === room.z1 + 1 ? room.z1 : room.z0 }
+      : { gx: door.gx === room.x1 + 1 ? room.x1 : room.x0, gz: door.gz }
+    const cells = roomCells(map, room)
+    const member = new Set(cells.map((c) => `${c.gx},${c.gz}`))
+    const free = (gx, gz) => map.cellAt(gx, 0, gz).col === 0
+    const seen = new Set()
+    const stack = []
+    if (free(inside.gx, inside.gz)) {
+      seen.add(`${inside.gx},${inside.gz}`)
+      stack.push(inside)
+    }
+    while (stack.length) {
+      const c = stack.pop()
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const k = `${c.gx + dx},${c.gz + dz}`
+        const e = dx ? map.wallVAt(dx > 0 ? c.gx + 1 : c.gx, 0, c.gz) : map.wallHAt(c.gx, 0, dz > 0 ? c.gz + 1 : c.gz)
+        if (!member.has(k) || seen.has(k) || !free(c.gx + dx, c.gz + dz) || e.wall) continue
+        seen.add(k)
+        stack.push({ gx: c.gx + dx, gz: c.gz + dz })
+      }
+    }
+    return { inside, count: cells.filter((c) => free(c.gx, c.gz) && !seen.has(`${c.gx},${c.gz}`)).length }
+  }
+
+  it('keeps a door on a chunk seam clear and the whole room reachable', () => {
+    // South door on the z seam (gz=14 belongs to the next chunk).
+    let map = new EditorMap()
+    let room = createRoom(map, { cy: 0, x0: 3, z0: 9, x1: 8, z1: 13, role: SPACE_ROLE_NONE, salt: 7 })
+    expect(map.wallHAt(5, 0, 14).passage).toBe(PASSAGE_DOOR)
+    let r = unreached(map, room)
+    expect(map.cellAt(r.inside.gx, 0, r.inside.gz).col).toBe(0)
+    expect(r.count).toBe(0)
+    // East door on the x seam.
+    for (let salt = 0; salt < 8; salt++) {
+      for (const role of [SPACE_ROLE_NONE, SPACE_ROLE_SERVER, SPACE_ROLE_LIBRARY, SPACE_ROLE_KITCHEN]) {
+        map = new EditorMap()
+        room = createRoom(map, { cy: 0, x0: 8, z0: 3, x1: 13, z1: 9, role, salt, door: { axis: 'v', gx: 14, gz: 6 } })
+        r = unreached(map, room)
+        expect(map.cellAt(r.inside.gx, 0, r.inside.gz).col, `role ${role} salt ${salt}`).toBe(0)
+        expect(r.count, `role ${role} salt ${salt}`).toBe(0)
+      }
+    }
+  })
+
+  it('a room crossing a chunk seam leaves no pocket cut off across it', () => {
+    // The per-chunk connectivity guard cannot see a pocket cut off across
+    // the seam; only the room-wide reach pass can.
+    for (const [r, role, salt] of [
+      [{ x0: 3, z0: 10, x1: 9, z1: 18 }, SPACE_ROLE_LIBRARY, 1],
+      [{ x0: 10, z0: 9, x1: 17, z1: 13 }, SPACE_ROLE_LIBRARY, 0],
+      [{ x0: 10, z0: 9, x1: 17, z1: 13 }, SPACE_ROLE_MEETING, 3],
+    ]) {
+      const map = new EditorMap()
+      const room = createRoom(map, { cy: 0, ...r, role, salt })
+      expect(allFurniture(map).length).toBeGreaterThan(0)
+      expect(unreached(map, room).count, `role ${role} salt ${salt}`).toBe(0)
+    }
+  })
+
+  it('does not hug the open interior line of a chunk seam as if it were a wall', () => {
+    const map = new EditorMap()
+    createRoom(map, { cy: 0, x0: 9, z0: 3, x1: 18, z1: 9, role: SPACE_ROLE_NONE, salt: 0 })
+    for (const p of allFurniture(map)) {
+      // A piece in the last column/row of a chunk may only sit off-centre
+      // toward the seam when that seam edge carries a real wall.
+      if ((p.gx + 1) % 14 === 0 && p.x - (p.lx + 0.5) * CELL > 0.35) expect(map.wallVAt(p.gx + 1, 0, p.gz).wall).toBe(1)
+      if ((p.gz + 1) % 14 === 0 && p.z - (p.lz + 0.5) * CELL > 0.35) expect(map.wallHAt(p.gx, 0, p.gz + 1).wall).toBe(1)
+    }
+    expect(allFurniture(map).length).toBeGreaterThan(0)
   })
 
   it('places a centre lamp and ordinary rooms may furnish from themes', () => {

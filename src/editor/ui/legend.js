@@ -2,7 +2,8 @@ import {
   CELL_ATRIUM, CELL_BRIDGE, CELL_CORRIDOR, CELL_LOBBY, CELL_OPEN, CELL_ROOM, CELL_STAIR, CELL_VOID,
 } from '../../world/mapTypes.js'
 import { ZONE_OFFICE, ZONE_PILLARS, ZONE_SEWER, ZONE_WAREHOUSE } from '../../world/constants.js'
-import { SPACE_ROLE_PALETTE, STRUCTURE_FAMILY_COLORS, ZONE_TINT, roomRoleLabel } from '../../debug/mapInspect.js'
+import { SPACE_ROLE_PALETTE, STRUCTURE_FAMILY_COLORS, ZONE_TINT, roomRoleLabel, structureFamilyColor } from '../../debug/mapInspect.js'
+import { familyRecord } from '../../world/families/registry.js'
 import { KIND_FILL, heat } from './MapView2D.js'
 import { h } from './dom.js'
 
@@ -19,7 +20,9 @@ const FAMILY_HINTS = {
 
 export const familyLabel = (f) => (f ? f[0].toUpperCase() + f.slice(1) : '—')
 export const familyHint = (f) => FAMILY_HINTS[f] ?? `The ${f} map family.`
-export const familyColor = (f) => STRUCTURE_FAMILY_COLORS[f] ?? '#e0a07a'
+// A registered family (a liminal one through its base, §5.1) draws in its
+// structure colour; anything else in the neutral swatch.
+export const familyColor = (f) => (familyRecord(f) ? structureFamilyColor(f) : '#e0a07a')
 
 const opaque = (rgba, a = 0.9) => rgba.replace(/[\d.]+\)$/, `${a})`)
 

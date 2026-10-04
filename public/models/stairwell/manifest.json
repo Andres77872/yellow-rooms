@@ -1,0 +1,180 @@
+{
+  "schema": 1,
+  "pack": "stairwell",
+  "generator": {
+    "blender": "5.2.2 LTS",
+    "blenderHash": "d13f752e3b9c",
+    "exporter": "5.2.40",
+    "script": "build_pack.py"
+  },
+  "budget": {
+    "tris": 2500,
+    "bytes": 100000
+  },
+  "totals": {
+    "tris": 894,
+    "bytes": 34360
+  },
+  "kinds": [
+    {
+      "kind": "standpipe",
+      "kindKey": "PROP_STANDPIPE",
+      "file": "standpipe.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.8,
+        "d": 0.3
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 2.05,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 800,
+        "bytes": 30000
+      },
+      "bounds": {
+        "min": [
+          -0.379,
+          0.0,
+          -0.21
+        ],
+        "max": [
+          0.4,
+          2.027,
+          0.077
+        ]
+      },
+      "tris": 722,
+      "bytes": 29368,
+      "materials": [
+        "yr_chrome",
+        "yr_hoseRed",
+        "yr_valveBrass",
+        "yr_slotDark",
+        "yr_paperWhite"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.4,
+          "u1": 0.4,
+          "v0": -0.15,
+          "v1": 0.15,
+          "y0": 0.0,
+          "y1": 2.05
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.16,
+          "u1": 0.4,
+          "v0": -0.205,
+          "v1": 0.055,
+          "y0": 0.8,
+          "y1": 1.6,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.36,
+          "u1": -0.24,
+          "v0": -0.205,
+          "v1": -0.075,
+          "y0": 0.0,
+          "y1": 2.03,
+          "t": 0
+        }
+      ],
+      "sha256": "2007fbcf77696effeb97d4c0bd38742d9f43d755b0731e493ea60f94001b205e"
+    },
+    {
+      "kind": "doorstop",
+      "kindKey": "PROP_DOORSTOP",
+      "file": "doorstop.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.12,
+        "d": 0.2
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 0.05,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 300,
+        "bytes": 15000
+      },
+      "bounds": {
+        "min": [
+          -0.06,
+          0.0,
+          -0.1
+        ],
+        "max": [
+          0.06,
+          0.05,
+          0.1
+        ]
+      },
+      "tris": 172,
+      "bytes": 4992,
+      "materials": [
+        "yr_wedgeRubber"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.06,
+          "u1": 0.06,
+          "v0": -0.1,
+          "v1": 0.1,
+          "y0": 0.0,
+          "y1": 0.05
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.06,
+          "u1": 0.06,
+          "v0": -0.1,
+          "v1": 0.1,
+          "y0": 0.0,
+          "y1": 0.02,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.06,
+          "u1": 0.06,
+          "v0": -0.1,
+          "v1": 0.0,
+          "y0": 0.0,
+          "y1": 0.05,
+          "t": 0
+        }
+      ],
+      "sha256": "2e89027c50b5670847fa3836c721ed6b90ecc1752b13f752c6be86f23246a363"
+    }
+  ]
+}

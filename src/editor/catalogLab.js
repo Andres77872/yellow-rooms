@@ -12,7 +12,7 @@ import {
   isCatalogStructure,
 } from '../world/structures/catalog/index.js'
 import { stampCatalogStructure } from '../world/structures/catalog/stamp.js'
-import { seedFromText } from './EditorMap.js'
+import { attachDocumentSeam, seedFromText } from './EditorMap.js'
 import { dropRoomsIn } from './templates.js'
 
 // The editor's view of the v26 structure catalog: what each family can
@@ -175,7 +175,7 @@ export function stampRecipeIntoDocument(map, family, type, { cx0, cz0, baseCy, l
           // a context chunk that would carry one stays blank instead.
           const landmark = d.structure || d.structureUp || d.structureDown || d.lethalVoidUp || d.lethalVoidDown
           if (landmark) map.ensureChunk(p.cx, cy, p.cz)
-          else map.chunks.set(chunkKey3(p.cx, cy, p.cz), d)
+          else map.chunks.set(chunkKey3(p.cx, cy, p.cz), attachDocumentSeam(map, d))
         }
       }
       // The generator reserves slabs baseCy-1 … topCy of every structure

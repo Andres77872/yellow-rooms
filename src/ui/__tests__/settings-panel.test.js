@@ -83,7 +83,7 @@ describe('REDUCE FLICKER checkbox', () => {
 describe('WEBGPU PATH TRACER select (experimental)', () => {
   it('sits in its own EXPERIMENTAL group behind ADVANCED, OFF first', () => {
     const adv = SETTINGS_HTML.indexOf('data-k="adv"')
-    const group = SETTINGS_HTML.indexOf('EXPERIMENTAL')
+    const group = SETTINGS_HTML.indexOf('<div class="group">EXPERIMENTAL</div>')
     const box = SETTINGS_HTML.indexOf('data-k="pathTracer"')
     expect(group).toBeGreaterThan(adv)
     expect(box).toBeGreaterThan(group)
@@ -168,5 +168,81 @@ describe('FRAME RATE LIMIT select', () => {
     els.fps.value = 'half'
     els.fps.listeners.change()
     expect(onSetting).toHaveBeenLastCalledWith('frameLimit', 'half')
+  })
+})
+
+describe('FPS MONITOR select', () => {
+  it('sits in the simple GRAPHICS group under the frame rate limit, OFF first', () => {
+    const adv = SETTINGS_HTML.indexOf('data-k="adv"')
+    const box = SETTINGS_HTML.indexOf('data-k="fpsMon"')
+    expect(box).toBeGreaterThan(SETTINGS_HTML.indexOf('data-k="fps"'))
+    expect(box).toBeLessThan(adv)
+    const options = [...SETTINGS_HTML.slice(box).matchAll(/<option value="([^"]+)">([^<]+)</g)].slice(0, 3)
+    expect(options.map((m) => m[1])).toEqual(['off', 'fps', 'stats'])
+    expect(options.map((m) => m[2])).toEqual(['OFF', 'FPS', 'FPS + STATS'])
+  })
+
+  it('shows the stored mode', () => {
+    const b = bareBlock()
+    b.refresh(store({}))
+    expect(b.el.fpsMon.value).toBe('off')
+    b.refresh(store({ fpsMonitor: 'stats' }))
+    expect(b.el.fpsMon.value).toBe('stats')
+  })
+
+  it('reports edits as the fpsMonitor setting', () => {
+    const els = {}
+    const root = {
+      querySelectorAll: () =>
+        [...SETTINGS_HTML.matchAll(/data-k="([^"]+)"/g)].map(([, k]) => {
+          const el = { dataset: { k }, listeners: {}, classList: { toggle: () => true } }
+          el.addEventListener = (evt, fn) => (el.listeners[evt] = fn)
+          el.setAttribute = () => {}
+          els[k] = el
+          return el
+        }),
+    }
+    const onSetting = vi.fn()
+    new SettingsBlock(root, { onSetting })
+    els.fpsMon.value = 'fps'
+    els.fpsMon.listeners.change()
+    expect(onSetting).toHaveBeenLastCalledWith('fpsMonitor', 'fps')
+  })
+})
+
+describe('EXPERIMENTAL MAPS checkbox', () => {
+  it('sits in the simple view, in its own MAPS group, never behind ADVANCED', () => {
+    const adv = SETTINGS_HTML.indexOf('data-k="adv"')
+    const box = SETTINGS_HTML.indexOf('data-k="expMaps"')
+    expect(box).toBeGreaterThan(SETTINGS_HTML.indexOf('<div class="group">MAPS</div>'))
+    expect(box).toBeLessThan(adv)
+    expect(SETTINGS_HTML.slice(0, box)).toMatch(/EXPERIMENTAL MAPS <input type="checkbox" $/)
+  })
+
+  it('shows the stored opt-in', () => {
+    const b = bareBlock()
+    b.refresh(store({}))
+    expect(b.el.expMaps.checked).toBe(false)
+    b.refresh(store({ experimentalMaps: true }))
+    expect(b.el.expMaps.checked).toBe(true)
+  })
+
+  it('reports edits as the experimentalMaps setting', () => {
+    const els = {}
+    const root = {
+      querySelectorAll: () =>
+        [...SETTINGS_HTML.matchAll(/data-k="([^"]+)"/g)].map(([, k]) => {
+          const el = { dataset: { k }, listeners: {}, classList: { toggle: () => true } }
+          el.addEventListener = (evt, fn) => (el.listeners[evt] = fn)
+          el.setAttribute = () => {}
+          els[k] = el
+          return el
+        }),
+    }
+    const onSetting = vi.fn()
+    new SettingsBlock(root, { onSetting })
+    els.expMaps.checked = true
+    els.expMaps.listeners.change()
+    expect(onSetting).toHaveBeenLastCalledWith('experimentalMaps', true)
   })
 })

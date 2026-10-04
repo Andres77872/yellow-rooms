@@ -7,7 +7,6 @@ import {
   EYE_H,
   CHUNK,
   CELL,
-  SPAWN_WORLD,
   STALKER_AMBIENT,
   PANEL_GLOW,
   CAPSULE_MAX,
@@ -21,6 +20,7 @@ import {
   createFurnitureModelLibrary,
   disposeFurnitureModels,
   loadFurnitureModels,
+  loadPropModels,
 } from '../render/furnitureModels.js'
 import {
   createEnemyModelLibrary,
@@ -43,7 +43,7 @@ import { TorchBounce } from '../render/torchBounce.js'
 import { DynamicResolution, drsCeiling } from '../render/DynamicResolution.js'
 import { PLAYER_CAPSULE, capsuleBound, capsuleSet, transformCapsules } from '../render/enemyOccluders.js'
 import { GameState, Phase } from './GameState.js'
-import { Settings, dynamicResEnabled } from './Settings.js'
+import { FPS_MONITOR_MODES, Settings, dynamicResEnabled } from './Settings.js'
 import {
   AUTO_FALLBACK_PRESET,
   GRAPHICS_KEYS,
@@ -87,6 +87,10 @@ import { hashStr } from '../world/core/hash.js'
 import { worldConfigForFamilyOrOffice } from '../world/mapFamily.js'
 import { MAP_FAMILY_OFFICE } from '../world/mapTypes.js'
 import { createExitPlacement, evaluateExit } from './exitPlacement.js'
+import { familySpawn } from '../world/families/hooks.js'
+import { forcedFamilyConfig } from '../world/families/forced.js'
+import { LIMINAL_FAMILY_IDS } from '../world/families/ids.js'
+import { displayNameOf, isLiminal, propPacksOf } from '../world/families/registry.js'
 import {
   proximitySpeedMul,
   stareLimit,
@@ -101,7 +105,20 @@ import {
 // linVec (DeferredRenderer) / lin (gbufferMaterials) / _setColors (LightTool).
 THREE.ColorManagement.enabled = true
 
-const SPAWN = SPAWN_WORLD
+// Resolves when `p` settles or after `ms`, whichever is first; never rejects.
+const settleWithin = (p, ms) => new Promise((resolve) => {
+  const t = setTimeout(resolve, ms)
+  const done = () => {
+    clearTimeout(t)
+    resolve()
+  }
+  Promise.resolve(p).then(done, done)
+})
+// How long a level entry waits for a liminal family's prop packs (§9.1)
+// before building with box stand-ins (they swap in when the packs land).
+const PACK_WAIT_MS = 1500
+// MAP picker group of the liminal families the EXPERIMENTAL MAPS setting adds.
+const EXPERIMENTAL_MAPS_GROUP = 'EXPERIMENTAL'
 // Menus keep their animated world backdrop, but a complete deferred frame is
 // wasteful at 60–144 Hz while no gameplay is advancing. RAF itself stays live
 // for immediate Start/Resume input; only canvas submissions are capped.
@@ -210,16 +227,36 @@ export class Engine {
     // backdrop prewarm below must already render the requested family's world.
     // Unknown/disabled values fall back to Office rather than crash the boot.
     let urlFamily = ''
+    let forceFamily = false
+    let forceAll = false
     try {
-      urlFamily = (new URLSearchParams(location.search).get('family') ?? '')
+      const params = new URLSearchParams(location.search)
+      urlFamily = (params.get('family') ?? '')
         .trim()
         .toLowerCase()
+      forceFamily = params.get('forceFamily') === '1'
+      forceAll = params.get('forceFamily') === 'all'
     } catch {
       /* headless test env without location */
     }
-    const urlFam = worldConfigForFamilyOrOffice(urlFamily || MAP_FAMILY_OFFICE)
+    // DEV only (§8.4): `?family=<liminal id>&forceFamily=1` plays a family
+    // whose profile is still disabled. Production builds ignore the flag.
+    this._forcedFamily = null
+    this._forcedConfig = null
+    if (import.meta.env?.DEV && forceFamily && isLiminal(urlFamily)) this._forcedFamily = urlFamily
+    // DEV only: `?forceFamily=all` lists every liminal family in the MAP
+    // select (each still disabled) and plays whichever is picked: the
+    // EXPERIMENTAL MAPS setting for one page load, without saving it.
+    this._forceAllLiminal = !!(import.meta.env?.DEV && forceAll)
+    this._forcedConfigs = new Map()
+    if (this._forceAllLiminal && isLiminal(urlFamily)) this._forcedFamily = urlFamily
+    const urlFam = this._configFor(urlFamily || MAP_FAMILY_OFFICE)
     this.cm.config = urlFam.config
     this.state.mapFamily = urlFam.family
+    // Spawn of the boot world (§8.1): the title backdrop and camera sit on it.
+    // The legacy 5 keep the hub cell (LEGACY_SPAWN).
+    this._spawn = familySpawn(this.cm.config, this.cm.seed)
+    this.cm.setSpawn?.(this._spawn)
     this.explored = new ExploredMap(this.cm) // player-seen fog state for the minimap
     this.controller = new Controller(camera, renderer.domElement, this.state)
     // Floor handoff re-gates cross-floor chunk visibility the same frame.
@@ -235,6 +272,8 @@ export class Engine {
     this.enemies = [this.stalker, this.pursuer, this.husk]
 
     this.deferred = new DeferredRenderer(renderer, scene, camera)
+    // Window panes draw in the renderer's forward glass pass.
+    this.deferred.setGlassMaterial?.(this.materials.glass)
     // World-grid lighting: the ChunkManager's headless light lists and
     // cell-graph bounce become the renderer's GPU light source.
     this.deferred.bindLightGrid(this.cm.lightGrid)
@@ -283,15 +322,25 @@ export class Engine {
     // Boot milestones for the loading screen (main.js): both model libraries
     // settled (loaded or failed, their programs linked), and the first
     // deferred frame drawn (_animate).
-    this._assetsSettled = Promise.allSettled([furniture, enemies])
+    // Lazy liminal prop packs (§9.1), memoised per family; the boot family's
+    // packs belong to the boot milestone. Legacy families have none.
+    this._packLoads = Object.create(null)
+    this._assetsSettled = Promise.allSettled([furniture, enemies, this.ensureFamilyAssets(this.state.mapFamily)])
     this._firstFrame = new Promise((resolve) => {
       this._onFirstFrame = resolve
     })
 
-    this.debug = new DebugOverlay(renderer)
+    this.debug = new DebugOverlay(renderer, { touch: this.touch })
     this.ui = new UI(this.settings)
     this.ui.setAutoPreset?.(this.gpu.autoPreset)
     this._wireUI()
+    // The DEV forced family is not selectable yet: give the MAP list its option
+    // so setFamilyInput keeps it (§8.4). `?forceFamily=all` lists every
+    // liminal family instead, like the EXPERIMENTAL MAPS setting
+    // (_syncExperimentalMaps, run with the other settings below).
+    if (this._forcedFamily && !this._forceAllLiminal) {
+      this.ui.addFamilyOption?.(this._forcedFamily, displayNameOf(this._forcedFamily), 'LIMINAL (dev)')
+    }
 
     this.touchControls = null
     if (this.touch) {
@@ -342,6 +391,15 @@ export class Engine {
       if (e.code !== 'KeyM' || e.repeat || this.state.phase !== Phase.PLAYING) return
       if (isEditableFocused()) return
       this._applySetting('minimap', !this.settings.get('minimap'))
+      this.ui.refreshSettings()
+    })
+
+    // Backtick cycles the FPS MONITOR setting (off -> fps -> stats) in any
+    // phase, so it persists and the settings cards follow.
+    this._listen(globalThis, 'keydown', (e) => {
+      if (e.code !== 'Backquote' || e.repeat || isEditableFocused()) return
+      const i = FPS_MONITOR_MODES.indexOf(this.settings.get('fpsMonitor'))
+      this._applySetting('fpsMonitor', FPS_MONITOR_MODES[(i + 1) % FPS_MONITOR_MODES.length])
       this.ui.refreshSettings()
     })
 
@@ -434,7 +492,7 @@ export class Engine {
     // First paint needs only the fog-visible neighbourhood. The title loop's
     // first update immediately starts filling the normal box within the
     // streaming count/time budget.
-    this.cm.prewarmTitleBackdrop(SPAWN, SPAWN)
+    this.cm.prewarmTitleBackdrop(this._spawn.x, this._spawn.z)
     this._animate = this._animate.bind(this)
   }
 
@@ -538,6 +596,65 @@ export class Engine {
     }
   }
 
+  // Lazy prop packs (§9.1): load the GLB packs a liminal family's props use,
+  // once per family, then re-mesh resident furniture and link the programs.
+  // Memoised; never rejects (a failed pack keeps its kinds on the box
+  // fallback). Legacy families have no packs and make no calls.
+  ensureFamilyAssets(family) {
+    const packs = propPacksOf(family)
+    if (!packs.length) return Promise.resolve()
+    return (this._packLoads[family] ??= loadPropModels(this.furnitureModels, { packs })
+      .then(() => {
+        if (this._disposed) return
+        this.cm.upgradeFurnitureModels(this.furnitureModels)
+        return this._precompile()
+      })
+      .catch((e) => console.warn('[yellow-rooms] prop packs', family, e)))
+  }
+
+  // Title MAP pick: start fetching the family's packs before ENTER.
+  prefetchFamilyAssets(family) {
+    this.ensureFamilyAssets(family)
+  }
+
+  // World config of a family pick (§8.4): the DEV forced liminal family gets
+  // its forced config (memoised, so restarts keep the object identity);
+  // anything else resolves through the profile flags, falling back to office.
+  // A liminal family the shipped config still disables plays with its forced
+  // config (memoised the same way) while experimental maps are on, or while
+  // it is the running world: turning the setting off mid-run must not turn
+  // RESTART or TRY AGAIN into an office run.
+  _configFor(family) {
+    const f = typeof family === 'string' ? family.trim().toLowerCase() : ''
+    if (import.meta.env?.DEV && this._forcedFamily && f === this._forcedFamily) {
+      return { family: f, config: (this._forcedConfig ??= forcedFamilyConfig(f)) }
+    }
+    const resolved = worldConfigForFamilyOrOffice(f || MAP_FAMILY_OFFICE)
+    if (!resolved.fellBack || !isLiminal(f)) return resolved
+    if (!this._experimentalMapsOn() && this.cm?.config?.mapFamily?.selected !== f) return resolved
+    if (!this._forcedConfigs.has(f)) this._forcedConfigs.set(f, forcedFamilyConfig(f))
+    return { family: f, config: this._forcedConfigs.get(f) }
+  }
+
+  // EXPERIMENTAL MAPS: the stored setting, or DEV `?forceFamily=all`.
+  _experimentalMapsOn() {
+    return this._forceAllLiminal || this.settings.get('experimentalMaps') === true
+  }
+
+  // List (or unlist) every liminal family under EXPERIMENTAL in the title MAP
+  // picker. A family the shipped list already offers is left alone; a pick
+  // that disappears lands on office. A run in progress keeps its family, and
+  // re-listing mid-run puts the picker back on it (as startRun left it); at
+  // the title the pick stays the player's own.
+  _syncExperimentalMaps() {
+    const on = this._experimentalMapsOn()
+    for (const id of LIMINAL_FAMILY_IDS) {
+      if (on) this.ui.addFamilyOption?.(id, displayNameOf(id), EXPERIMENTAL_MAPS_GROUP)
+      else this.ui.removeFamilyOption?.(id, EXPERIMENTAL_MAPS_GROUP)
+    }
+    if (on && this.state.phase !== Phase.TITLE) this.ui.setFamilyInput?.(this.state.mapFamily)
+  }
+
   // Resolves once the first deferred frame has been drawn.
   whenFirstFrame() {
     return this._firstFrame
@@ -600,14 +717,17 @@ export class Engine {
   }
 
   _wireUI() {
-    this.ui.onStart = (seed, family) => this._loadRun(1, LOAD_ENTER, () => this.startRun(seed, family))
+    this.ui.onStart = (seed, family) => this._loadRun(1, LOAD_ENTER, () => this.startRun(seed, family), family)
     this.ui.onResume = () => this.resume()
     this.ui.onRestart = () => {
+      const family = this.state.mapFamily
       if (this.state.phase === Phase.DEAD && this.state.deathReason === 'void') {
-        return this._loadRun(this.state.level, LOAD_AGAIN, () => this.retryCurrentLevel())
+        return this._loadRun(this.state.level, LOAD_AGAIN, () => this.retryCurrentLevel(), family)
       }
-      return this._loadRun(1, LOAD_AGAIN, () => this.startRun(this.state.seedText))
+      // startRun defaults to state.mapFamily: a restart keeps the family.
+      return this._loadRun(1, LOAD_AGAIN, () => this.startRun(this.state.seedText), family)
     }
+    this.ui.onFamilyChange = (family) => this.prefetchFamilyAssets(family)
     this.ui.onQuit = () => this.quitToTitle()
     this.ui.onSetting = (k, v) => this._applySetting(k, v)
     this.ui.onResetSettings = () => {
@@ -647,8 +767,13 @@ export class Engine {
   // pipeline's fog/ambient/rim/lamp-cast/grade palette. Chunk meshes keep
   // their material references, so already-built chunks pick the swap up on
   // the next frame; level setup rebuilds them anyway.
+  //
+  // The world's seed also selects its surface set (world/surfaceSet.js): the
+  // per-room floor/wall/ceiling finishes, painted fresh for every level (each
+  // level is its own world). Touch devices paint at half resolution.
   _applyFamilyVisuals(family) {
-    const pal = applyFamilyMaterials(this.materials, this.renderer, family)
+    const world = { seed: this.cm.seed, size: this.touch ? 256 : 512 }
+    const pal = applyFamilyMaterials(this.materials, this.renderer, family, world)
     this.deferred.applyPalette(pal)
     this.torchBounce.setAlbedo(this.deferred.familyAlbedo())
     this.renderer.setClearColor(pal.fog, 1)
@@ -659,6 +784,7 @@ export class Engine {
     else if (k === 'invertY') this.controller.invertY = v
     else if (k === 'invertX') this.controller.invertX = v
     else if (k === 'volume') this.audio.setVolume(v)
+    else if (k === 'music') this.audio.setMusicVolume?.(v)
     else if (k === 'bob') this.controller.setBobEnabled(v)
     else if (k === 'cameraFx') {
       this.controller.setCameraFxEnabled(v)
@@ -686,7 +812,9 @@ export class Engine {
     }
     else if (k === 'minimap') this.minimap.setVisible(v)
     else if (k === 'reduceFlicker') this._setFlickerProfile(v)
+    else if (k === 'fpsMonitor') this.debug.setMode(v)
     else if (k === 'pathTracer') this.pathTrace?.setMode(v)
+    else if (k === 'experimentalMaps') this._syncExperimentalMaps()
     else if (k === 'frameLimit') {
       this._frameLimit = v
       this._nextFrameAt = null
@@ -735,14 +863,18 @@ export class Engine {
   // life. Claim what needs the click's user activation now (fullscreen, the
   // audio unlock, pointer lock), cut to the loading card, and build once that
   // card has been presented; it fades out over the new level's first frames.
-  _loadRun(level, sub, build) {
+  //
+  // `family` is the family the build will play: a liminal family's prop packs
+  // get up to PACK_WAIT_MS behind the card (§9.1). The legacy 5 have none and
+  // build inside the afterPaint callback exactly as before.
+  _loadRun(level, sub, build, family = this.state.mapFamily) {
     if (this._loading || this._disposed) return
     if (this.touch) enterImmersive()
     this.audio.start()
     if (!this.touch) this.controller.lock()
     this._loading = true
     this.ui.showLoading?.(level, sub)
-    afterPaint(() => {
+    const run = () => {
       this._loading = false
       if (this._disposed) return
       try {
@@ -756,6 +888,11 @@ export class Engine {
       // (the blur/visibility pause had no live run to stop then).
       const away = globalThis.document?.hidden || (!this.touch && globalThis.document?.hasFocus?.() === false)
       if (this.state.phase === Phase.PLAYING && away) this.pause()
+    }
+    afterPaint(() => {
+      const f = typeof family === 'string' ? family.trim().toLowerCase() : ''
+      if (!propPacksOf(f).length) return run()
+      settleWithin(this.ensureFamilyAssets(this._configFor(f).family), PACK_WAIT_MS).then(run)
     })
   }
 
@@ -788,12 +925,12 @@ export class Engine {
     // and same-family restarts must keep the config object identity (void-
     // death baselines compare it), and Office runs stay byte-identical.
     const familyText = typeof family === 'string' ? family.trim().toLowerCase() : ''
-    const fam = worldConfigForFamilyOrOffice(familyText || MAP_FAMILY_OFFICE)
+    const fam = this._configFor(familyText || MAP_FAMILY_OFFICE)
     if (this.cm.config?.mapFamily?.selected !== fam.family) {
+      // Family changed. _setupLevel swaps the whole visual identity (surfaces,
+      // lamp cast, fog/ambient/grade) for the new family and world seed before
+      // it rebuilds the chunk meshes.
       this.cm.config = fam.config
-      // Family changed: swap the whole visual identity (surfaces, lamp cast,
-      // fog/ambient/grade) before _setupLevel rebuilds the chunk meshes.
-      this._applyFamilyVisuals(fam.family)
     }
     this.state.mapFamily = fam.family
     this.ui.setFamilyInput(fam.family)
@@ -845,9 +982,17 @@ export class Engine {
     const lvl = state.level
     state.mapFamily = cm.config.mapFamily?.selected ?? 'office'
     cm.setSeed(hashStr(`${state.seedText}#${lvl}`))
+    // New world seed -> new surface set, before any chunk of it is meshed.
+    this._applyFamilyVisuals(state.mapFamily)
     // Seed re-paces the ambient fake-outs; the family retargets the reverb
     // space + texture one-shots (sewer drips, tower wind...).
     this.audio.resetLevel(cm.seed, state.mapFamily)
+
+    // Spawn (§8.1): the family's hook on storey 0; the legacy 5 keep the hub
+    // cell and its clearing (LEGACY_SPAWN). The world seed is set above.
+    const sp = familySpawn(cm.config, cm.seed)
+    this._spawn = sp
+    cm.setSpawn?.(sp)
 
     // Exit: reproducible XZ several chunks away, on a random non-zero floor
     // within five layers of the floor-0 spawn.
@@ -862,17 +1007,17 @@ export class Engine {
     this._transitStair = null
     cm.updateVisibility(0, null)
     this.explored.reset() // fresh fog per level/seed (cm.seed/exit/clearings are set above)
-    const yaw = Math.atan2(-(this.exitTarget.x - SPAWN), -(this.exitTarget.z - SPAWN))
-    this.controller.teleport(SPAWN, SPAWN, 0, yaw)
+    const yaw = sp.yaw ?? Math.atan2(-(this.exitTarget.x - sp.x), -(this.exitTarget.z - sp.z))
+    this.controller.teleport(sp.x, sp.z, 0, yaw)
     for (const enemy of this.enemies) enemy.reset(lvl, this.controller.pos)
     // Synchronous prewarm behind the title/transition overlay: the whole load
     // ring exists before the player can look, instead of visibly assembling
     // in the first ~0.7s of play.
-    cm.prewarm(SPAWN, SPAWN)
+    cm.prewarm(sp.x, sp.z)
     // Present the new level immediately: a level advance renders in the same
     // RAF callback, before any _tick() has moved the camera off the old exit or
     // gathered a lamp set, which drew one unlit frame from the wrong place.
-    this.camera.position.set(SPAWN, EYE_H, SPAWN)
+    this.camera.position.set(sp.x, EYE_H, sp.z)
     this.camera.rotation.set(0, yaw, 0, 'YXZ')
     this._updateCameraMatrices()
     this._refreshLamps()
@@ -1038,8 +1183,8 @@ export class Engine {
     this.lightField.reset()
     this.lightField.update(
       0,
-      title ? SPAWN : c.pos.x,
-      title ? SPAWN : c.pos.z,
+      title ? this._spawn.x : c.pos.x,
+      title ? this._spawn.z : c.pos.z,
       title ? 0 : c.floor,
       this.cm
     )
@@ -1488,13 +1633,14 @@ export class Engine {
 
   // TITLE/PAUSED render on a deadline rather than a display-frame divisor, so
   // 90/120/144 Hz panels all converge on 30 canvas frames. Phase transitions,
-  // resized buffers, changed settings, and active diagnostics draw immediately.
+  // resized buffers, changed settings, and F2 debug mode draw immediately.
   // Missed intervals (background tabs) are skipped rather than replayed.
   // A settled PAUSED screen holds its last frame (PAUSE_SETTLE_MS); live
-  // phases follow the frame limit (_frameLimitDue).
+  // phases follow the frame limit (_frameLimitDue). The FPS monitor is not
+  // consulted: it is a player setting and reports this cadence, not its own.
   _shouldRender(now, phase, frameTime = now) {
     const idle = phase === Phase.TITLE || phase === Phase.PAUSED
-    if (!idle || this.debugMode.active || this.debug.visible) {
+    if (!idle || this.debugMode.active) {
       this._idleRenderPhase = null
       this._idleRenderInvalidated = false
       // F2 debug mode keeps every frame (its tools time and step them).
@@ -1589,10 +1735,11 @@ export class Engine {
       // TITLE / PAUSED: keep the world rendering behind the overlay.
       if (p === Phase.TITLE) {
         this._titleYaw += dt * 0.06
-        this.camera.position.set(SPAWN, EYE_H, SPAWN)
+        const sp = this._spawn
+        this.camera.position.set(sp.x, EYE_H, sp.z)
         this.camera.rotation.set(0, this._titleYaw, 0, 'YXZ')
-        this.cm.update(SPAWN, SPAWN)
-        this.lightField.update(dt, SPAWN, SPAWN, 0, this.cm)
+        this.cm.update(sp.x, sp.z)
+        this.lightField.update(dt, sp.x, sp.z, 0, this.cm)
       }
       this._updateFlicker(dt)
       this._updateCameraMatrices()
@@ -1608,6 +1755,7 @@ export class Engine {
         // just ran flat out: dynamic resolution must not read it as load.
         this._lastRenderAt = now
         this._hitch = true
+        this.debug.update(now, true)
         return
       }
     }
@@ -1617,7 +1765,12 @@ export class Engine {
     // retains the previous completed frame on skipped callbacks.
     const render = this._shouldRender(now, p, Number.isFinite(frameTime) ? frameTime : now)
     this._trackDisplayRate(rafMs, p, render)
-    if (!render) return
+    // The FPS monitor sees every callback, drawn or not, so a capped or held
+    // frame reads as the rate that actually reached the screen.
+    if (!render) {
+      this.debug.update(now, false)
+      return
+    }
 
     // DebugMode.update() runs first so PerfTool can sample the last completed
     // frame. Start the new renderer-info interval immediately before its first
@@ -1638,7 +1791,7 @@ export class Engine {
     this.pathTrace?.afterRender(now, p)
     this._sampleDynamicResolution(now, (now - (this._lastRenderAt ?? now)) || 16.7)
     this._lastRenderAt = now
-    this.debug.update(dt, { chunks: this.cm.loadedCount })
+    this.debug.update(now, true, { chunks: this.cm.loadedCount })
   }
 
   dispose() {

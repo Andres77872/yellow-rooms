@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { GLASS_LAYER } from '../world/glassKinds.js'
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js'
 import { makeLampUniforms } from './LightField.js'
 import { FLICKER_SAFE } from '../world/lampCharacter.js'
@@ -845,6 +846,7 @@ export class DeferredRenderer {
     this._applyGradeLook()
     this.exposure.reset()
     this._syncGridAlbedo()
+    this._applyGlassPalette()
   }
 
   // The cell-graph GI bounces light off the family's surfaces: hand the grid
@@ -1949,6 +1951,54 @@ export class DeferredRenderer {
     this.bloomBlurQuad.render(r)
   }
 
+  // --- Window glass (forward, after the composite) -------------------------
+  // The glass material (render/glassMaterial.js) is shared by every chunk's
+  // pane batch; panes live on GLASS_LAYER, which the G-buffer camera never
+  // renders. Drawn into the HDR scene target with premultiplied-over blending,
+  // depth-tested against the G-buffer by hand, reflecting the lit buffer
+  // (free once the composite has read it).
+  setGlassMaterial(material) {
+    this._glassMat = material ?? null
+    if (!material) return
+    const u = material.uniforms
+    // Shared value-objects: the same haze and the same live fixture set.
+    u.uFogDensity = this.lightUniforms.uFogDensity
+    u.uFogColor = this.lightUniforms.uFogColor
+    u.tLampData.value = this.lampData
+    u.uLampCount = this.visibleLamps.uLampCount
+    u.uLampColor = this.lightUniforms.uLampColor
+    u.uLampFlicker = this.lightUniforms.uLampFlicker
+    this._applyGlassPalette()
+  }
+
+  _applyGlassPalette() {
+    const u = this._glassMat?.uniforms
+    if (!u || !this.palette) return
+    const sky = linVec(this.palette.ambientSky ?? 0x303040)
+    const fog = linVec(this.palette.fog ?? 0x202020)
+    u.uAmbient.value.setRGB(sky.r * 0.22 + fog.r * 0.12, sky.g * 0.22 + fog.g * 0.12, sky.b * 0.22 + fog.b * 0.12)
+  }
+
+  _renderGlass() {
+    const r = this.renderer
+    const { scene, camera } = this
+    const u = this._glassMat.uniforms
+    u.tDepth.value = this.depthTex
+    u.tScene.value = this.litRT.texture
+    u.uResolution.value.set(this.gBuffer.width, this.gBuffer.height)
+    const mask = camera.layers.mask
+    const prevBg = scene.background
+    camera.layers.set(GLASS_LAYER)
+    scene.background = null
+    r.setRenderTarget(this.sceneRT)
+    try {
+      r.render(scene, camera)
+    } finally {
+      camera.layers.mask = mask
+      scene.background = prevBg
+    }
+  }
+
   _composite() {
     this.compositeUniforms.uProjInverse.value.copy(this._projInv)
     this.renderer.setRenderTarget(this.sceneRT)
@@ -2177,6 +2227,7 @@ export class DeferredRenderer {
       this._identityRT.delete(this.bloomPreRT)
     } else this._clearRT(this.bloomPreRT, 0x000000)
     this._pass('composite', () => this._composite())
+    if (this._glassMat) this._pass('glass', () => this._renderGlass())
 
     // Debug: blit a single pipeline channel to screen, skip grade/FXAA.
     if (this.debugView) {

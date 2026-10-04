@@ -2,6 +2,8 @@ import { CELL, CHUNK, CHUNK_WORLD, layerY } from '../world/constants.js'
 import { RNG } from '../world/core/rng.js'
 import { generateChunk } from '../world/generate.js'
 import { stairStrip } from '../world/structures/slab.js'
+import { familyExitHook } from '../world/families/hooks.js'
+import { resolveMapFamily } from '../world/mapFamily.js'
 
 export const EXIT_FLOORS = Object.freeze([-5, -4, -3, -2, -1, 1, 2, 3, 4, 5])
 export const EXIT_REACH = 1.8
@@ -9,9 +11,36 @@ export const EXIT_REACH = 1.8
 const EXIT_Y = 1.35
 const norm = (a) => Math.atan2(Math.sin(a), Math.cos(a))
 
+// World position of an exit cell, exactly like the legacy tail below.
+export function finishExit({ cx, cy, cz, lx, lz }) {
+  return {
+    cx,
+    cy,
+    cz,
+    lx,
+    lz,
+    x: cx * CHUNK_WORLD + (lx + 0.5) * CELL,
+    y: layerY(cy) + EXIT_Y,
+    z: cz * CHUNK_WORLD + (lz + 0.5) * CELL,
+  }
+}
+
 // Deterministic per seed + level: shared seeds keep identical objectives while
 // every objective requires at least one floor transition from the floor-0 spawn.
 export function createExitPlacement(seedText, level, worldSeed, config) {
+  // A liminal family places its own exit (spec §8.2); the legacy 5 have no
+  // hook and run the body below unchanged.
+  const hook = familyExitHook(config)
+  if (hook) {
+    const seed = worldSeed >>> 0
+    return finishExit(hook({
+      worldSeed: seed,
+      level,
+      config,
+      profile: resolveMapFamily(config),
+      generate: (cx, cy, cz) => generateChunk(seed, cx, cy, cz, config),
+    }))
+  }
   const r = RNG.fromString(`${seedText}#${level}#exit`)
 
   // Preserve the established horizontal placement sequence. The floor draw

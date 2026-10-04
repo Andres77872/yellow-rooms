@@ -14,7 +14,9 @@ import {
   DOOR_DARK_CHANCE,
   DOOR_DARK_TINT,
   DOOR_TINT_VAR,
-  WINDOW_SALT,
+  WINDOW_SILL_H,
+  WINDOW_HEAD_Y,
+  WINDOW_TRIM_W,
   BRIDGE_BEAM_H,
   BRIDGE_BEAM_W,
   vIdx,
@@ -27,13 +29,18 @@ import {
   pushDoorFrame,
   pushDoorLeaves,
   pushWindowTrim,
+  doorKit,
   collectInteriorDressing,
   pushFurnitureModel,
 } from './objects/index.js'
-import { hash2i } from './core/hash.js'
-import { lampPanelTint } from './lampCharacter.js'
+import { applyLampRecordTint, lampIsBad, lampPanelTint } from './lampCharacter.js'
 import { STAIR_E, STAIR_S, STAIR_W } from './structures/slab.js'
 import { COLUMN_FURNITURE, COLUMN_MONUMENTAL, WALL_WINDOW } from './mapTypes.js'
+import { ZONE_MAP_SIZE, cellRole, worldSurfaceSet } from './surfaceSet.js'
+import { GLASS_LAYER } from './glassKinds.js'
+import { windowGlazing } from './glazing.js'
+import { furnitureTint } from './objects/furniture/palette.js'
+import { fastPathMassMask } from './tiles/massMask.js'
 
 const _m = new THREE.Matrix4()
 const _q = new THREE.Quaternion()
@@ -51,9 +58,12 @@ const FURN_FACING_ANGLE = [0, Math.PI, Math.PI / 2, -Math.PI / 2]
 // Per-door leaf colour from the doorway's deterministic tone seed (doors.js).
 // instanceColor multiplies the doorLeaf material's painted-cream base: most
 // leaves drift a little in brightness; a rare one comes out dark-stained —
-// the liminal "this door is wrong" beat. Knob parts go dark metal.
+// the liminal "this door is wrong" beat. Knob parts go dark metal, recesses
+// (grille throats) near-black; kit hardware and veneer carry their own tint.
 function leafTint(part, out) {
+  if (part.tint) return out.setRGB(part.tint[0], part.tint[1], part.tint[2])
   if (part.role === 1) return out.setRGB(0.25, 0.22, 0.18)
+  if (part.role === 3) return out.setRGB(0.035, 0.035, 0.04)
   const tone = part.tone ?? 0.5
   if (tone < DOOR_DARK_CHANCE) {
     return out.setRGB(DOOR_DARK_TINT, DOOR_DARK_TINT * 0.88, DOOR_DARK_TINT * 0.76)
@@ -65,14 +75,14 @@ function leafTint(part, out) {
 
 // Per-instance variation for GLB furniture (engine-improvement §3.4): the
 // instanceColor attribute was bound but always white, so every copy of a
-// desk read as the same object. A deterministic +-5% brightness drift with a
-// slight warm/cool lean — keyed by the piece's GLOBAL cell, so a chunk
-// reload never re-rolls it — reads as age and batch variation, not paint.
-function furnitureInstanceTint(data, f, out) {
-  const h = hash2i(0x5f1d, data.cx * CHUNK + f.lx, data.cz * CHUNK + f.lz)
-  const b = 0.95 + ((h & 1023) / 1023) * 0.1
-  const lean = (((h >>> 10) & 1023) / 1023 - 0.5) * 0.04
-  return out.setRGB(b * (1 + lean), b, b * (1 - lean))
+// desk read as the same object. The multiplier is the piece's purchase batch
+// (objects/furniture/palette.js furnitureTint): one per room and kind, a
+// department-wide drift, the world's refit theme and its wing's wear — so a
+// room's chairs match, and nothing re-rolls per cell or on reload.
+const _furnTint = [1, 1, 1]
+function furnitureInstanceTint(data, f, set, out) {
+  const t = furnitureTint(data, f, set, _furnTint)
+  return out.setRGB(t[0], t[1], t[2])
 }
 
 // --- Furniture node ------------------------------------------------------
@@ -81,8 +91,9 @@ function furnitureInstanceTint(data, f, out) {
 // 0..3 rotating the piece):
 //   GLB path — the Blender-built models (render/furnitureModels.js), one
 //     InstancedMesh per kind present, per-vertex part colors from the GLB and
-//     a white per-instance tint (instanceColor stays bound: the material
-//     declares USE_INSTANCING_COLOR and an unbound attribute reads black).
+//     the purchase-batch tint per instance (instanceColor must stay bound:
+//     the material declares USE_INSTANCING_COLOR and an unbound attribute
+//     reads black).
 //   box path — the procedural builders (objects/furniture/), one InstancedMesh
 //     of scaled unit boxes with per-part tints. Used until the GLBs load and
 //     as the permanent fallback when they are unavailable (tests, editor,
@@ -92,6 +103,7 @@ export function buildFurniturePart(data, geom, materials, models = null) {
   const node = new THREE.Group()
   node.name = 'furniture'
 
+  const set = worldSurfaceSet(data.mapFamily, data.worldSeed)
   const geometries = models?.geometries
   if (geometries?.size && materials.furnitureModel) {
     const byKind = new Map()
@@ -113,31 +125,60 @@ export function buildFurniturePart(data, geom, materials, models = null) {
         _qf.setFromAxisAngle(_Y_AXIS, FURN_FACING_ANGLE[f.facing & 3])
         _m.compose(_p, _qf, _s)
         batch.setMatrixAt(i, _m)
-        batch.setColorAt(i, furnitureInstanceTint(data, f, _c))
+        batch.setColorAt(i, furnitureInstanceTint(data, f, set, _c))
       }
       batch.instanceMatrix.needsUpdate = true
       batch.instanceColor.needsUpdate = true
       batch.computeBoundingSphere()
       node.add(batch)
     }
-    if (uncovered.length) pushBoxBatch(node, geom, materials, uncovered)
+    if (uncovered.length) pushBoxBatch(node, geom, materials, uncovered, data, set)
   } else if (data.furniture.length) {
-    pushBoxBatch(node, geom, materials, data.furniture)
+    pushBoxBatch(node, geom, materials, data.furniture, data, set)
   }
 
   return node.children.length ? node : null
 }
 
 // The procedural fallback: multi-part models (objects/furniture/) batched
-// into one instanced bevelled-box draw with per-part tints.
-function pushBoxBatch(node, geom, materials, records) {
+// into one instanced bevelled-box draw with per-part tints — the FURN_TINT
+// catalogue colours times the same purchase batch the GLB path applies, so
+// both paths agree on which room's pieces match.
+function pushBoxBatch(node, geom, materials, records, data, set) {
   const parts = []
-  for (const f of records) pushFurnitureModel(parts, f)
-  const batch = boxBatch(geom.detailUnit, materials.furniture, parts, partTint)
+  for (const f of records) {
+    const from = parts.length
+    pushFurnitureModel(parts, f)
+    const lot = furnitureTint(data, f, set)
+    for (let i = from; i < parts.length; i++) parts[i].lot = lot
+  }
+  const batch = boxBatch(geom.detailUnit, materials.furniture, parts, furniturePartTint)
   if (batch) node.add(batch)
 }
 
 const partTint = (it, out) => out.setRGB(it.tint[0], it.tint[1], it.tint[2])
+const furniturePartTint = (it, out) => out.setRGB(it.tint[0] * it.lot[0], it.tint[1] * it.lot[1], it.tint[2] * it.lot[2])
+const decalTint = (it, out) => out.setRGB(it.cell, it.shade, it.rough)
+// Glass panes carry their kind/seed/dirt in instanceColor (glassMaterial.js).
+const glassTint = (it, out) => out.setRGB(it.kind, it.seed, it.dirt)
+
+// One pane filling a window aperture between its casings, at the wall plane
+// (the glazing bars and blinds stand proud of it and occlude it by depth).
+// `pane` is the window's glazing (glazing.js windowGlazing): the kind and
+// grime follow its screen's privacy and wear, the seed is the pane's own
+// texture detail.
+function pushWindowGlass(out, axis, line, cell, pane) {
+  const vertical = axis === 'v'
+  const plane = line * CELL
+  const centre = (cell + 0.5) * CELL
+  const along = CELL - 2 * WINDOW_TRIM_W
+  const height = WINDOW_HEAD_Y - WINDOW_SILL_H
+  const y = (WINDOW_HEAD_Y + WINDOW_SILL_H) / 2
+  const { kind, seed, dirt } = pane
+  const t = 0.012
+  if (vertical) out.push({ px: plane, py: y, pz: centre, sx: t, sy: height, sz: along, kind, seed, dirt })
+  else out.push({ px: centre, py: y, pz: plane, sx: along, sy: height, sz: t, kind, seed, dirt })
+}
 
 // One InstancedMesh of unit boxes from {px,py,pz, sx,sy,sz} descriptors
 // (axis-aligned, chunk-local), optionally coloured per instance. Every
@@ -434,9 +475,77 @@ function multilevelHoleOutsideChunk(data, lx, lz) {
     : gx !== room.globalBridgeLine
 }
 
-export function buildChunkMeshes(data, geom, materials, ox, oy, oz, models = null) {
+// Zone maps (world/surfaceSet.js): one tiny nearest-filtered RGBA texture per
+// chunk telling the architecture materials which world surface-set layer
+// each cell's floor, walls and ceiling sample. The materials are shared by
+// every chunk, so each architecture mesh binds its chunk's map and world
+// origin just before it draws (uniformsNeedUpdate re-uploads the changed
+// values; anything rendering with an override material is skipped).
+let emptyZoneMap = null
+function zoneTexture(bytes) {
+  const tex = new THREE.DataTexture(bytes, ZONE_MAP_SIZE, ZONE_MAP_SIZE, THREE.RGBAFormat, THREE.UnsignedByteType)
+  tex.colorSpace = THREE.NoColorSpace
+  tex.magFilter = tex.minFilter = THREE.NearestFilter
+  tex.generateMipmaps = false
+  tex.needsUpdate = true
+  return tex
+}
+
+function zoneBinder(zoneMap, ox, oy, oz) {
+  const map = zoneMap ?? (emptyZoneMap ??= zoneTexture(new Uint8Array(ZONE_MAP_SIZE * ZONE_MAP_SIZE * 4)))
+  return (_renderer, _scene, _camera, _geometry, material) => {
+    const u = material?.uniforms
+    if (!u?.tZoneMap) return
+    u.tZoneMap.value = map
+    u.uZoneOrigin.value.set(ox, oy, oz)
+    material.uniformsNeedUpdate = true
+  }
+}
+
+// Whole-chunk solid mass of a massFastPath family (spec §9.6a): no columns,
+// walls, trim, lamps or zone map. Same shape as buildChunkMeshes' result, so
+// Chunk's readers stay uniform. Given `geom` and `materials` it keeps the two
+// shared full-chunk floor and ceiling planes (no per-chunk geometry, two draw
+// calls): sight that crosses a thin band of in-chunk mass through glass then
+// reads a dark slab continuing into the solid chunk instead of the black
+// clear colour. Without them (tests, callers that never look) the group is
+// empty.
+export function emptyChunkMeshes(geom = null, materials = null, ox = 0, oy = 0, oz = 0) {
   const group = new THREE.Group()
   group.position.set(ox, oy, oz)
+  const parts = {}
+  if (geom?.floor && geom?.ceiling && materials) {
+    const bindZone = zoneBinder(null, ox, oy, oz)
+    const floor = new THREE.Mesh(geom.floor, materials.carpet)
+    floor.position.set(CHUNK_WORLD / 2, 0, CHUNK_WORLD / 2)
+    const ceiling = new THREE.Mesh(geom.ceiling, materials.ceiling)
+    ceiling.position.set(CHUNK_WORLD / 2, WALL_H, CHUNK_WORLD / 2)
+    floor.onBeforeRender = bindZone
+    ceiling.onBeforeRender = bindZone
+    group.add(floor, ceiling)
+    parts.floor = floor
+    parts.ceiling = ceiling
+  }
+  return {
+    group,
+    lamps: [],
+    parts: Object.freeze(parts),
+    exitWorld: null,
+    zoneMap: null,
+    // Shared geometry and materials only: detaching is all there is to free.
+    dispose: () => group.parent?.remove(group),
+  }
+}
+
+// `zoneBytes`: the chunk's buildSurfaceZoneMap() bytes, or null (editor
+// previews, tests) for every room on the family's base surfaces. The texture
+// keeps a reference: refreshing the halo rewrites the bytes and flags
+// `zoneMap.needsUpdate`.
+export function buildChunkMeshes(data, geom, materials, ox, oy, oz, models = null, zoneBytes = null) {
+  const group = new THREE.Group()
+  group.position.set(ox, oy, oz)
+  const zoneMap = zoneBytes ? zoneTexture(zoneBytes) : null
+  const bindZone = zoneBinder(zoneMap, ox, oy, oz)
 
   // Floor + ceiling. The shared full-chunk planes cover the common (no-hole)
   // case with zero per-chunk geometry; stair chunks build hole-punched merged
@@ -466,6 +575,8 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz, models = nul
     ceil = new THREE.Mesh(g, materials.ceiling)
   }
   group.add(ceil)
+  floor.onBeforeRender = bindZone
+  ceil.onBeforeRender = bindZone
 
   // --- Wall shell + columns + stair flight + beams: one wallpaper batch ---
   // The shell (objects/wallShell.js) turns the edge bytes into merged runs,
@@ -475,6 +586,8 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz, models = nul
   const shell = collectWallShell(data)
   const inst = shell.walls // [{px,py,pz, sx,sy,sz}]
   const featureFrameInst = shell.caps
+  const glassInst = [] // one pane per window, drawn by the forward glass pass
+  const surfaceSet = worldSurfaceSet(data.mapFamily, data.worldSeed)
   for (const axis of ['v', 'h']) {
     for (let line = 0; line < CHUNK; line++) {
       for (let cell = 0; cell < CHUNK; cell++) {
@@ -482,22 +595,27 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz, models = nul
         const wall = axis === 'v' ? data.wallV[i] : data.wallH[i]
         const feature = axis === 'v' ? data.wallFeatureV[i] : data.wallFeatureH[i]
         if (wall !== 1 || feature !== WALL_WINDOW) continue
-        // Casings, stool and glazing from the shared joinery builder, with a
-        // deterministic per-window tone selecting cross / single-bar /
-        // venetian-blind glazing.
-        const gx = data.cx * CHUNK + (axis === 'v' ? line : cell)
-        const gz = data.cz * CHUNK + (axis === 'v' ? cell : line)
-        pushWindowTrim(featureFrameInst, axis, line, cell, hash2i(WINDOW_SALT, gx, gz) / 4294967296)
+        // Casings, stool and glazing from the shared joinery builder. The
+        // screen this window belongs to (glazing.js) picks one glazing
+        // system for its whole run — cross / single-bar / venetian blinds —
+        // and the pane's kind from its privacy and wear.
+        const pane = windowGlazing(data, axis, line, cell, surfaceSet)
+        pushWindowTrim(featureFrameInst, axis, line, cell, pane.tone)
+        pushWindowGlass(glassInst, axis, line, cell, pane)
       }
     }
   }
   const wallY = WALL_H / 2
   // Freestanding columns at cell centres. Furniture cells are built separately
   // from their records (precise pieces, not full-height shafts).
+  // Mass fast path (§9.6b): sealed mass of a massFastPath family is never
+  // seen, so it gets no instance; legacy families get no mask.
+  const massMask = fastPathMassMask(data)
   for (let z = 0; z < CHUNK; z++) {
     for (let x = 0; x < CHUNK; x++) {
       const kind = data.cols[cIdx(x, z)]
       if (!kind || kind === COLUMN_FURNITURE) continue
+      if (massMask?.[cIdx(x, z)]) continue
       const half = kind === COLUMN_MONUMENTAL ? MONUMENTAL_COL_HALF : COL_HALF
       inst.push({
         px: (x + 0.5) * CELL,
@@ -619,9 +737,15 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz, models = nul
   // neighbouring windows, wainscot bands) become single members: no seam for
   // a bevel to round, and fewer instances.
   const walls = boxBatch(geom.wallUnit, materials.wallpaper, mergeCollinearBoxes(inst))
-  if (walls) group.add(walls)
-  const stairs = boxBatch(geom.stairUnit, materials.wallpaper, stepInst)
-  if (stairs) group.add(stairs)
+  if (walls) {
+    walls.onBeforeRender = bindZone
+    group.add(walls)
+  }
+  const stairs = boxBatch(geom.stairUnit, materials.stairTread ?? materials.wallpaper, stepInst)
+  if (stairs) {
+    stairs.onBeforeRender = bindZone
+    group.add(stairs)
+  }
 
   // --- Decorative door frames + dressed open leaves (from explicit passage metadata) ---
   // Purely visual: a plinth-and-cap casing around every single-cell doorway,
@@ -631,14 +755,29 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz, models = nul
   // so it adds no geometry primitive and never blocks the opening
   // (collision/LOS read the edge bytes). Leaves carry the doorway's `tone`
   // seed for per-door tinting.
+  // Each door is dressed as one of its family's door types (doorKit.js):
+  // painted parts share the leaf batch, veneer its own grain material, and
+  // hinges / levers / closers / plates the metal hardware batch. Vision-lite
+  // panes join the window glass. Without the kit materials (editor preview,
+  // tests) everything falls back to the leaf batch.
   const frameInst = featureFrameInst // {px,py,pz, sx,sy,sz}
-  const leafInst = [] // same, plus role (0 paint / 1 knob) + tone
+  const leafInst = [] // same, plus role (0 paint / 1 knob / 3 recess) + tone
+  const veneerInst = [] // kit veneer parts (part.tint)
+  const hardwareInst = [] // kit metal parts (part.tint)
+  const sinks = { glass: glassInst }
+  const doorParts = []
   for (const d of collectDoorways(data, DOOR_LEAF_FRACTION)) {
     pushDoorFrame(frameInst, d.axis, d.line, d.cell)
     if (d.leaf) {
-      const at = leafInst.length
-      pushDoorLeaves(leafInst, d)
-      for (let i = at; i < leafInst.length; i++) leafInst[i].tone = d.tone
+      d.kit = doorKit(data.mapFamily, d)
+      doorParts.length = 0
+      pushDoorLeaves(doorParts, d, sinks)
+      for (const part of doorParts) {
+        part.tone = d.tone
+        if (part.wood && materials.doorVeneer) veneerInst.push(part)
+        else if (part.role === 2 && materials.doorHardware) hardwareInst.push(part)
+        else leafInst.push(part)
+      }
     }
   }
 
@@ -655,10 +794,44 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz, models = nul
   if (frames) group.add(frames)
   const leaves = boxBatch(geom.detailUnit, materials.doorLeaf, leafInst, leafTint)
   if (leaves) group.add(leaves)
-  const props = boxBatch(geom.detailUnit, materials.prop, mergeCollinearBoxes(dressing.props), partTint)
+  const veneer = materials.doorVeneer ? boxBatch(geom.detailUnit, materials.doorVeneer, veneerInst, partTint) : null
+  if (veneer) group.add(veneer)
+  const hardware = materials.doorHardware ? boxBatch(geom.detailUnit, materials.doorHardware, hardwareInst, partTint) : null
+  if (hardware) group.add(hardware)
+  // Raised numerals stand on their printed plates: a material set without
+  // the decal batch (the editor's geometry preview) draws no plates, so it
+  // drops the numerals too rather than float ink strokes on a bare wall.
+  const propList = materials.decal ? dressing.props : dressing.props.filter((p) => !p.numeral)
+  const props = boxBatch(geom.detailUnit, materials.prop, mergeCollinearBoxes(propList), partTint)
   if (props) group.add(props)
   const signs = boxBatch(geom.detailUnit, materials.signGlow, dressing.signs, partTint)
   if (signs) group.add(signs)
+  // Printed decals: sharp plates whose instance colour carries the atlas cell
+  // (decal material, gbufferMaterials.js). The path tracer reads one albedo
+  // per instance instead — the cell's average colour.
+  const decalList = dressing.decals ?? []
+  const decals = materials.decal ? boxBatch(geom.detailUnitSharp ?? geom.detailUnit, materials.decal, decalList, decalTint) : null
+  if (decals) {
+    const avg = materials.decal.userData?.decalAverages
+    const pt = new Float32Array(decalList.length * 3)
+    decalList.forEach((d, i) => {
+      for (let k = 0; k < 3; k++) pt[i * 3 + k] = (avg ? avg[d.cell * 3 + k] : 0.7) * d.shade
+    })
+    decals.userData.ptColors = pt
+    // The plate image is read through the sharp cube's face UVs; the bevelled
+    // cube turns and mirrors them, so the bevel tier never swaps this batch.
+    decals.userData.keepGeometry = true
+    group.add(decals)
+  }
+  // Window glass: its own render layer, never in the G-buffer (it would hide
+  // what the window shows) and skipped by the path-tracer mirrors.
+  const glass = materials.glass ? boxBatch(geom.detailUnitSharp ?? geom.detailUnit, materials.glass, glassInst, glassTint) : null
+  if (glass) {
+    glass.layers.set(GLASS_LAYER)
+    glass.userData.forwardOnly = true
+    glass.userData.keepGeometry = true // panes are flat sheets at every tier
+    group.add(glass)
+  }
 
   // --- Furniture (collision-real pieces from ChunkData.furniture) ---
   // buildFurniturePart picks the render path: instanced Blender GLBs once the
@@ -672,7 +845,9 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz, models = nul
   // Each lit panel's emissive is tinted by its fixture identity (lampCharacter):
   // the same colour-temperature drift the cast light gets, and a browned-dim
   // face for bad tubes — so what the tube LOOKS like never argues with the
-  // pool it throws.
+  // pool it throws. Whether a tube is bad follows the wear of its room and its
+  // circuit (lampIsBad); the answer rides on the lamp as `bad`, and the light
+  // grid derives the same one from the same ChunkData for the GPU twin.
   const lamps = [] // world Vector3 of LIT lamps, tagged with the layer index
   const lit = data.lamps.filter((l) => l.lit)
   const dead = data.lamps.filter((l) => !l.lit)
@@ -690,12 +865,15 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz, models = nul
       // light shafts/shadows originate in-room (not coplanar with the ceiling).
       const wx = ox + (l.lx + 0.5) * CELL
       const wz = oz + (l.lz + 0.5) * CELL
-      const role = data.spaceRole[cIdx(l.lx, l.lz)]
+      const role = cellRole(data, l.lx, l.lz) // the room's role, as its finish reads it
       const v = new THREE.Vector3(wx, oy + WALL_H - 0.5, wz)
       v.cy = data.cy // floor tag for the cross-floor light filter
       v.role = role // room-role tag: the cast pool matches the tube's register
+      v.bad = lampIsBad(data, l.lx, l.lz) // worn-space failure: LightField strobes what the panel shows
+      if (l.tint != null) v.tint = l.tint // authored colour: the pool and the panel share it
       lamps.push(v)
-      lampPanelTint(wx, wz, data.cy, _tint3, role)
+      lampPanelTint(wx, wz, data.cy, _tint3, role, v.bad)
+      applyLampRecordTint(_tint3, l.tint)
       panels.setColorAt(i, _c.setRGB(_tint3[0], _tint3[1], _tint3[2]))
     })
     panels.instanceMatrix.needsUpdate = true
@@ -736,12 +914,17 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz, models = nul
     stairs?.dispose()
     frames?.dispose()
     leaves?.dispose()
+    veneer?.dispose()
+    hardware?.dispose()
+    decals?.dispose()
     props?.dispose()
     signs?.dispose()
+    glass?.dispose()
     disposeFurniturePart(furniture)
     panels?.dispose()
     deadPanels?.dispose()
     for (const g of ownedGeos) g.dispose()
+    zoneMap?.dispose()
     group.parent?.remove(group)
   }
 
@@ -755,13 +938,17 @@ export function buildChunkMeshes(data, geom, materials, ox, oy, oz, models = nul
     stairs,
     frames,
     leaves,
+    veneer,
+    hardware,
     props,
+    decals,
     signs,
+    glass,
     furniture,
     litPanels: panels,
     deadPanels,
     exit,
   })
 
-  return { group, parts, lamps, exitWorld, dispose }
+  return { group, parts, lamps, exitWorld, zoneMap, dispose }
 }

@@ -1,0 +1,211 @@
+{
+  "schema": 1,
+  "pack": "funhouse",
+  "generator": {
+    "blender": "5.2.2 LTS",
+    "blenderHash": "d13f752e3b9c",
+    "exporter": "5.2.40",
+    "script": "build_pack.py"
+  },
+  "budget": {
+    "tris": 3500,
+    "bytes": 130000
+  },
+  "totals": {
+    "tris": 3093,
+    "bytes": 110368
+  },
+  "kinds": [
+    {
+      "kind": "cctv",
+      "kindKey": "PROP_CCTV",
+      "file": "cctv.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.8,
+        "d": 0.55
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.4,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.4266,
+          0.0,
+          -0.2982
+        ],
+        "max": [
+          0.4,
+          1.392,
+          0.3002
+        ]
+      },
+      "tris": 1251,
+      "bytes": 56732,
+      "materials": [
+        "yr_laminate",
+        "yr_cabinetPaint",
+        "yr_slotDark",
+        "yr_copierBody",
+        "yr_applianceSteel",
+        "yr_paperWhite",
+        "yr_rackFace",
+        "yr_tvBlack",
+        "yr_ledGreen",
+        "yr_recRed",
+        "yr_keyDark",
+        "yr_cctvScreen",
+        "yr_cctvImage",
+        "yr_chrome",
+        "yr_bookRed",
+        "yr_bookBlue",
+        "yr_porcelain"
+      ],
+      "sockets": [
+        {
+          "name": "socket_screen_0",
+          "at": [
+            -0.07,
+            1.04,
+            0.124
+          ],
+          "feed": "cctv",
+          "yrSocket": "screen"
+        }
+      ],
+      "colliders": [
+        {
+          "u0": -0.4,
+          "u1": 0.4,
+          "v0": -0.275,
+          "v1": 0.275,
+          "y0": 0.0,
+          "y1": 1.4
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.4,
+          "u1": 0.4,
+          "v0": -0.275,
+          "v1": 0.275,
+          "y0": 0.0,
+          "y1": 0.755,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.29,
+          "u1": 0.15,
+          "v0": -0.27,
+          "v1": 0.12,
+          "y0": 0.755,
+          "y1": 1.395,
+          "t": 0
+        }
+      ],
+      "sha256": "3563a00f6350567e2270e022b2b7a8fee99dc5f6d13a712c3812079109ebe9ae"
+    },
+    {
+      "kind": "ball_track",
+      "kindKey": "PROP_BALL_TRACK",
+      "file": "ball_track.glb",
+      "class": "B",
+      "collision": {
+        "w": 1.0,
+        "d": 0.6
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.2,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.5,
+          0.0,
+          -0.3
+        ],
+        "max": [
+          0.535,
+          1.18,
+          0.3
+        ]
+      },
+      "tris": 1842,
+      "bytes": 53636,
+      "materials": [
+        "yr_woodMid",
+        "yr_funRed",
+        "yr_funBlue",
+        "yr_applianceSteel",
+        "yr_woodDark",
+        "yr_slotDark",
+        "yr_chrome",
+        "yr_funYellow",
+        "yr_bottleBlue"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.5,
+          "u1": 0.5,
+          "v0": -0.3,
+          "v1": 0.3,
+          "y0": 0.0,
+          "y1": 1.2
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.5,
+          "u1": 0.5,
+          "v0": -0.3,
+          "v1": 0.3,
+          "y0": 0.0,
+          "y1": 0.54,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.46,
+          "u1": 0.46,
+          "v0": -0.29,
+          "v1": -0.07,
+          "y0": 0.54,
+          "y1": 1.18,
+          "t": 0
+        }
+      ],
+      "sha256": "cd44aa489b61da12b0c63c82217f3dfdb9790a6f4f799b4a6d0dcb0abf354180"
+    }
+  ]
+}

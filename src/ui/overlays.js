@@ -2,8 +2,9 @@ import { Phase } from '../core/GameState.js'
 import { IS_TOUCH } from '../core/device.js'
 import { UI_CSS } from './theme.js'
 import { SETTINGS_HTML, SettingsBlock } from './settingsPanel.js'
-import { CONTROL_CHIPS, HUD_HTML } from './hud.js'
+import { CONTROL_CHIPS, HUD_HTML, exitDistText } from './hud.js'
 import { TITLE_HTML, familyNote, stepMenuIndex } from './titleMenu.js'
+import { displayNameOf } from '../world/families/registry.js'
 
 // The transition / loading card fades off the new level's first frames
 // (theme.js panel-out) before it is hidden.
@@ -187,7 +188,11 @@ export class UI {
       e.preventDefault()
       items[next].focus()
     })
-    this.el.familySelect.addEventListener('change', () => this._syncFamilyNote())
+    this.el.familySelect.addEventListener('change', () => {
+      this._syncFamilyNote()
+      // Engine prefetches the picked family's prop packs before ENTER (§9.1).
+      this.onFamilyChange?.(this.el.familySelect.value)
+    })
     this.el.btnResume.addEventListener('click', () => this.onResume?.())
     this.el.btnRetry.addEventListener('click', () => this.onRestart?.())
     this.root.querySelector('#btn-restart-p').addEventListener('click', () => this.onRestart?.())
@@ -236,6 +241,61 @@ export class UI {
     if (this.el.familyNote) this.el.familyNote.textContent = familyNote(this.el.familySelect.value)
   }
 
+  // DEV forced family (§8.4): a MAP option the shipped list does not carry,
+  // added under `group` so setFamilyInput keeps it. A plain legacy list first
+  // moves its options into a BUILDINGS group, the layout
+  // titleMenu.familyOptionsHtml gives a mixed list. No-op if already listed.
+  addFamilyOption(value, label, group = null) {
+    const select = this.el.familySelect
+    if (!select || [...select.options].some((o) => o.value === value)) return
+    const doc = select.ownerDocument ?? globalThis.document
+    const option = doc.createElement('option')
+    option.value = value
+    option.textContent = label
+    if (!group) {
+      select.appendChild(option)
+      return
+    }
+    const groups = () => [...select.querySelectorAll('optgroup')]
+    if (!groups().length) {
+      const keep = select.value
+      const buildings = doc.createElement('optgroup')
+      buildings.label = 'BUILDINGS'
+      buildings.append(...select.querySelectorAll('option'))
+      select.appendChild(buildings)
+      // Moving options can reset a <select>'s pick: restate it.
+      select.value = keep
+    }
+    let target = groups().find((g) => g.label === group)
+    if (!target) {
+      target = doc.createElement('optgroup')
+      target.label = group
+      select.appendChild(target)
+    }
+    target.appendChild(option)
+  }
+
+  // Undo addFamilyOption: drop `value` only if it sits under `group` (a
+  // shipped option of the same value is never touched), drop the group once
+  // empty, and unwrap a BUILDINGS group left alone so the list is plain again.
+  // A removed selection lands on office, like an unknown setFamilyInput.
+  removeFamilyOption(value, group) {
+    const select = this.el.familySelect
+    const option = select && [...select.options].find((o) => o.value === value)
+    const parent = option?.parentNode
+    if (!option || parent?.tagName !== 'OPTGROUP' || parent.label !== group) return
+    const keep = select.value === value ? 'office' : select.value
+    option.remove()
+    if (!parent.querySelector('option')) parent.remove()
+    const groups = [...select.querySelectorAll('optgroup')]
+    if (groups.length === 1 && groups[0].label === 'BUILDINGS') {
+      select.append(...groups[0].querySelectorAll('option'))
+      groups[0].remove()
+    }
+    // Moving options can reset a <select>'s pick: restate it.
+    this.setFamilyInput(keep)
+  }
+
   // Title settings side sheet. Opening moves focus into the sheet; closing
   // from inside it hands focus back to SETTINGS so keyboard users don't land
   // on <body>. The `sheet-open` class dims the menu column behind it.
@@ -259,7 +319,7 @@ export class UI {
   _runSummary(state) {
     if (!state) return ''
     const fam = state.mapFamily && state.mapFamily !== 'office'
-      ? ` · ${state.mapFamily.toUpperCase()}`
+      ? ` · ${displayNameOf(state.mapFamily)}`
       : ''
     return `LEVEL ${state.level}${state.seedText ? ` · SEED ${state.seedText}` : ''}${fam}`
   }
@@ -406,7 +466,7 @@ export class UI {
     }
     // Family chip only for non-office runs — the default world stays clean.
     const famText = state.mapFamily && state.mapFamily !== 'office'
-      ? `FAMILY ${state.mapFamily.toUpperCase()}`
+      ? `FAMILY ${displayNameOf(state.mapFamily)}`
       : ''
     if (c.fam !== famText) {
       c.fam = famText
@@ -448,13 +508,7 @@ export class UI {
         'transform',
         `rotate(${(-exit.relAngle).toFixed(3)}rad)`
       )
-      setText(
-        'dist',
-        this.el.dist,
-        df === 0
-          ? `${Math.round(exit.dist)}m`
-          : `${Math.round(exit.dist)}m ${df < 0 ? '▼' : '▲'}${Math.abs(df)}`
-      )
+      setText('dist', this.el.dist, exitDistText(exit.dist, df, state.mapFamily))
     } else {
       setStyle('compassOp', this.el.compass, 'opacity', '0.25')
       setText('dist', this.el.dist, '—')

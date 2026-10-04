@@ -1,0 +1,381 @@
+{
+  "schema": 1,
+  "pack": "theater",
+  "generator": {
+    "blender": "5.2.2 LTS",
+    "blenderHash": "d13f752e3b9c",
+    "exporter": "5.2.40",
+    "script": "build_pack.py"
+  },
+  "budget": {
+    "tris": 20000,
+    "bytes": 650000
+  },
+  "totals": {
+    "tris": 5977,
+    "bytes": 197856
+  },
+  "kinds": [
+    {
+      "kind": "ghost_light",
+      "kindKey": "PROP_GHOST_LIGHT",
+      "file": "ghost_light.glb",
+      "class": "B",
+      "collision": {
+        "w": 0.5,
+        "d": 0.5
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.9,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.21,
+          0.0,
+          -0.21
+        ],
+        "max": [
+          0.21,
+          1.884,
+          0.21
+        ]
+      },
+      "tris": 1552,
+      "bytes": 49948,
+      "materials": [
+        "yr_keyDark",
+        "yr_legMetal",
+        "yr_slotDark",
+        "yr_chrome",
+        "yr_tvBlack",
+        "yr_ghostBulb"
+      ],
+      "sockets": [
+        {
+          "name": "socket_light_0",
+          "at": [
+            0.0,
+            1.78,
+            0.0
+          ],
+          "lampKind": "bare",
+          "yrSocket": "light"
+        }
+      ],
+      "colliders": [
+        {
+          "u0": -0.25,
+          "u1": 0.25,
+          "v0": -0.25,
+          "v1": 0.25,
+          "y0": 0.0,
+          "y1": 1.9
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.205,
+          "u1": 0.205,
+          "v0": -0.205,
+          "v1": 0.205,
+          "y0": 0.08,
+          "y1": 0.363,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.024,
+          "u1": 0.036,
+          "v0": -0.024,
+          "v1": 0.024,
+          "y0": 0.363,
+          "y1": 1.88,
+          "t": 0
+        }
+      ],
+      "sha256": "baf2f7af44eeb5b7116a7e16c7b9907b28d4f7022e20fa7ee9f57434fdfc1a83"
+    },
+    {
+      "kind": "prompt_desk",
+      "kindKey": "PROP_PROMPT_DESK",
+      "file": "prompt_desk.glb",
+      "class": "B",
+      "collision": {
+        "w": 1.1,
+        "d": 0.6
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.25,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.55,
+          0.0,
+          -0.315
+        ],
+        "max": [
+          0.563,
+          1.2807,
+          0.3014
+        ]
+      },
+      "tris": 1151,
+      "bytes": 53068,
+      "materials": [
+        "yr_slotDark",
+        "yr_keyDark",
+        "yr_applianceSteel",
+        "yr_legMetal",
+        "yr_woodMid",
+        "yr_woodDark",
+        "yr_paperWhite",
+        "yr_tvBlack",
+        "yr_cueRed",
+        "yr_chrome",
+        "yr_ledGreen",
+        "yr_ghostBulb"
+      ],
+      "sockets": [
+        {
+          "name": "socket_light_0",
+          "at": [
+            0.0,
+            1.16,
+            -0.13
+          ],
+          "lampKind": "cue",
+          "yrSocket": "light"
+        }
+      ],
+      "colliders": [
+        {
+          "u0": -0.55,
+          "u1": 0.55,
+          "v0": -0.3,
+          "v1": 0.3,
+          "y0": 0.0,
+          "y1": 1.25
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.55,
+          "u1": 0.55,
+          "v0": -0.29,
+          "v1": 0.2,
+          "y0": 0.0,
+          "y1": 1.04,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.55,
+          "u1": 0.55,
+          "v0": -0.29,
+          "v1": 0.3,
+          "y0": 1.04,
+          "y1": 1.25,
+          "t": 0
+        }
+      ],
+      "sha256": "3b3218294a48cef9b7bb5b3e7628570680605b41ba47d19bad869641327fdd40"
+    },
+    {
+      "kind": "seat_row",
+      "kindKey": "PROP_SEAT_ROW",
+      "file": "seat_row.glb",
+      "class": "B",
+      "collision": {
+        "w": 2.0,
+        "d": 0.75
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 0.95,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.9925,
+          0.0,
+          -0.3982
+        ],
+        "max": [
+          0.9925,
+          0.9482,
+          0.25
+        ]
+      },
+      "tris": 1818,
+      "bytes": 42688,
+      "materials": [
+        "yr_keyDark",
+        "yr_woodMid",
+        "yr_woodDark",
+        "yr_seatPlush",
+        "yr_applianceSteel"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -1.0,
+          "u1": 1.0,
+          "v0": -0.375,
+          "v1": 0.375,
+          "y0": 0.0,
+          "y1": 0.95
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -1.0,
+          "u1": 1.0,
+          "v0": -0.35,
+          "v1": 0.24,
+          "y0": 0.0,
+          "y1": 0.66,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.96,
+          "u1": 0.96,
+          "v0": -0.4,
+          "v1": -0.22,
+          "y0": 0.66,
+          "y1": 0.95,
+          "t": 0
+        }
+      ],
+      "sha256": "9adee65713b1e6581192c7b3c9414237144120fd33a05c88841de0e917329b24"
+    },
+    {
+      "kind": "road_case",
+      "kindKey": "PROP_ROAD_CASE",
+      "file": "road_case.glb",
+      "class": "B",
+      "collision": {
+        "w": 1.2,
+        "d": 0.6
+      },
+      "overhang": {
+        "w": 0.0,
+        "d": 0.0
+      },
+      "heightBudget": 1.0,
+      "floorZ": 0.0,
+      "footprintCells": [
+        [
+          0,
+          0
+        ]
+      ],
+      "anchor": "center",
+      "budget": {
+        "tris": 2000,
+        "bytes": 80000
+      },
+      "bounds": {
+        "min": [
+          -0.608,
+          0.002,
+          -0.308
+        ],
+        "max": [
+          0.608,
+          0.994,
+          0.308
+        ]
+      },
+      "tris": 1456,
+      "bytes": 52152,
+      "materials": [
+        "yr_tvBlack",
+        "yr_legMetal",
+        "yr_slotDark",
+        "yr_caseBlack",
+        "yr_applianceSteel",
+        "yr_chrome",
+        "yr_paperWhite",
+        "yr_woodMid"
+      ],
+      "sockets": [],
+      "colliders": [
+        {
+          "u0": -0.6,
+          "u1": 0.6,
+          "v0": -0.3,
+          "v1": 0.3,
+          "y0": 0.0,
+          "y1": 1.0
+        }
+      ],
+      "proxies": [
+        {
+          "name": "occ_A",
+          "u0": -0.6,
+          "u1": 0.6,
+          "v0": -0.3,
+          "v1": 0.3,
+          "y0": 0.1,
+          "y1": 1.0,
+          "t": 0
+        },
+        {
+          "name": "occ_B",
+          "u0": -0.6,
+          "u1": 0.6,
+          "v0": -0.3,
+          "v1": 0.3,
+          "y0": 0.0,
+          "y1": 0.1,
+          "t": 0
+        }
+      ],
+      "sha256": "a54695f4cca0688899909d15b2c1e0e71a0c9e95e24e38e1c533aabe9fc6cb3a"
+    }
+  ]
+}

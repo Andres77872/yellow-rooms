@@ -8,6 +8,8 @@
     "build": "vite build",
     "build:furniture": "blender --background --factory-startup --python scripts/blender/build_furniture.py",
     "build:enemies": "blender --background --factory-startup --python scripts/blender/build_enemies.py",
+    "build:pack": "blender --background --factory-startup --python scripts/blender/build_pack.py --",
+    "build:music": "node scripts/build-music.mjs",
     "audit:world": "node scripts/audit-worldgen.mjs",
     "review:structures": "node scripts/review-structures.mjs",
     "report:liminal": "node scripts/liminal-report.mjs",

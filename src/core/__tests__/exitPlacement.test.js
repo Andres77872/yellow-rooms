@@ -10,7 +10,12 @@ import { DEFAULT_WORLD_CONFIG } from '../../world/config.js'
 import { hashStr } from '../../world/core/hash.js'
 import { generateChunk } from '../../world/generate.js'
 import { chunkStairs, stairStrip } from '../../world/structures/slab.js'
-import { MAP_FAMILY_ORDER, worldConfigForFamily } from '../../world/mapFamily.js'
+import { worldConfigForFamily } from '../../world/mapFamily.js'
+import { familiesWith } from '../../world/families/registry.js'
+
+// Office-semantics matrix: only the building families (spec §11.4). The
+// liminal families have their own per-family suites.
+const BUILDING_FAMILIES = familiesWith('buildingMatrices')
 
 const placement = (seedText, level) => {
   const worldSeed = hashStr(`${seedText}#${level}`)
@@ -84,7 +89,7 @@ describe('cross-floor exit placement', () => {
     }
   })
 
-  it.each(MAP_FAMILY_ORDER)('places %s objectives on actual floor outside its generated stair strips', (family) => {
+  it.each(BUILDING_FAMILIES)('places %s objectives on actual floor outside its generated stair strips', (family) => {
     const config = worldConfigForFamily(family)
     const seeds = [...Array.from({ length: 60 }, (_, index) => index), 67, 102]
     for (const index of seeds) {

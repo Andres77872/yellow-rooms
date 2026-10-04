@@ -13,6 +13,15 @@ adds sources this review had not used, turns them into generator rules and
 metrics, measures every family with those metrics, and records the map-editor
 prototypes (structure templates, kind lab, lighting lab) built to test them.
 
+**2026-10-02 update:** the twelve map types researched in
+[liminal_maps/](liminal_maps/README.md) now exist as editor kind-lab
+prototypes. Their measured rows are marked `*<id>` in
+[Measured: families and prototype kinds](#measured-families-and-prototype-kinds),
+their grammars are in the [kinds table](#new-map-kinds-prototyped-in-the-editors-kind-lab),
+and [their gaps against each map document's targets](#the-twelve-liminal-kinds-against-their-12-targets)
+are listed after it. They are editor prototypes only: the game does not load
+editor maps.
+
 This review separates published evidence and developer postmortems from project
 design inference. Research does not prescribe a single frightening floor plan;
 it gives constraints that make the procedural choices more legible, navigable,
@@ -421,6 +430,12 @@ reads as a ring):
 `npm run report:liminal -- --seeds 12` (12 seeds per kind; families sampled
 as 5×5-chunk patches on floor 0 away from spawn; `*` rows are the kind-lab
 prototypes described below). Medians; sightlines in cells (3 m), capped at 48.
+The twelve rows from `*stairwell` down, added 2026-10-02, are editor
+prototypes measured in a separate run:
+`npm run report:liminal -- --family '' --prototypes <the twelve> --seeds 8`,
+seeds `liminal-0` to `liminal-7`, with every storey of each built map
+pooled, as for all `*` rows. That run's table prints median (p10–p90). Its
+five original kinds were not re-run, so their rows keep the 12-seed values.
 
 | kind | loops/100 spaces | dead-end share | ring share (c+d) | ICD | intelligibility | darkness | dark Moran's I | sightline median | sightline p90 | isovist median | room repetition |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -434,6 +449,18 @@ prototypes described below). Medians; sightlines in cells (3 m), capped at 48.
 | *mall | 41.8 | 0.28 | 0.70 | 6.92 | 0.25 | 0.75 | 0.89 | 25.4 | 33.1 | 288 | 1.00 |
 | *hospital | 5.4 | 0.76 | 0.22 | 9.50 | 0.47 | 0.49 | 0.81 | 5.7 | 22.5 | 15 | 0.96 |
 | *school | 6.9 | 0.28 | 0.28 | 3.67 | 0.05 | 0.63 | 0.81 | 9.5 | 20.5 | 22 | 0.88 |
+| *stairwell | 11.1 | 0.29 | 0.53 | 4.00 | 0.69 | 0.33 | 0.56 | 6.7 | 9.8 | 23 | 0.78 |
+| *nightlot | 62.5 | 0.05 | 0.94 | 4.07 | 0.33 | 0.80 | 0.86 | 48.0 | 48.0 | 2396 | 0.00 |
+| *showroom | 47.5 | 0.44 | 0.92 | 4.61 | 0.18 | 0.04 | 0.60 | 19.5 | 24.6 | 143 | 0.55 |
+| *poolrooms | 61.4 | 0.06 | 0.95 | 3.97 | 0.56 | 0.20 | 0.79 | 24.0 | 34.6 | 319 | 0.00 |
+| *babel | 9.6 | 0.03 | 0.38 | 3.00 | 0.00 | 0.12 | 0.83 | 7.6 | 11.7 | 28 | 0.99 |
+| *suburb | 35.6 | 0.21 | 0.79 | 4.73 | 0.08 | 0.78 | 0.83 | 37.2 | 48.0 | 432 | 0.78 |
+| *terminal | 21.1 | 0.27 | 0.53 | 4.85 | 0.44 | 0.50 | 0.87 | 26.0 | 35.8 | 287 | 0.67 |
+| *theater | 17.4 | 0.26 | 0.61 | 3.71 | 0.28 | 0.89 | 0.84 | 23.5 | 28.4 | 176 | 0.00 |
+| *playplace | 22.9 | 0.17 | 0.83 | 3.52 | 0.40 | 0.00 | 0.00 | 8.5 | 11.5 | 22 | 0.00 |
+| *train | 20.0 | 0.24 | 0.72 | 4.00 | 0.48 | 0.35 | 0.89 | 48.0 | 48.0 | 134 | 0.60 |
+| *house | 12.9 | 0.28 | 0.56 | 4.50 | 0.19 | 0.68 | 0.82 | 14.0 | 20.5 | 142 | 0.27 |
+| *funhouse | 14.4 | 0.30 | 0.60 | 3.69 | 0.30 | 0.80 | 0.75 | 17.9 | 25.5 | 50 | 0.91 |
 
 What it shows about the families:
 
@@ -452,6 +479,19 @@ What it shows about the families:
   reach 0.81–0.89.
 - **Repetition is incidental.** 4–31% of family rooms repeat another's
   layout; no family repeats a unit deliberately and then mutates it.
+
+What the twelve liminal kinds add (2026-10-02 rows):
+
+- **The spread is wider than any family's.** Median isovists run from 2396
+  cells (`nightlot`, an open plane) and 432 (`suburb`) down to 23
+  (`stairwell`) and 22 (`playplace`). Darkness runs from 0.00 (`playplace`,
+  every light on) to 0.89 (`theater`, where the ghost light is the house's
+  only lit lamp).
+- **Repetition is deliberate.** `babel` (0.99), `funhouse` (0.91),
+  `stairwell` and `suburb` (0.78) have the highest room repetition. Each
+  repeats a unit by design.
+- **`babel` is the uniform lattice its document asks for:**
+  intelligibility 0.00, dead-end share 0.03, ICD 3.00.
 
 ### Lighting lab (measured)
 
@@ -475,7 +515,13 @@ coverage is lost; holding darkness constant needs a smaller zone budget.
 ### New map kinds (prototyped in the editor's kind lab)
 
 Each is a deterministic, audit-clean map built from the existing primitives
-(`src/editor/prototypes.js`, tested in `prototypes.test.js`):
+(`src/editor/prototypes.js`, tested in `prototypes.test.js`). The twelve
+rows from *Endless stairwell* down were added on 2026-10-02 from
+[liminal_maps/](liminal_maps/README.md) (`src/editor/kinds/<id>.js`, tested
+in `kind-<id>.test.js`). They are grey-box layouts, each with its own
+palette and painted prop stand-ins but no new engine system. Their documents
+also call for systems the engine lacks, such as water, sky, motion, portals
+and mirrors, so each build's notes list the stand-ins it uses instead.
 
 | Kind | Grammar | Liminal/horror function |
 | --- | --- | --- |
@@ -484,11 +530,67 @@ Each is a deterministic, audit-clean map built from the existing primitives
 | Dead mall | bridged galleria through 3 storeys; storefront rows (mostly dark, open fronts); dark anchor hall; food court | Occluded depth behind glass, repeated storefronts, scale |
 | Hospital ward | racetrack corridor round a support core; 2×2 patient rooms outside it; a Nightingale ward as a long dead end; a lit nurse station | Rows of empty beds; one refuge landmark |
 | School at night | double-loaded corridor; 16 classrooms with desks; lockers; stair cores at both ends; sparse light | A familiar place outside its time |
+| Endless stairwell (*stairwell) | two enclosed switchback shafts, 16 storeys; one fire door per landing onto a short dead-end fragment whose kind holds for 3–6 storeys; exactly three transfer corridors (the only cycles); level plates lie about once per 8 storeys per shaft | Descent as the verb; recognise a storey, then doubt its number |
+| Night parking lot (*nightlot) | one 4×4-chunk open plane on one storey; four twin-pole islands on breaker circuits that fail whole (sodium and mercury heads); a lit canopy refuge and kiosk; a store frontage; the exit a dark corner; an unlit verge round the edge | Darkness, not walls, bounds the space; crossings between pools of light |
+| Infinite showroom (*showroom) | upper storey: a 2-wide serpentine route of four bands lined with open-fronted room sets, each layout shown 2–3× and then once mutated, plus unmarked shortcut gaps; lower storey: market hall, rack warehouse on monumental piers, one lit checkout | Display rooms repeat along a forced route, then the odd one |
+| Poolrooms (*poolrooms) | tiled chambers on a deck with railed voids over drained, storey-deep basins; a natatio with a glass gallery above, a lap hall, a dark pit room holding the exit, a sentō; cyan troffers stand in for skylights and die over the deep ends | The canonical tiled pool, read through light and depth without water |
+| Library of Babel (*babel) | an offset lattice of identical 6×4 galleries, each round a railed 2×2 shaft, joined only through narrow lectern vestibules, so each storey is one serpentine chain; stair vestibules weave 5 storeys; a red-lit gallery is the exit | Perfect regularity: the same gallery in every direction |
+| Sleeping suburb (*suburb) | one superblock: a loop collector with cul-de-sac bulbs (no crossroads); houses from five models, mirrored in pairs and furnished as copies; privacy fences make a yard maze; each house wakes (porch, window, TV) or sleeps; most streetlights dead | Identical houses at 3 a.m.; a porch light marks the exit |
+| Airport terminal (*terminal) | a comb: one spine and two dead-end piers of holdrooms glazed onto a sealed apron, jet bridges ending at closet doors, one pier dead and one lit; check-in and a railed security serpentine; baggage hall below, mezzanine over a bridged atrium | Non-place: long glazed views onto a dark apron, bridges to nowhere |
+| Empty theater (*theater) | one 5-storey catalog volume: stalls facing the stage, dress and upper circles round the house void, a railed pit, a 4-storey fly-tower void with catwalk bridges, a trap room; backstage, a corridor with a door every cell; only the ghost light burns in the house | Every seat faces one bulb; the house looks back |
+| Playplace (*playplace) | a 3-storey play hall whose voids widen upward (ball pit, then a wider well) under railed net bridges; padded panels cut each storey into bays; a 1-wide crawl-tube grid closes tube-only loops; foyer with the mascot, identical party rooms, an arcade | A child-scale padded labyrinth after closing; short sight lines |
+| Endless train (*train) | seven identical-looking 7-cell cars and two cabs stopped at one station; one aisle through every gangway; a platform with wide door openings beside three cars; a concourse above with ticket gates; the station name drifts between plates | The one-point view down every gangway; a half-dead station beside the lit train |
+| House larger inside (*house) | a 2-room façade on a hedged yard whose interior runs on into sealed mass: residential rooms, a stair past the roof line, a P.T. loop of four identical L-hallways (one mutated), a dark 3-storey Great Hall reached from the top | More inside than outside; the same hallway again |
+| Funhouse (*funhouse) | one pavilion: a cell maze with 10–20% of walls reopened and single glass panes, holding a glass maze, a mirror maze (half the maze reflected by `FloorPlan.mirror`, with one lie) and a level room; above, a dark ride of UV-lit scenes behind bump doors | Walls that lie: glass shows exits you cannot reach, and the reflection is not quite one |
 
 The structure roadmap's concepts are also authorable as templates
 (split-level overlook, twin-void atrium, repetition-anomaly wing,
 compression-release suite, switchback stairwell, light wells and bridged
 atria).
+
+### The twelve liminal kinds against their §12 targets
+
+Each map document in [liminal_maps/](liminal_maps/README.md) ends with
+measurable targets (its §12). The table compares each kind with them. Each
+cell gives the measured value and then the target in parentheses. Values
+are the 8-seed medians in the table above unless the cell names another
+source: a kind test (`src/editor/__tests__/kind-<id>.test.js`, whose
+comments record the band measured over its seeds), the notes of seed
+`proto`, or the same report run split by storey. The last column lists
+targets that nothing measures yet. Most of them need engine systems that do
+not exist ([13-shared-systems.md](liminal_maps/13-shared-systems.md)), named
+in parentheses. The family-distinctness rows are left out, because no kind
+has been promoted to a family.
+
+| kind | met | not met | not measured |
+| --- | --- | --- | --- |
+| *stairwell | darkness 0.33 (0.25–0.4); room repetition 0.78 (≥ 0.7) | dead-end share 0.29 (0.6–0.8); loops 11.1 per 100 spaces (3–8); sightline median 6.7 (≤ 6); dark Moran's I 0.56 (≥ 0.85); mutations: the plates lie once per 8-storey band per shaft, and bricked doors and closet wedges come on top (exactly one per 8 storeys); the core is closed and 16 storeys tall, so there is no view down a well (≥ 30 storeys) | share of the route on flights |
+| *nightlot | darkness 0.80 (0.65–0.85); dark crossings between lit pools median 9, p90 about 13 cells (8–14, ≤ 20; kind test); sightline at the 48-cell cap (cap almost everywhere) | dark Moran's I 0.86 (≥ 0.9; 0.85–0.87 in the kind test) | sky share (no sky, S3); lit-island isovist; light-graph cycles |
+| *showroom | route share of the showroom storey 0.415–0.44 (one-way share 0.4–0.6; kind test); shortcut saving 32–50 cells (≥ 30; kind test); on the showroom storey alone (cy 1, split by storey): room repetition 0.68 with ≥ 1 mutation (0.5–0.7), sightline median 8.8 (8–14), loops 20.0 per 100 spaces (10–20, at the top edge; 14.6–23.9 by seed); day darkness 0.04 (≤ 0.05) | the lower storey (market hall and rack warehouse) reads sightline median 19.5 (8–14) and loops 47.5 per 100 spaces (10–20) on every seed, and these set the pooled medians above | night darkness (no world clock) |
+| *poolrooms | darkness 0.20 (0.15–0.3), with ≥ 0.7 of the basin storey's dark cells in the drained pools (kind test); sightline median 24.0 (isovist median 18–30 cells); ≥ 3 loops on every storey, all on dry edges (≥ 3 counting swim edges, ≥ 1 dry only; kind test) | — | wet and deep share, submerged passage length, one-way share (no water, S1/S2) |
+| *babel | room repetition 0.99 (≥ 0.95); intelligibility 0.00 (≤ 0.05); dead-end share 0.03 (≈ 0); darkness 0.12 (0.05–0.15); sightline median 7.6 (4–8); loops 9.6 per 100 spaces (5–15) | the loops form in plan, not only through stairs; the darkness is clustered, not uniform (dark Moran's I 0.83); 5 storeys whose shafts end at the first and last (≥ 20 visible) | the variance of integration |
+| *suburb | street dead-end share 0.40 on `proto` (0.3–0.5) with no crossroads (4-way ≤ 0.15); exterior darkness 0.76–0.87 (0.7–0.9; kind test); 5 models, with 0.79–0.86 of houses sharing a model with a neighbour (4–6 models, ≥ 0.6; kind test); loops 35.6 per 100 spaces (≥ 1 per district) | — | street-graph intelligibility (below the office median; the whole-storey space graph gives 0.08, below office's 0.13 above); sky share; lit-island isovist and lit-window visibility |
+| *terminal | darkness 0.50 (0.3–0.5, at the top edge; departures 0.42–0.53 in the kind test); mezzanine dead-end share 0.47 (0.35–0.6; kind test); glass share 0.28–0.37 of closed edges on departures (0.3–0.5, overlapping at the low edge; kind test) | departures dead-end share about 0.27 (a two-pier comb; kind test); sightline median 26.0 (isovist 30–48), p90 35.8; loops 21.1 per 100 spaces (≤ 1 per pier, only through the lower or upper level), closing within each storey: 24–25 of them on departures alone (split by storey) | ride share (no belts) |
+| *theater | backstage sightline median about 6.3 (isovist 4–8; kind test) | house darkness 0.92–0.95 (0.75–0.9), because only the ghost light burns; house sightline median about 26 (48, the cap), because the volume is 26 cells across; fly tower 4 storeys (6–7) (kind test and notes) | one-way share (no traps, S1); house and backstage intelligibility apart |
+| *playplace | darkness 0.00 (0 with lights on); ≥ 2 loops on every storey and a tube-only cycle (≥ 2 per hall, ≥ 1 crawl-only; kind test) | sightline median 8.5 (isovist 4–8 cells) | clearance profile, one-way share, ball share (S1/S2/S5/S9); lights-out darkness (S13) |
+| *train | darkness on the train 0.10–0.16 (0.05–0.15) and at the station 0.34–0.63 (0.4–0.8), both overlapping their bands; ≥ 1 loop per station, through the station cars' platform doors (kind test) | aisle sightline at the 48 cap (7–21), because door leaves do not block the metric (kind test) | loops on the train alone (0); ride share and stop decisions (no motion or schedule, S13/S16) |
+| *house | interior about 12× the shell footprint (≥ 3 by depth 8; kind test); Great Hall isovist about 145 cells (≥ 30; kind test) | room isovist about 11 cells (3–6), because rooms are 3×2 or 3×3 and see out through their door (kind test); room repetition 0.27 (0.3–0.5); loops 12.9 per 100 spaces (≥ 2 per 10 nodes) | portal density, overlap ratio, plenum crawl (no seams, swaps or portals, S7) |
+| *funhouse | glass maze 60–90% glass (0.6–0.9) and pavilion glass 0.20–0.25 (0.2–0.4); apparent isovist 3.6–6.6× the real one (≥ 3×); 17% of walls reopened on `proto` (10–20%); maze-storey dead-end share 0.22–0.26 (0.15–0.3) (all kind test or notes) | — | one-way share, tilt and rotation (static engine); the mirrors are glass onto duplicated geometry |
+
+In short, poolrooms, suburb and funhouse meet every target measured here,
+though suburb's street-graph intelligibility is only proxied by the whole
+storey's. Babel's numbers fall in their bands, but its loops form in plan,
+its darkness clusters instead of staying uniform, and its shafts show 5
+storeys, not 20. The showroom meets its route targets on the showroom storey; its
+lower storey's long aisles and parallel loops hold the pooled sightline and
+loop medians above their bands. Some misses come straight from a
+stand-in: the closed stair core has no well to look down, the theatre's
+house is a 26-cell catalog volume rather than 48 cells deep, and the house's
+rooms are sized for the furnishing grammar. Others are layout tuning that is
+still open: the stairwell's dead-end share, loop count, dark clustering and
+mutation rate, the terminal's departures comb and in-storey loops, and the
+house's room repetition. The targets that need water, sky, motion, portals
+or a clock wait on the shared systems.
 
 ### Recommendations for the generator
 

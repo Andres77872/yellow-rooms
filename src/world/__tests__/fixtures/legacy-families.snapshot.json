@@ -1,0 +1,1324 @@
+{
+ "schema": 1,
+ "families": {
+  "office": {
+   "note": "room districts · empty bullpens · tall atria",
+   "titleOption": "<option value=\"office\">OFFICE</option>",
+   "requiresVoidSafety": false,
+   "palette": "04484ee02a20ad10",
+   "surfaceSets": {
+    "0": "e1298e7947d1c56b",
+    "1": "870fd07c63d997d5",
+    "12345": "db63074f0a431542"
+   },
+   "roomCategory": "7e3570f2f0ea5852",
+   "zoneCategory": "8f5a0d7ec957e6b9",
+   "step": {
+    "grid": "351000d4f3d46a09",
+    "open": "carpet",
+    "bridge": "deck"
+   },
+   "doors": {
+    "vocab": "5aa4ad885c184a16",
+    "types": [
+     "veneer",
+     "panel",
+     "service",
+     "wet",
+     "fire",
+     "internal"
+    ],
+    "probes": "5d7797a17c3dc8b5",
+    "schedules": "c2378b3fbc8cb0a4",
+    "scheduledKits": "a7e9b5187970337f"
+   },
+   "signPlates": {
+    "table": "6280db02a6b101b9",
+    "resolved": "6280db02a6b101b9",
+    "cells": "14728b00e3c32fce",
+    "atCells": "c0e3692b9ba9ad72",
+    "byRole": "62c52e8abe3d71a5"
+   },
+   "leafFinish": {
+    "finish": 0,
+    "rust": 0
+   },
+   "audio": {
+    "spaceRow": "a76612b8b329a12a",
+    "paRow": "c561d48a01de8dcd",
+    "space": "a76612b8b329a12a",
+    "pa": "c561d48a01de8dcd"
+   },
+   "mapInspectColor": "#d8b24a",
+   "decalAtlas": {
+    "calls": 6258,
+    "sha": "09f3899b17d7697d"
+   },
+   "config": {
+    "config": "e1a17d6039c61165",
+    "profiles": "e500110722ff93ac",
+    "ownProfile": {
+     "enabled": true
+    },
+    "resolved": "4781e2fdd027abc3",
+    "orOffice": {
+     "family": "office",
+     "fellBack": false,
+     "config": {
+      "body": "e1a17d6039c61165",
+      "profiles": "e500110722ff93ac"
+     }
+    },
+    "explore": {
+     "body": "e1a17d6039c61165",
+     "profiles": "e500110722ff93ac"
+    },
+    "roomCatalog": "0d0f14e676dc8688",
+    "ordinaryThemes": "ece9a41bdbae2135"
+   },
+   "chunks": [
+    {
+     "at": [
+      0,
+      0,
+      0
+     ],
+     "mapFamily": "office",
+     "dressing": {
+      "trim": "80420ca336b6c664",
+      "props": "b00105c0f774c570",
+      "signs": "232be4d1228c51d8",
+      "decals": "d91587f92a0fa6e8",
+      "counts": [
+       60,
+       219,
+       73,
+       31
+      ]
+     },
+     "doorways": {
+      "count": 12,
+      "sha": "6d2716166b28dc11"
+     },
+     "doorKits": "678af4303012bd15",
+     "doorFunction": {
+      "count": 12,
+      "sha": "40f7122c12983597"
+     },
+     "doorSchedule": "4dd2791e3a104b81"
+    },
+    {
+     "at": [
+      1,
+      0,
+      -1
+     ],
+     "mapFamily": "office",
+     "dressing": {
+      "trim": "5d223fca5d017d26",
+      "props": "9b52ae0c60024543",
+      "signs": "92f6731e9fdcb297",
+      "decals": "9da67e0411e7be03",
+      "counts": [
+       72,
+       132,
+       15,
+       27
+      ]
+     },
+     "doorways": {
+      "count": 16,
+      "sha": "456cbe837bb5915f"
+     },
+     "doorKits": "107e74dc3ec50883",
+     "doorFunction": {
+      "count": 16,
+      "sha": "374cd08f71dfad4f"
+     },
+     "doorSchedule": "7c74b45163b2df45"
+    },
+    {
+     "at": [
+      -2,
+      1,
+      3
+     ],
+     "mapFamily": "office",
+     "dressing": {
+      "trim": "75bdc441b71303d3",
+      "props": "909ef01a9a24c104",
+      "signs": "b2246fab945c1a7f",
+      "decals": "96f690f8f75f81c4",
+      "counts": [
+       72,
+       153,
+       43,
+       25
+      ]
+     },
+     "doorways": {
+      "count": 10,
+      "sha": "f43827c3e18aff2c"
+     },
+     "doorKits": "d1d2574e749ebafc",
+     "doorFunction": {
+      "count": 10,
+      "sha": "eb0c88437cbb6c63"
+     },
+     "doorSchedule": "73894ef011b3f0ce"
+    }
+   ],
+   "exitPlacements": [
+    [
+     8,
+     2,
+     -6,
+     10,
+     10
+    ],
+    [
+     6,
+     -3,
+     4,
+     8,
+     3
+    ],
+    [
+     -9,
+     -1,
+     -6,
+     6,
+     3
+    ],
+    [
+     -3,
+     -1,
+     6,
+     10,
+     5
+    ],
+    [
+     -5,
+     -2,
+     -2,
+     4,
+     10
+    ],
+    [
+     -4,
+     -4,
+     -4,
+     6,
+     7
+    ],
+    [
+     -6,
+     3,
+     -8,
+     10,
+     9
+    ],
+    [
+     -6,
+     5,
+     -9,
+     10,
+     5
+    ],
+    [
+     0,
+     1,
+     8,
+     3,
+     3
+    ],
+    [
+     -1,
+     -3,
+     9,
+     7,
+     5
+    ]
+   ],
+   "priority": "53bdd8049ea58bf3"
+  },
+  "sewer": {
+   "note": "dry galleries · confluences · manhole stairs",
+   "titleOption": "<option value=\"sewer\">SEWER</option>",
+   "requiresVoidSafety": false,
+   "palette": "f0dda59ba32091e1",
+   "surfaceSets": {
+    "0": "07c7ee03c0b7d267",
+    "1": "514a21ba15ab75d8",
+    "12345": "49713166b47d2c01"
+   },
+   "roomCategory": "7e3570f2f0ea5852",
+   "zoneCategory": "8f5a0d7ec957e6b9",
+   "step": {
+    "grid": "651a4d01fbac14b1",
+    "open": "concrete",
+    "bridge": "deck"
+   },
+   "doors": {
+    "vocab": "01f8570a215bfe08",
+    "types": [
+     "grille",
+     "vision",
+     "service",
+     "bulkhead"
+    ],
+    "probes": "affaa802e461f228",
+    "schedules": "e2abdf7de81f9462",
+    "scheduledKits": "ae3993f53acaeea9"
+   },
+   "signPlates": {
+    "table": "c83087faff0f4ab8",
+    "resolved": "c83087faff0f4ab8",
+    "cells": "14728b00e3c32fce",
+    "atCells": "f07f6d917c72fa01",
+    "byRole": "95263e8694317427"
+   },
+   "leafFinish": {
+    "finish": 2,
+    "rust": 0.75
+   },
+   "audio": {
+    "spaceRow": "568ecebad0187ba2",
+    "paRow": "da099620031f4e4a",
+    "space": "568ecebad0187ba2",
+    "pa": "da099620031f4e4a"
+   },
+   "mapInspectColor": "#7fbf8f",
+   "decalAtlas": {
+    "calls": 6352,
+    "sha": "1c98171c1506ebd5"
+   },
+   "config": {
+    "config": "cd9268de213d96cd",
+    "profiles": "e500110722ff93ac",
+    "ownProfile": {
+     "enabled": true,
+     "zoneBands": [
+      {
+       "id": 3,
+       "max": 1.01
+      }
+     ],
+     "maxLoops": 2,
+     "rightTurnChance": 0.65,
+     "lampPhase": 2,
+     "lampChance": 0.35
+    },
+    "resolved": "5ce156ce32bfbeb7",
+    "orOffice": {
+     "family": "sewer",
+     "fellBack": false,
+     "config": {
+      "body": "cd9268de213d96cd",
+      "profiles": "e500110722ff93ac"
+     }
+    },
+    "explore": {
+     "body": "cd9268de213d96cd",
+     "profiles": "e500110722ff93ac"
+    },
+    "roomCatalog": "67a9d5e2d8e1618c",
+    "ordinaryThemes": "ece9a41bdbae2135"
+   },
+   "chunks": [
+    {
+     "at": [
+      0,
+      0,
+      0
+     ],
+     "mapFamily": "sewer",
+     "dressing": {
+      "trim": "4f53cda18c2baa0c",
+      "props": "92f2f85f5232fbf9",
+      "signs": "9c305178fb0f2f20",
+      "decals": "995f7a01ad0cf45c",
+      "counts": [
+       0,
+       217,
+       1,
+       10
+      ]
+     },
+     "doorways": {
+      "count": 2,
+      "sha": "a7b46cd737785539"
+     },
+     "doorKits": "1985b7b497937e38",
+     "doorFunction": {
+      "count": 2,
+      "sha": "2bf05e62e3221c9c"
+     },
+     "doorSchedule": "8ab734233b2825c6"
+    },
+    {
+     "at": [
+      1,
+      0,
+      -1
+     ],
+     "mapFamily": "sewer",
+     "dressing": {
+      "trim": "4f53cda18c2baa0c",
+      "props": "376c9c5be862d879",
+      "signs": "aa047cd7760a4df0",
+      "decals": "4a467b8d501f25f0",
+      "counts": [
+       0,
+       262,
+       2,
+       9
+      ]
+     },
+     "doorways": {
+      "count": 2,
+      "sha": "977bb12eed97fe68"
+     },
+     "doorKits": "1985b7b497937e38",
+     "doorFunction": {
+      "count": 2,
+      "sha": "1e9b9941760a11fa"
+     },
+     "doorSchedule": "fc6ab3e1aae666c8"
+    },
+    {
+     "at": [
+      -2,
+      1,
+      3
+     ],
+     "mapFamily": "sewer",
+     "dressing": {
+      "trim": "4f53cda18c2baa0c",
+      "props": "32672dd4c4a5d2c6",
+      "signs": "bfab45fdc8a51f44",
+      "decals": "b2933818f7ebf118",
+      "counts": [
+       0,
+       166,
+       2,
+       9
+      ]
+     },
+     "doorways": {
+      "count": 2,
+      "sha": "1adc897728bc6a49"
+     },
+     "doorKits": "1985b7b497937e38",
+     "doorFunction": {
+      "count": 2,
+      "sha": "6f6d54daa8783acb"
+     },
+     "doorSchedule": "d36c57a9afc1da12"
+    }
+   ],
+   "exitPlacements": [
+    [
+     8,
+     2,
+     -6,
+     10,
+     10
+    ],
+    [
+     6,
+     -3,
+     4,
+     8,
+     3
+    ],
+    [
+     -9,
+     -1,
+     -6,
+     7,
+     3
+    ],
+    [
+     -3,
+     -1,
+     6,
+     9,
+     5
+    ],
+    [
+     -5,
+     -2,
+     -2,
+     3,
+     10
+    ],
+    [
+     -4,
+     -4,
+     -4,
+     7,
+     7
+    ],
+    [
+     -6,
+     3,
+     -8,
+     4,
+     10
+    ],
+    [
+     -6,
+     5,
+     -9,
+     3,
+     6
+    ],
+    [
+     0,
+     1,
+     8,
+     7,
+     5
+    ],
+    [
+     -1,
+     -3,
+     9,
+     4,
+     3
+    ]
+   ],
+   "priority": "faf1171660bad9df"
+  },
+  "tower": {
+   "note": "broad galleries · service cores · skybridges",
+   "titleOption": "<option value=\"tower\">TOWER</option>",
+   "requiresVoidSafety": true,
+   "palette": "0abb155021c5845a",
+   "surfaceSets": {
+    "0": "43d4e6caed26f654",
+    "1": "dbf01c758e8126b7",
+    "12345": "8589472ae00fb71b"
+   },
+   "roomCategory": "7e3570f2f0ea5852",
+   "zoneCategory": "8f5a0d7ec957e6b9",
+   "step": {
+    "grid": "4ddc199718dde5d6",
+    "open": "tile",
+    "bridge": "deck"
+   },
+   "doors": {
+    "vocab": "6e0030907984fa4e",
+    "types": [
+     "metal",
+     "sign",
+     "service",
+     "wet",
+     "fire",
+     "internal"
+    ],
+    "probes": "ca193ce72d3dad59",
+    "schedules": "adffb9874ea692e8",
+    "scheduledKits": "e84e529caac601ff"
+   },
+   "signPlates": {
+    "table": "8dbb0f2e58d9e93b",
+    "resolved": "8dbb0f2e58d9e93b",
+    "cells": "14728b00e3c32fce",
+    "atCells": "a847a67799189e5e",
+    "byRole": "62c52e8abe3d71a5"
+   },
+   "leafFinish": {
+    "finish": 2,
+    "rust": 0.08
+   },
+   "audio": {
+    "spaceRow": "f1c5a2d028c8dfb6",
+    "paRow": "f5b76a5f69a897f9",
+    "space": "f1c5a2d028c8dfb6",
+    "pa": "f5b76a5f69a897f9"
+   },
+   "mapInspectColor": "#7fd0e8",
+   "decalAtlas": {
+    "calls": 6004,
+    "sha": "1b1ea987eb27b59e"
+   },
+   "config": {
+    "config": "8ab03412ba57a2da",
+    "profiles": "e500110722ff93ac",
+    "ownProfile": {
+     "enabled": true,
+     "levels": 3,
+     "participants": 2,
+     "skybridgeLevelOffset": 1
+    },
+    "resolved": "957db87e2dd80b2c",
+    "orOffice": {
+     "family": "tower",
+     "fellBack": false,
+     "config": {
+      "body": "8ab03412ba57a2da",
+      "profiles": "e500110722ff93ac"
+     }
+    },
+    "explore": {
+     "body": "8ab03412ba57a2da",
+     "profiles": "e500110722ff93ac"
+    },
+    "roomCatalog": "dbab695b73c1d141",
+    "ordinaryThemes": "ece9a41bdbae2135"
+   },
+   "chunks": [
+    {
+     "at": [
+      0,
+      0,
+      0
+     ],
+     "mapFamily": "tower",
+     "dressing": {
+      "trim": "8e4d87751b37320b",
+      "props": "cf251a65950a860d",
+      "signs": "abba05d0263771e3",
+      "decals": "170913a8ee57c728",
+      "counts": [
+       12,
+       100,
+       30,
+       11
+      ]
+     },
+     "doorways": {
+      "count": 2,
+      "sha": "9fac7b47388e5527"
+     },
+     "doorKits": "f6fc6f988d3ae58c",
+     "doorFunction": {
+      "count": 2,
+      "sha": "4610f6907a42405f"
+     },
+     "doorSchedule": "56d1f42d304416ad"
+    },
+    {
+     "at": [
+      1,
+      0,
+      -1
+     ],
+     "mapFamily": "tower",
+     "dressing": {
+      "trim": "ae2993d2a15ce019",
+      "props": "621d5c24d7e861c3",
+      "signs": "32e2bcb0ceaba1ec",
+      "decals": "a213c0b27f0a95bb",
+      "counts": [
+       42,
+       143,
+       45,
+       29
+      ]
+     },
+     "doorways": {
+      "count": 5,
+      "sha": "9f5f27e3cc11bb41"
+     },
+     "doorKits": "704364c5ec6f030a",
+     "doorFunction": {
+      "count": 5,
+      "sha": "3253909d0d7719db"
+     },
+     "doorSchedule": "0dfcb54d26276f38"
+    },
+    {
+     "at": [
+      -2,
+      1,
+      3
+     ],
+     "mapFamily": "tower",
+     "dressing": {
+      "trim": "5d1c2ba77eb46fc3",
+      "props": "1fb4e6b877f58d33",
+      "signs": "77a8ad92f1a46797",
+      "decals": "771383fce7e90d28",
+      "counts": [
+       40,
+       101,
+       5,
+       3
+      ]
+     },
+     "doorways": {
+      "count": 0,
+      "sha": "4f53cda18c2baa0c"
+     },
+     "doorKits": "4f53cda18c2baa0c",
+     "doorFunction": {
+      "count": 0,
+      "sha": "4f53cda18c2baa0c"
+     },
+     "doorSchedule": "4f53cda18c2baa0c"
+    }
+   ],
+   "exitPlacements": [
+    [
+     8,
+     2,
+     -6,
+     3,
+     6
+    ],
+    [
+     6,
+     -3,
+     4,
+     3,
+     4
+    ],
+    [
+     -9,
+     -1,
+     -6,
+     6,
+     3
+    ],
+    [
+     -3,
+     -1,
+     6,
+     9,
+     5
+    ],
+    [
+     -5,
+     -2,
+     -2,
+     6,
+     10
+    ],
+    [
+     -4,
+     -4,
+     -4,
+     6,
+     7
+    ],
+    [
+     -6,
+     3,
+     -8,
+     10,
+     9
+    ],
+    [
+     -6,
+     5,
+     -9,
+     10,
+     5
+    ],
+    [
+     0,
+     1,
+     8,
+     5,
+     9
+    ],
+    [
+     -1,
+     -3,
+     9,
+     3,
+     6
+    ]
+   ],
+   "priority": "b9ef61d673986ca2"
+  },
+  "lattice": {
+   "note": "service alleys · catwalks · transfer plazas",
+   "titleOption": "<option value=\"lattice\">LATTICE</option>",
+   "requiresVoidSafety": true,
+   "palette": "8e43126775d3e430",
+   "surfaceSets": {
+    "0": "abd54e85f78fbcb1",
+    "1": "5ce1f0cd77be8699",
+    "12345": "7c66fb7d53ca24d5"
+   },
+   "roomCategory": "7e3570f2f0ea5852",
+   "zoneCategory": "8f5a0d7ec957e6b9",
+   "step": {
+    "grid": "c78c911fdc6f2586",
+    "open": "deck",
+    "bridge": "deck"
+   },
+   "doors": {
+    "vocab": "ff52111a011514b9",
+    "types": [
+     "vision",
+     "plant",
+     "fire",
+     "plain"
+    ],
+    "probes": "4b2b1f899d58314f",
+    "schedules": "edb65a1f2dc9d299",
+    "scheduledKits": "2d085f25870bedaf"
+   },
+   "signPlates": {
+    "table": "c602dcf8ad7ccb8b",
+    "resolved": "c602dcf8ad7ccb8b",
+    "cells": "14728b00e3c32fce",
+    "atCells": "ca783cbb6cf83df2",
+    "byRole": "b593794d9d005df0"
+   },
+   "leafFinish": {
+    "finish": 2,
+    "rust": 0.35
+   },
+   "audio": {
+    "spaceRow": "e26dcf64cfed71a6",
+    "paRow": "f3c0c9f9a8670216",
+    "space": "e26dcf64cfed71a6",
+    "pa": "f3c0c9f9a8670216"
+   },
+   "mapInspectColor": "#c884e0",
+   "decalAtlas": {
+    "calls": 6275,
+    "sha": "1d56166f72958963"
+   },
+   "config": {
+    "config": "b85595ce843bb74b",
+    "profiles": "e500110722ff93ac",
+    "ownProfile": {
+     "enabled": true,
+     "districtChunks": 4,
+     "levels": 5,
+     "anchorsPerAxis": 8,
+     "cycleRate": [
+      0.12,
+      0.25
+     ],
+     "defaultExposureM": 5,
+     "maxExposureM": 20,
+     "minimumCueCells": 8
+    },
+    "resolved": "d0796f1826493447",
+    "orOffice": {
+     "family": "lattice",
+     "fellBack": false,
+     "config": {
+      "body": "b85595ce843bb74b",
+      "profiles": "e500110722ff93ac"
+     }
+    },
+    "explore": {
+     "body": "b85595ce843bb74b",
+     "profiles": "e500110722ff93ac"
+    },
+    "roomCatalog": "b889755cdad1352b",
+    "ordinaryThemes": "ece9a41bdbae2135"
+   },
+   "chunks": [
+    {
+     "at": [
+      0,
+      0,
+      0
+     ],
+     "mapFamily": "lattice",
+     "dressing": {
+      "trim": "4f53cda18c2baa0c",
+      "props": "4907a551d05bcdbe",
+      "signs": "dc56a7e0ab3e9d74",
+      "decals": "509f5c65455540e9",
+      "counts": [
+       0,
+       10,
+       4,
+       18
+      ]
+     },
+     "doorways": {
+      "count": 7,
+      "sha": "94e6413f5b814e1f"
+     },
+     "doorKits": "9e702fbc060b5cd5",
+     "doorFunction": {
+      "count": 7,
+      "sha": "946d447117e6c16d"
+     },
+     "doorSchedule": "14db5ccf7d4e344c"
+    },
+    {
+     "at": [
+      1,
+      0,
+      -1
+     ],
+     "mapFamily": "lattice",
+     "dressing": {
+      "trim": "4f53cda18c2baa0c",
+      "props": "377e88427323c34a",
+      "signs": "4f53cda18c2baa0c",
+      "decals": "3647217eba09c4fb",
+      "counts": [
+       0,
+       8,
+       0,
+       5
+      ]
+     },
+     "doorways": {
+      "count": 5,
+      "sha": "3286abd57edfa822"
+     },
+     "doorKits": "5f836d6eaea9b765",
+     "doorFunction": {
+      "count": 5,
+      "sha": "57506e17cd45e649"
+     },
+     "doorSchedule": "11bbd18f01abd4eb"
+    },
+    {
+     "at": [
+      -2,
+      1,
+      3
+     ],
+     "mapFamily": "lattice",
+     "dressing": {
+      "trim": "4f53cda18c2baa0c",
+      "props": "c41d7aca78075b05",
+      "signs": "4f53cda18c2baa0c",
+      "decals": "e09b941b4277a7be",
+      "counts": [
+       0,
+       25,
+       0,
+       7
+      ]
+     },
+     "doorways": {
+      "count": 5,
+      "sha": "55bffa6a86cff114"
+     },
+     "doorKits": "abad896628b33685",
+     "doorFunction": {
+      "count": 5,
+      "sha": "f4289e5fb9731e92"
+     },
+     "doorSchedule": "bcde8387afcc66f0"
+    }
+   ],
+   "exitPlacements": [
+    [
+     8,
+     2,
+     -6,
+     10,
+     10
+    ],
+    [
+     6,
+     -3,
+     4,
+     8,
+     3
+    ],
+    [
+     -9,
+     -1,
+     -6,
+     7,
+     3
+    ],
+    [
+     -3,
+     -1,
+     6,
+     9,
+     5
+    ],
+    [
+     -5,
+     -2,
+     -2,
+     3,
+     10
+    ],
+    [
+     -4,
+     -4,
+     -4,
+     6,
+     7
+    ],
+    [
+     -6,
+     3,
+     -8,
+     10,
+     9
+    ],
+    [
+     -6,
+     5,
+     -9,
+     10,
+     5
+    ],
+    [
+     0,
+     1,
+     8,
+     6,
+     9
+    ],
+    [
+     -1,
+     -3,
+     9,
+     6,
+     5
+    ]
+   ],
+   "priority": "a4dcd233e9179497"
+  },
+  "hotel": {
+   "note": "guest-room wings · corridor loops · atria",
+   "titleOption": "<option value=\"hotel\">HOTEL</option>",
+   "requiresVoidSafety": false,
+   "palette": "52a244bd0f960fc5",
+   "surfaceSets": {
+    "0": "395520b2337aa8a4",
+    "1": "268eff03b93d0862",
+    "12345": "e8b340a09fbbac17"
+   },
+   "roomCategory": "2e4d030094999cf6",
+   "zoneCategory": "338c572d2ac7cadd",
+   "step": {
+    "grid": "351000d4f3d46a09",
+    "open": "carpet",
+    "bridge": "deck"
+   },
+   "doors": {
+    "vocab": "e17da4782480e694",
+    "types": [
+     "guest",
+     "closet",
+     "ensuite",
+     "connecting",
+     "fire"
+    ],
+    "probes": "f8cec68283aaa650",
+    "schedules": "f99c36bea56849d8",
+    "scheduledKits": "5d9c713549e66a66"
+   },
+   "signPlates": {
+    "table": "8f5574f6c34c4d94",
+    "resolved": "8f5574f6c34c4d94",
+    "cells": "14728b00e3c32fce",
+    "atCells": "0a8a25a806eb7066",
+    "byRole": "6e765bb93b8c9331"
+   },
+   "leafFinish": {
+    "finish": 0,
+    "rust": 0
+   },
+   "audio": {
+    "spaceRow": "9c4579ec30368070",
+    "paRow": "14c99111f736c2f7",
+    "space": "9c4579ec30368070",
+    "pa": "14c99111f736c2f7"
+   },
+   "mapInspectColor": "#e8a07f",
+   "decalAtlas": {
+    "calls": 6316,
+    "sha": "21a1d20eadf42c78"
+   },
+   "config": {
+    "config": "7121a66bcccf1a20",
+    "profiles": "e500110722ff93ac",
+    "ownProfile": {
+     "enabled": true
+    },
+    "resolved": "b2f45e53550a03c9",
+    "orOffice": {
+     "family": "hotel",
+     "fellBack": false,
+     "config": {
+      "body": "7121a66bcccf1a20",
+      "profiles": "e500110722ff93ac"
+     }
+    },
+    "explore": {
+     "body": "7121a66bcccf1a20",
+     "profiles": "e500110722ff93ac"
+    },
+    "roomCatalog": "bcfc31f1c6d34a41",
+    "ordinaryThemes": "e42ddcb4f9674048"
+   },
+   "chunks": [
+    {
+     "at": [
+      0,
+      0,
+      0
+     ],
+     "mapFamily": "hotel",
+     "dressing": {
+      "trim": "aea2e8c15427ad17",
+      "props": "91d94b94977b70e8",
+      "signs": "f247146f552dddc4",
+      "decals": "e198fd28eb5688e2",
+      "counts": [
+       70,
+       123,
+       15,
+       10
+      ]
+     },
+     "doorways": {
+      "count": 14,
+      "sha": "adb7168963c674ee"
+     },
+     "doorKits": "3ae0c3146a327fcc",
+     "doorFunction": {
+      "count": 14,
+      "sha": "670bb7b87ebcf673"
+     },
+     "doorSchedule": "e46c68c7ab72c0a8"
+    },
+    {
+     "at": [
+      1,
+      0,
+      -1
+     ],
+     "mapFamily": "hotel",
+     "dressing": {
+      "trim": "6983d2754b62d2c1",
+      "props": "b29c931bcf1d133b",
+      "signs": "50b39094523dc194",
+      "decals": "42372b9cf26c54bd",
+      "counts": [
+       76,
+       110,
+       10,
+       12
+      ]
+     },
+     "doorways": {
+      "count": 18,
+      "sha": "7bd846eb403c69fa"
+     },
+     "doorKits": "211548f38018ece2",
+     "doorFunction": {
+      "count": 18,
+      "sha": "54ad6c94b522ef5b"
+     },
+     "doorSchedule": "03319f2ade9443c7"
+    },
+    {
+     "at": [
+      -2,
+      1,
+      3
+     ],
+     "mapFamily": "hotel",
+     "dressing": {
+      "trim": "571c9d3e2d1dbbc9",
+      "props": "129047a177a5fc23",
+      "signs": "9bdd90c4ecd22831",
+      "decals": "fa5b60603d65bd59",
+      "counts": [
+       48,
+       253,
+       29,
+       5
+      ]
+     },
+     "doorways": {
+      "count": 10,
+      "sha": "232ca712d0e1ed8e"
+     },
+     "doorKits": "277cea0bab6d0808",
+     "doorFunction": {
+      "count": 10,
+      "sha": "eaedf9a745d8aeb1"
+     },
+     "doorSchedule": "af0d7793111f035f"
+    }
+   ],
+   "exitPlacements": [
+    [
+     8,
+     2,
+     -6,
+     4,
+     3
+    ],
+    [
+     6,
+     -3,
+     4,
+     9,
+     3
+    ],
+    [
+     -9,
+     -1,
+     -6,
+     6,
+     3
+    ],
+    [
+     -3,
+     -1,
+     6,
+     9,
+     5
+    ],
+    [
+     -5,
+     -2,
+     -2,
+     3,
+     10
+    ],
+    [
+     -4,
+     -4,
+     -4,
+     3,
+     8
+    ],
+    [
+     -6,
+     3,
+     -8,
+     6,
+     10
+    ],
+    [
+     -6,
+     5,
+     -9,
+     10,
+     5
+    ],
+    [
+     0,
+     1,
+     8,
+     5,
+     9
+    ],
+    [
+     -1,
+     -3,
+     9,
+     6,
+     5
+    ]
+   ],
+   "priority": "3d013762b500fb8f"
+  }
+ },
+ "adapters": {
+  "familyAudit": {
+   "families": [
+    "office",
+    "sewer",
+    "tower",
+    "lattice",
+    "hotel"
+   ],
+   "familiesDetail": "70c25a76281dc388",
+   "kinds": [
+    "officeMultilevel",
+    "sewer",
+    "towerSkybridge",
+    "latticeDistrict",
+    "officeCatalog",
+    "hotelCatalog",
+    "sewerCatalog",
+    "towerCatalog",
+    "latticeCatalog"
+   ],
+   "kindsDetail": "611fc5a7caa2efca"
+  },
+  "structureAdapters": [
+   "officeMultilevel",
+   "towerSkybridge",
+   "latticeDistrict",
+   "officeCatalog",
+   "hotelCatalog",
+   "sewerCatalog",
+   "towerCatalog",
+   "latticeCatalog"
+  ],
+  "structureAdaptersDetail": "3deadeefbecdf495",
+  "catalogStructureAdapters": [
+   "officeCatalog",
+   "hotelCatalog",
+   "sewerCatalog",
+   "towerCatalog",
+   "latticeCatalog"
+  ],
+  "catalogKinds": [
+   [
+    "office",
+    "officeCatalog"
+   ],
+   [
+    "hotel",
+    "hotelCatalog"
+   ],
+   [
+    "sewer",
+    "sewerCatalog"
+   ],
+   [
+    "tower",
+    "towerCatalog"
+   ],
+   [
+    "lattice",
+    "latticeCatalog"
+   ]
+  ]
+ },
+ "spawn": {
+  "SPAWN_WORLD": 22.5,
+  "HUB_CELL": 7,
+  "CELL": 3,
+  "CHUNK": 14,
+  "CHUNK_WORLD": 42,
+  "EYE_H": 1.7,
+  "EXIT_FLOORS": [
+   -5,
+   -4,
+   -3,
+   -2,
+   -1,
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "EXIT_REACH": 1.8,
+  "clearRadius": 1,
+  "clearings": [
+   {
+    "cx": 0,
+    "cy": 0,
+    "cz": 0,
+    "lx": 7,
+    "lz": 7,
+    "r": 1
+   }
+  ]
+ }
+}

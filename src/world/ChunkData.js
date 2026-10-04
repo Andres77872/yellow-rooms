@@ -113,14 +113,44 @@ export class ChunkData {
     // SPACE_ROLE_* per cell (mapTypes.js): the district plan's semantic room
     // roles, compiled alongside spaceId. Dressing-only; topology never reads it.
     this.spaceRole = new Uint8Array(CHUNK * CHUNK)
+    // SPACE_CLASS_* per cell (mapTypes.js): whether the district plan made the
+    // cell's space circulation (corridors, lobby nodes, promoted lobbies) or a
+    // room — kept separately because later stamps relabel cellKind (border
+    // thresholds, stair halos) without changing what the space IS. 0 where no
+    // planner ran. Finish selection only (world/surfaceSet.js); not digested.
+    this.spaceClass = new Uint8Array(CHUNK * CHUNK)
+    // Planner district {dx, dz} this chunk belongs to (office-planned zones),
+    // else null, and the root world seed: the department / world keys of the
+    // finish schedule and the dressing context. Not digested.
+    this.district = null
+    this.worldSeed = 0
+    // Authored-document extras (editor kinds; the generator never sets them,
+    // so neither is digested). `levelLabel` is the string the level plates
+    // print instead of storeyNumber(cy); `authoredFeatures` marks a chunk whose
+    // windows / rails were placed on purpose, so the stray-feature audit skips it.
+    this.levelLabel = null
+    this.authoredFeatures = false
+    // Seam ring source (office-planned zones): seam.resolve() returns the
+    // planner fields of the cells just across this chunk's own West line
+    // (index z) and North line (CHUNK + x), so doorways and windows on line 0
+    // classify from both sides — { id, kind, role, cls, hall, west, north },
+    // west / north the neighbour's district {dx, dz} or null when that side
+    // is not planned — or null. Computed on first use (zones/officePlan.js).
+    // Derived, not data: non-enumerable, so clones, equality and digests
+    // never see it. Dressing only.
+    Object.defineProperty(this, 'seam', { value: null, writable: true, enumerable: false, configurable: true })
     this.repairs = { connectivity: 0, navigation: 0, columns: 0 }
     this.lamps = [] // [{lx, lz, lit}] — ceiling fixtures on a global module grid
-    // Collision-real furniture (furniture.js). One record per occupied cell:
+    // Collision-real furniture (furniture.js). One record per piece:
     //   { kind, lx, lz, x, z, w, d, facing }
     // x/z are CHUNK-LOCAL centre coordinates; w/d the axis-aligned extents
     // (already rotated by `facing`, which only steers asymmetric render
-    // details). The owning cell also carries COLUMN_FURNITURE in cols, so
-    // navigation/maps/audits block it; the player sweeps the precise AABB.
+    // details). A cell may hold several records — stacked pieces such as
+    // back-to-back shelving, or the furnisher's table sharing a counter or
+    // appliance cell — each with its own centre and AABB; consumers take
+    // every record whose (lx, lz) is the cell, never just the first. The
+    // owning cell carries one COLUMN_FURNITURE in cols, so navigation/maps/
+    // audits block it; the player sweeps every piece's precise AABB.
     this.furniture = []
     this.exit = null // {lx, lz} | null
     // Stair halves this layer realizes (slab contracts; see stairStamp.js):

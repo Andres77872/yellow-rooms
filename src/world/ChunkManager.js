@@ -46,9 +46,14 @@ import {
 } from './mapTypes.js'
 import { validatedRuntimeStructure } from './structures/contract.js'
 import { resolveStepSurface } from './stepSurface.js'
+import { cellRole } from './surfaceSet.js'
 import { LightGrid } from './lightGrid/LightGrid.js'
 import { SightCulling } from './lightGrid/SightCulling.js'
 import { furnitureProxyBoxes } from './objects/furniture/proxies.js'
+import { resolveMapFamily } from './mapFamily.js'
+import { familyPlanner } from './families/planners.js'
+import { familyGenerator } from './families/generators.js'
+import { prebakeTile, wouldBakeChunk } from './tiles/familyChunk.js'
 
 // Wall-aware light-list / GI work per streaming frame (world/lightGrid). A
 // chunk's arrival queues its own cells plus the neighbour strips its fixtures
@@ -137,15 +142,21 @@ function apertureRegistryKey(cx, cy, cz, aperture) {
 // distance the player's floor wins, followed by an adjacent floor that is
 // actually visible/reachable through this chunk column (stair or multilevel
 // opening). Unconnected off-floor chunks retain the historical +2 penalty.
-function prioritizeRequest(request, seed, config, pcx, pcy, pcz) {
+export function prioritizeRequest(request, seed, config, pcx, pcy, pcz) {
   const dx = Math.abs(request.cx - pcx)
   const dz = Math.abs(request.cz - pcz)
   const dy = Math.abs(request.cy - pcy)
   const xzDistance = Math.max(dx, dz)
   const lowerCy = Math.min(request.cy, pcy)
-  const verticalOpening = dy === 1 && (
-    slabContract(seed, request.cx, request.cz, lowerCy, config).hasStair ||
-    chunkMultilevelRooms(seed, request.cx, request.cz, lowerCy, config).up.hasRoom
+  // A liminal family's planner answers for its own stairs and volumes (§9.7);
+  // the legacy 5 have no planner and keep the slab/multilevel contracts.
+  const planner = familyPlanner(config?.mapFamily?.selected)
+  const verticalOpening = dy === 1 && (planner
+    ? planner.verticalOpeningAt(seed, request.cx, request.cz, lowerCy, resolveMapFamily(config), config)
+    : (
+      slabContract(seed, request.cx, request.cz, lowerCy, config).hasStair ||
+      chunkMultilevelRooms(seed, request.cx, request.cz, lowerCy, config).up.hasRoom
+    )
   )
 
   request.d = xzDistance + (dy !== 0 && !verticalOpening ? 2 : 0)
@@ -153,6 +164,9 @@ function prioritizeRequest(request, seed, config, pcx, pcy, pcz) {
   request.xzTie = dx + dz
   return request
 }
+
+// The 8 neighbouring tiles of the idle prebake, in its fixed order.
+const IDLE_PREBAKE_RING = Object.freeze([[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]])
 
 function compareRequests(a, b) {
   return (
@@ -185,6 +199,12 @@ export class ChunkManager {
     // Forced-open clearings applied at generation. The spawn cell (chunk 0,0
     // layer 0 hub) is always cleared so the player never spawns boxed in.
     this.clearings = [{ cx: 0, cy: 0, cz: 0, lx: HUB_CELL, lz: HUB_CELL, r: 1 }]
+    // Liminal tile-bake probe (§9.7): set lazily by update() from the config
+    // and seed identity; null for the legacy 5.
+    this._tileProbe = null
+    this._probeConfig = null
+    this._probeSeed = null
+    this._idlePrebakeAt = null
     // Vertical openings of loaded chunks (stairs and multilevel rooms). Keys
     // include feature identity so one column/slab can never overwrite another.
     // Bounds feed cross-floor light/sight; chunk coords feed visibility gating.
@@ -254,6 +274,15 @@ export class ChunkManager {
 
   setExit(cx, cy, cz, lx, lz) {
     this.exit = { cx, cy, cz, lx, lz }
+  }
+
+  // Spawn of the current world (Engine, families/hooks.js familySpawn): its
+  // forced-open clearings replace the list. The legacy spawn carries today's
+  // hub clearing (r = 1); a liminal spawn carries none (§8.1).
+  setSpawn(spawn) {
+    if (!spawn) return
+    this.spawn = spawn
+    this.clearings = (spawn.clearings ?? []).map((c) => ({ ...c }))
   }
 
   // Swap the furniture model library (Engine calls this when the Blender GLBs
@@ -587,6 +616,16 @@ export class ChunkManager {
   // Per-frame streaming around the player. `pcy` is the player's floor index;
   // layers within LOAD_RADIUS_Y stream alongside the XZ ring.
   update(px, pz, pcy = 0) {
+    // Tile-bake probe (§9.7), rebuilt whenever the config or seed identity
+    // changes (Engine assigns cm.config directly). Null for the legacy 5.
+    if (this._probeConfig !== this.config || this._probeSeed !== this.seed) {
+      this._probeConfig = this.config
+      this._probeSeed = this.seed
+      this._idlePrebakeAt = null
+      this._tileProbe = familyGenerator(this.config?.mapFamily?.selected)
+        ? (req) => wouldBakeChunk(this.seed, req.cx, req.cy, req.cz, this.config)
+        : null
+    }
     const pcx = worldToChunk(px)
     const pcz = worldToChunk(pz)
     const planDirty =
@@ -615,16 +654,43 @@ export class ChunkManager {
     // check elapsed time after each one; a slow slice then stands alone instead
     // of being followed by up to three more stalls.
     const buildStart = performance.now()
+    let built = 0
     for (let i = 0; i < MAX_BUILDS_PER_FRAME && this.queue.length; i++) {
+      // A cold tile bake gets a frame of its own (§9.7).
+      if (i > 0 && this._tileProbe?.(this.queue[0])) break
       this._buildNext()
+      built++
       if (performance.now() - buildStart >= STREAM_BUILD_BUDGET_MS) break
     }
+    // Idle prebake only on a frame that built nothing: a build (possibly a
+    // cold bake) already spent this frame's budget.
+    if (this._tileProbe && !built && !this.queue.length) this._idlePrebake(pcx, pcy, pcz)
 
     if (planDirty) this._unloadOutsideStreamingBounds(pcx, pcy, pcz)
     if (this._furnitureStale) this._refreshStaleFurniture(pcx, pcy, pcz, buildStart)
     this._streamPlanChunkCount = this.chunks.size
     this.lightGrid.update(LIGHT_GRID_BUDGET_MS)
     this._updateSight(px, pz, pcy)
+  }
+
+  // Idle prebake (§9.7): with nothing queued, bake at most ONE uncached tile
+  // among the 8 tiles around the player's, on the player's storey, in a fixed
+  // order, so walking into it later costs no frame. Remembers the chunk/storey
+  // where every neighbour was already warm until something bakes.
+  _idlePrebake(pcx, pcy, pcz) {
+    const at = `${pcx},${pcy},${pcz}`
+    if (this._idlePrebakeAt === at) return
+    const tile = familyGenerator(this.config?.mapFamily?.selected)?.tile
+    const w = Number.isInteger(tile?.w) && tile.w > 0 ? tile.w : 1
+    const d = Number.isInteger(tile?.d) && tile.d > 0 ? tile.d : 1
+    for (const [tx, tz] of IDLE_PREBAKE_RING) {
+      const cx = pcx + tx * w
+      const cz = pcz + tz * d
+      if (!wouldBakeChunk(this.seed, cx, pcy, cz, this.config)) continue
+      prebakeTile(this.seed, cx, pcy, cz, this.config)
+      return
+    }
+    this._idlePrebakeAt = at
   }
 
   // Re-flood when the eye moved or residency changed, and re-gate the
@@ -655,6 +721,7 @@ export class ChunkManager {
     const clearings = this.clearings.filter(
       (c) => c.cx === cx && (c.cy ?? 0) === cy && c.cz === cz
     )
+    const neighbourOf = (x, z) => (dx, dz) => this.chunks.get(chunkKey3(x + dx, cy, z + dz))?.data ?? null
     const chunk = new Chunk(
       cx,
       cy,
@@ -665,10 +732,19 @@ export class ChunkManager {
       exitCell,
       this.config,
       clearings.length ? clearings : null,
-      this.furnitureModels
+      this.furnitureModels,
+      neighbourOf(cx, cz)
     )
     chunk.mount(this.root)
     this.chunks.set(key, chunk)
+    // Loaded neighbours built before this chunk had no data for their halo
+    // on this side: refresh it now (a 16x16 byte rewrite each).
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dz) continue
+        this.chunks.get(chunkKey3(cx + dx, cy, cz + dz))?.refreshZoneHalo?.(neighbourOf(cx + dx, cz + dz))
+      }
+    }
     this.meshRevision++
     this.lightGrid.addChunk(chunk.data)
     this._applyRenderDetail(chunk)
@@ -886,11 +962,14 @@ export class ChunkManager {
     const c = this._chunkAt(gx, gz, cy)
     const family = c?.data.mapFamily ?? this.config?.mapFamily?.selected
     if (!c) return resolveStepSurface({ family })
-    const i = cIdx(gx - c.cx * CHUNK, gz - c.cz * CHUNK)
+    const lx = gx - c.cx * CHUNK
+    const lz = gz - c.cz * CHUNK
+    // The room's role, as its floor finish reads it (a stamp-cleared strip
+    // of a room steps like the rest of the room).
     return resolveStepSurface({
       family,
-      cellKind: c.data.cellKind[i],
-      spaceRole: c.data.spaceRole[i],
+      cellKind: c.data.cellKind[cIdx(lx, lz)],
+      spaceRole: cellRole(c.data, lx, lz),
     })
   }
 

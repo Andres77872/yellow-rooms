@@ -1,5 +1,6 @@
 import { IS_TOUCH } from '../core/device.js'
 import { MINIMAP_SIZE } from './Minimap.js'
+import { MAP_FAMILY_STAIRWELL } from '../world/families/ids.js'
 
 const bar = (id, label, jp) => `
   <div class="bar">
@@ -48,3 +49,17 @@ export const HUD_HTML = `
     <div class="chip relock hidden" id="hud-relock">CLICK TO CAPTURE THE MOUSE</div>
     <div class="mapwrap" id="hud-mapwrap"><canvas id="minimap" width="${MINIMAP_SIZE}" height="${MINIMAP_SIZE}"></canvas></div>
   </div>`
+
+// The exit compass's distance chip. On the exit's storey: metres. On
+// another storey: metres plus a ▼/▲ storey count — except in a family whose
+// storey numbers are part of the fiction (the stairwell's lying floor
+// numbers, doc 04 §4.5), which gets direction only, "below" / "above", so
+// the count never becomes a hard gate.
+export const COMPASS_DIRECTION_ONLY = Object.freeze([MAP_FAMILY_STAIRWELL])
+
+export function exitDistText(dist, floorDelta = 0, family = null) {
+  const m = `${Math.round(dist)}m`
+  if (!floorDelta) return m
+  if (COMPASS_DIRECTION_ONLY.includes(family)) return `${m} ${floorDelta < 0 ? 'below' : 'above'}`
+  return `${m} ${floorDelta < 0 ? '▼' : '▲'}${Math.abs(floorDelta)}`
+}

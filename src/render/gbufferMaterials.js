@@ -2,7 +2,13 @@ import * as THREE from 'three'
 import { floorTexture, wallTexture, ceilingTexture, surfaceDetailTexture } from './textures.js'
 import { familyPalette } from '../world/familyPalette.js'
 import { MAP_FAMILY_OFFICE } from '../world/mapTypes.js'
+import { byFamily } from '../world/families/registry.js'
 import { CELL, LAYER_H, WALL_H } from '../world/constants.js'
+import { SURFACE_MAX_LAYERS, ZONE_MAP_SIZE, worldSurfaceSet } from '../world/surfaceSet.js'
+import { buildSurfaceArrays, disposeSurfaceArrays } from './surfaceArrays.js'
+import { createGlassMaterial } from './glassMaterial.js'
+import { blankDecalTexture, buildDecalAtlas } from './decalAtlas.js'
+import { DECAL_GRID } from '../world/decalKinds.js'
 import { glslFloat } from './shaders/common.js'
 import { MIN_ROUGHNESS, surfaceStyle } from './surfaces.js'
 import { BEVEL_GLSL } from './bevel.js'
@@ -182,7 +188,182 @@ const VERT_INSTANCED = /* glsl */ `
     #else
       vSurface = vec2(-1.0);
     #endif
+    #ifdef USE_DECAL
+      // Wall decals: the printed image goes on the two broad faces (normal
+      // along the plate's thinnest axis); the edges show the board.
+      vec3 an = abs(normal);
+      float thin = scaleSq.x <= scaleSq.y && scaleSq.x <= scaleSq.z ? an.x : scaleSq.y <= scaleSq.z ? an.y : an.z;
+      vSurface = vec2(-1.0, step(0.5, thin));
+    #endif
     gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(pos, 1.0);
+  }
+`
+
+// World surface sets (world/surfaceSet.js, render/surfaceArrays.js) and the
+// per-room wear layer. `tZoneMap` is the chunk's (CHUNK+2)^2 zone texture
+// (floor layer | edge flags, wall, ceiling layer, wear | lamp bit), bound
+// per mesh by mesh.js with the chunk's world origin. A wall face reads the
+// room it LOOKS INTO: the lookup steps 0.2 m off the face along its normal
+// (past the 8 cm half-wall, short of a 1.1 m pier's own cell), so the two
+// faces of one thin wall can carry two rooms' finishes. Floor edge flags mark
+// where the floor finish changes across a cell edge; the floor lays a metal
+// transition strip on that line.
+// Hash without sine (Hoskins) + value noise: stable at world coordinates.
+// Shared by the zone wear layer and the door-leaf finishes.
+const NOISE_PARS = /* glsl */ `
+  float zh12(vec2 p){
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+  }
+  float zNoise(vec2 p){
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(zh12(i), zh12(i + vec2(1.0, 0.0)), u.x), mix(zh12(i + vec2(0.0, 1.0)), zh12(i + vec2(1.0, 1.0)), u.x), u.y);
+  }
+  float zFbm(vec2 p){
+    return 0.5 * zNoise(p) + 0.3 * zNoise(p * 2.03 + 7.1) + 0.2 * zNoise(p * 4.11 + 3.7);
+  }
+`
+
+// Door-leaf finishes (objects/joinery/doorKit.js), procedural in world space
+// on the flat instanced path so every leaf of a corridor grains differently:
+//   0 painted timber — roller stipple, handling grime, scuffed foot
+//   1 sliced veneer  — cathedral grain, latewood bands, open pores
+//   2 painted steel  — the paint layer plus rust blooming from the foot
+//   3 brushed metal  — hardware: streaked roughness, tarnish drift
+// The horizontal coordinate is the face's own (z on x-facing faces), so the
+// grain runs continuously across one leaf and differs between leaves.
+const LEAF_PARS = /* glsl */ `
+  uniform float uLeafFinish;
+  uniform float uLeafRust;
+  void leafFinish(inout vec3 albedo, inout float rough, vec3 N, vec3 wp){
+    vec3 an = abs(N);
+    float along = an.x > an.z ? wp.z : wp.x;
+    float y = mod(wp.y + 0.001, ${glslFloat(LAYER_H)}) - 0.001;
+    if (uLeafFinish > 2.5) {
+      float brush = zNoise(vec2(along * 260.0, y * 2.5));
+      rough = clamp(rough * (0.75 + 0.5 * brush), 0.08, 1.0);
+      albedo *= 0.88 + 0.12 * zFbm(vec2(along, y) * 9.0);
+      return;
+    }
+    if (uLeafFinish > 0.5 && uLeafFinish < 1.5) {
+      // Cathedral figure: rings warped by a slow field, so the bands arch
+      // and pinch up the leaf instead of running ruler-straight.
+      float warp = zFbm(vec2(along * 3.0, y * 0.35)) * 3.2;
+      float ring = fract(along * 20.0 + warp + 0.6 * sin(y * 1.1 + along * 5.0));
+      float late = smoothstep(0.55, 0.9, ring) * (1.0 - smoothstep(0.9, 1.0, ring));
+      float fine = zNoise(vec2(along * 260.0, y * 4.0));
+      float pores = smoothstep(0.8, 0.92, zNoise(vec2(along * 520.0, y * 30.0)));
+      float flitch = 0.94 + 0.12 * zNoise(vec2(floor(along * 6.0), 3.7));
+      albedo *= mix(1.05, 0.8, late) * (0.95 + 0.1 * fine) * (1.0 - 0.14 * pores) * flitch;
+      rough = min(1.0, rough * mix(1.0, 1.3, late + pores * 0.5));
+      return;
+    }
+    albedo *= 0.975 + 0.05 * zNoise(vec2(along * 70.0, y * 1.4));
+    float grime = (1.0 - smoothstep(0.0, 0.35, abs(y - 1.05))) * smoothstep(0.45, 0.8, zFbm(vec2(along * 3.0, y * 2.0) + 4.0));
+    float scuff = (1.0 - smoothstep(0.04, 0.42, y)) * smoothstep(0.5, 0.8, zFbm(vec2(along * 7.0, y * 5.0)));
+    albedo *= (1.0 - 0.12 * grime) * (1.0 - 0.28 * scuff);
+    rough = min(1.0, rough + 0.12 * grime + 0.2 * scuff);
+    if (uLeafFinish > 1.5) {
+      // Blooms creep up from the wet foot; elsewhere only pitting through
+      // chipped paint.
+      float foot = 1.0 - smoothstep(0.0, 0.8, y);
+      float bloom = smoothstep(0.62, 0.7, zFbm(vec2(along * 3.1, y * 2.3) + 9.1) + 0.3 * foot) * (0.25 + 0.75 * foot);
+      float pits = smoothstep(0.9, 0.96, zNoise(vec2(along, y) * 55.0)) * 0.8;
+      float rust = clamp(max(bloom, pits), 0.0, 1.0) * uLeafRust;
+      vec3 oxide = vec3(0.17, 0.065, 0.022) * (0.65 + 0.7 * zNoise(vec2(along, y) * 37.0));
+      albedo = mix(albedo, oxide, rust);
+      rough = mix(rough, 0.88, rust);
+    }
+  }
+`
+
+const ZONE_PARS = /* glsl */ `
+  uniform highp sampler2DArray tMapArray;
+  uniform highp sampler2DArray tDetailArray;
+  uniform highp sampler2D tZoneMap;
+  uniform vec3 uZoneOrigin;
+  uniform float uZoneSlot;   // 0 floor (r), 1 wall (g), 2 ceiling (b)
+  uniform float uZoneArray;  // 1 once the arrays hold this world's set
+  uniform float uWear;       // global wear strength
+  uniform float uLayerMetal[${SURFACE_MAX_LAYERS}];
+  uniform float uLayerGloss[${SURFACE_MAX_LAYERS}];
+  uniform float uLayerTile[${SURFACE_MAX_LAYERS}]; // ceiling tile pitch (m), 0 = no tiles
+
+  vec4 zoneAt(vec3 wp, vec3 n){
+    vec2 p = wp.xz - uZoneOrigin.xz;
+    if (abs(n.y) < 0.5) p += normalize(n.xz + vec2(1e-5)) * 0.2;
+    ivec2 c = clamp(ivec2(floor(p / ${glslFloat(CELL)})) + 1, ivec2(0), ivec2(${ZONE_MAP_SIZE - 1}));
+    return texelFetch(tZoneMap, c, 0);
+  }
+
+  // Lived-in wear in world space, so it never repeats with the texture tile:
+  // macro tone drift everywhere (anti-tiling), then per slot — floors: traffic
+  // grime and damp patches; walls: scuffed base band, soot under the ceiling
+  // line, drip streaks and tide-marked water blooms; ceilings: water stains,
+  // and missing tiles only on tiled ceilings, on their own tile grid (never
+  // in a lamp's cell). Strength follows the room's wear; a pristine room only
+  // gets the macro drift.
+  void zoneWear(inout vec3 albedo, inout float rough, inout float ao, vec3 wp, vec3 an, float along, float yl, float wear, float lamp, float pitch){
+    bool vertical = an.y < 0.5;
+    vec2 mp = vertical ? vec2(along, yl) : wp.xz;
+    albedo *= 0.95 + 0.1 * zFbm(mp * 0.37 + wp.y * 0.013);
+    if (uZoneSlot < 0.5) {
+      float grime = smoothstep(0.5, 0.85, zFbm(wp.xz * 0.45 + 3.0)) * wear;
+      albedo *= 1.0 - 0.28 * grime;
+      rough = min(1.0, rough + 0.12 * grime);
+      float damp = smoothstep(0.66, 0.71, zFbm(wp.xz * 0.16 + 11.3)) * wear;
+      albedo *= 1.0 - 0.22 * damp;
+      rough *= mix(1.0, 0.55, damp);
+    } else if (uZoneSlot < 1.5) {
+      if (!vertical) return;
+      float band = (1.0 - smoothstep(0.0, 0.32, yl)) * (0.55 + 0.45 * zNoise(vec2(along * 2.3, 0.0)));
+      albedo *= 1.0 - 0.3 * band * wear;
+      float soot = smoothstep(${glslFloat(WALL_H - 0.6)}, ${glslFloat(WALL_H)}, yl);
+      albedo *= 1.0 - 0.16 * soot * wear;
+      // Drip streaks from the ceiling line, 12 cm columns.
+      float col = floor(along * 8.0);
+      float storey = floor(wp.y / ${glslFloat(LAYER_H)});
+      float h = zh12(vec2(col, storey * 17.0 + 3.0));
+      if (h < wear * 0.3) {
+        float len = 0.5 + 2.2 * zh12(vec2(col + 0.5, storey));
+        float fromTop = ${glslFloat(WALL_H)} - yl;
+        float x = fract(along * 8.0) - 0.5;
+        float streak = exp(-x * x * 40.0) * clamp(1.0 - fromTop / len, 0.0, 1.0);
+        albedo *= 1.0 - 0.22 * streak;
+        rough *= 1.0 - 0.3 * streak;
+      }
+      // Water bloom high on the wall, with a darker tide line.
+      float bloom = zFbm(vec2(along * 0.55, yl * 0.9) + storey * 5.0);
+      float reach = smoothstep(1.6, 3.0, yl) * wear;
+      float inside = smoothstep(0.6, 0.64, bloom) * reach;
+      float tide = (smoothstep(0.58, 0.61, bloom) - smoothstep(0.61, 0.64, bloom)) * reach;
+      albedo = mix(albedo, albedo * vec3(0.86, 0.78, 0.6), inside * 0.7);
+      albedo *= 1.0 - 0.25 * tide;
+    } else {
+      if (vertical) return;
+      float grid = pitch > 0.0 ? pitch : 1.5;
+      vec2 tile = floor(wp.xz / grid);
+      vec2 f = fract(wp.xz / grid) - 0.5;
+      float h = zh12(tile + 0.37);
+      if (pitch > 0.0 && lamp < 0.5 && h < 0.012 * wear) {
+        // Missing tile: a dark void into the plenum.
+        albedo *= 0.05;
+        ao = 0.2;
+        return;
+      }
+      if (h < 0.02 + 0.2 * wear * wear) {
+        vec2 c = (vec2(zh12(tile + 1.7), zh12(tile + 2.9)) - 0.5) * 0.4;
+        float r = length(f - c) / (0.18 + 0.3 * zh12(tile + 4.1));
+        r += (zNoise((f - c) * 9.0 + tile) - 0.5) * 0.35;
+        float stain = 1.0 - smoothstep(0.85, 1.0, r);
+        float ring = smoothstep(0.75, 0.9, r) * (1.0 - smoothstep(0.9, 1.02, r));
+        albedo = mix(albedo, albedo * vec3(0.84, 0.74, 0.52), stain * 0.75);
+        albedo *= 1.0 - 0.3 * ring;
+      }
+    }
   }
 `
 
@@ -214,6 +395,18 @@ const FRAG = /* glsl */ `
   #ifdef USE_DETAIL
     uniform sampler2D tDetail; // rg normal, b roughness, a cavity (textures.js)
   #endif
+  #ifdef USE_DECAL
+    uniform sampler2D tDecal; // world decal atlas (render/decalAtlas.js)
+  #endif
+  #if defined(USE_ZONES) || defined(USE_LEAF_FINISH)
+    ${NOISE_PARS}
+  #endif
+  #ifdef USE_ZONES
+    ${ZONE_PARS}
+  #endif
+  #ifdef USE_LEAF_FINISH
+    ${LEAF_PARS}
+  #endif
 
   // Geometric specular anti-aliasing (Tokuyoshi & Kaplanyan 2019, Filament's
   // form): widen roughness by the screen-space variance of the shading normal
@@ -234,6 +427,7 @@ const FRAG = /* glsl */ `
     float rough = uRoughness;
     float metal = uMetalness;
     float matAO = 1.0;
+    float gloss = uGloss;
     #ifdef USE_MAP
       vec2 uvw = vUv;
       #ifdef USE_WORLD_UV
@@ -260,17 +454,73 @@ const FRAG = /* glsl */ `
       // Textures are tagged THREE.SRGBColorSpace (textures.js), so the GPU sampler
       // already returns linear values — decoding again here would double-decode and
       // darken every textured surface (~5.7x at mid grey).
-      albedo = texture(map, uvw).rgb * uColor * vTint;
+      #if defined(USE_ZONES) && defined(USE_WORLD_UV)
+        // World surface set: this fragment's room picks the array layer.
+        vec4 zone = zoneAt(vWorldPos, Nw);
+        float zRaw = floor((uZoneSlot < 0.5 ? zone.r : uZoneSlot < 1.5 ? zone.g : zone.b) * 255.0 + 0.5);
+        // The floor byte carries edge flags above its layer index.
+        float zLayer = mod(zRaw, 8.0);
+        float zStrip = 0.0;
+        vec3 zN = Nw;
+        // Derivatives outside the branch: it is not uniform across a quad.
+        float aa = length(fwidth(vWorldPos.xz)) + 1e-4;
+        if (uZoneSlot < 0.5 && Nw.y > 0.5 && zRaw >= 8.0) {
+          vec2 q = fract((vWorldPos.xz - uZoneOrigin.xz) / ${glslFloat(CELL)}) * ${glslFloat(CELL)};
+          float edges = floor(zRaw / 8.0);
+          float d = 1e3;
+          if (mod(edges, 2.0) >= 1.0) d = min(d, q.x);
+          if (mod(floor(edges / 2.0), 2.0) >= 1.0) d = min(d, ${glslFloat(CELL)} - q.x);
+          if (mod(floor(edges / 4.0), 2.0) >= 1.0) d = min(d, q.y);
+          if (mod(floor(edges / 8.0), 2.0) >= 1.0) d = min(d, ${glslFloat(CELL)} - q.y);
+          zStrip = 1.0 - smoothstep(0.022 - aa, 0.022 + aa, d);
+        }
+        float zByte = floor(zone.a * 255.0 + 0.5);
+        float zLamp = step(127.5, zByte);
+        float zWear = mod(zByte, 128.0) / 127.0 * uWear;
+        vec4 det;
+        if (uZoneArray > 0.5) {
+          albedo = texture(tMapArray, vec3(uvw, zLayer)).rgb * uColor * vTint;
+          det = texture(tDetailArray, vec3(uvw, zLayer));
+          int li = int(zLayer);
+          metal = uLayerMetal[li];
+          gloss = uLayerGloss[li];
+        } else {
+          albedo = texture(map, uvw).rgb * uColor * vTint;
+          det = texture(tDetail, uvw);
+        }
+      #else
+        albedo = texture(map, uvw).rgb * uColor * vTint;
+      #endif
       #if defined(USE_DETAIL) && defined(USE_WORLD_UV)
-        vec4 det = texture(tDetail, uvw);
+        #ifndef USE_ZONES
+          vec4 det = texture(tDetail, uvw);
+        #endif
         vec2 nxy = (det.rg * 2.0 - 1.0) * uNormalScale;
         vec3 nts = vec3(nxy, sqrt(max(1.0 - dot(nxy, nxy), 0.0)));
         Nw = normalize(T * nts.x + B * nts.y + Nw * nts.z);
         rough = det.b * uRoughness;
         matAO = det.a;
       #endif
+      #if defined(USE_ZONES) && defined(USE_WORLD_UV)
+        float zPitch = uZoneArray > 0.5 ? uLayerTile[int(zLayer)] : 0.0;
+        zoneWear(albedo, rough, matAO, vWorldPos, an, uvw.x * ${glslFloat(CELL)}, yl, zWear, zLamp, zPitch);
+        if (zStrip > 0.0) {
+          // Transition strip: a flat brushed-metal reducer, dulled by wear.
+          albedo = mix(albedo, vec3(0.55, 0.51, 0.44) * (1.0 - 0.35 * zWear), zStrip);
+          metal = mix(metal, 0.8, zStrip);
+          rough = mix(rough, 0.4 + 0.2 * zWear, zStrip);
+          Nw = normalize(mix(Nw, zN, zStrip));
+        }
+      #endif
     #else
       albedo = uColor * uIntensity * vTint;
+      #ifdef USE_DECAL
+        // Instance colour carries (atlas cell, brightness, roughness).
+        float cell = floor(vTint.r + 0.5);
+        vec2 cuv = (vec2(mod(cell, ${glslFloat(DECAL_GRID)}), ${glslFloat(DECAL_GRID - 1)} - floor(cell / ${glslFloat(DECAL_GRID)})) + clamp(vUv, 0.006, 0.994)) / ${glslFloat(DECAL_GRID)};
+        albedo = mix(uColor, texture(tDecal, cuv).rgb, vSurface.y) * vTint.g;
+        rough = vTint.b;
+      #endif
       #ifdef USE_TROFFER
         // Procedural troffer face (chapter 14 P19), emissive only, so it adds
         // no lighting cost: a 4 cm metal frame, a 2 cm prismatic lens grid
@@ -287,6 +537,9 @@ const FRAG = /* glsl */ `
         float face = mix(prism * tubes * ends, 0.35, step(rim, 0.04));
         albedo *= mix(1.0, face, uPanelPattern);
       #endif
+      #ifdef USE_LEAF_FINISH
+        leafFinish(albedo, rough, Nw, vWorldPos);
+      #endif
     #endif
     // Preserved glTF surface (furniture / enemy parts): per-vertex roughness
     // and metalness resolved from the Blender material vocabulary.
@@ -298,7 +551,7 @@ const FRAG = /* glsl */ `
     vec3 Nv = normalize(mat3(viewMatrix) * Nw);
     gColor = vec4(albedo, uMatID);
     gNormal = vec4(Nv * 0.5 + 0.5, rough);
-    gMaterial = vec4(metal, matAO, uGloss, 1.0);
+    gMaterial = vec4(metal, matAO, gloss, 1.0);
   }
 `
 
@@ -314,6 +567,12 @@ export const SURFACE_GLOSS = Object.freeze({
   carpet: 0, concrete: 0.16, tile: 0.55, deck: 0.38,
   wallpaper: 0.03, brick: 0.05, panel: 0.28, steel: 0.34,
   vault: 0.06,
+  // World surface-set variants.
+  carpetPattern: 0, carpetTile: 0, vct: 0.4, checker: 0.45, parquet: 0.3, planks: 0.25,
+  terrazzo: 0.5, polished: 0.35, mosaic: 0.5, grate: 0.3, diamond: 0.35,
+  stripe: 0.03, damask: 0.05, wainscot: 0.15, tileWainscot: 0.4, subway: 0.5, plaster: 0.02,
+  cmu: 0.03, woodPanel: 0.2, formwork: 0.05, corrugated: 0.3,
+  acoustic: 0, slats: 0.15, exposed: 0.04,
 })
 const glossOf = (spec) => SURFACE_GLOSS[spec?.style] ?? 0
 
@@ -339,11 +598,44 @@ function withBevel(material) {
   return material
 }
 
-function surfaceMaterial(map, detail, instanced) {
+// The empty zone map every surface material starts with: all rooms on layer
+// 0 (the family's canonical surface), no wear. Chunks bind their own.
+let defaultZoneMap = null
+export function defaultSurfaceZoneMap() {
+  if (!defaultZoneMap) defaultZoneMap = createZoneMapTexture(new Uint8Array(ZONE_MAP_SIZE * ZONE_MAP_SIZE * 4))
+  return defaultZoneMap
+}
+
+// A chunk's zone map texture (world/surfaceSet.js buildSurfaceZoneMap bytes).
+export function createZoneMapTexture(bytes) {
+  const tex = new THREE.DataTexture(bytes, ZONE_MAP_SIZE, ZONE_MAP_SIZE, THREE.RGBAFormat, THREE.UnsignedByteType)
+  tex.colorSpace = THREE.NoColorSpace
+  tex.magFilter = tex.minFilter = THREE.NearestFilter
+  tex.generateMipmaps = false
+  tex.needsUpdate = true
+  return tex
+}
+
+// `slot`: 0 floor, 1 wall, 2 ceiling — which zone-map channel this
+// material's surfaces read.
+function surfaceMaterial(map, detail, instanced, slot) {
+  const uniforms = baseUniforms(new THREE.Color(1, 1, 1), 0, 0, 1)
+  Object.assign(uniforms, {
+    tMapArray: { value: null },
+    tDetailArray: { value: null },
+    tZoneMap: { value: defaultSurfaceZoneMap() },
+    uZoneOrigin: { value: new THREE.Vector3() },
+    uZoneSlot: { value: slot },
+    uZoneArray: { value: 0 },
+    uWear: { value: 1 },
+    uLayerMetal: { value: new Float32Array(SURFACE_MAX_LAYERS) },
+    uLayerGloss: { value: new Float32Array(SURFACE_MAX_LAYERS) },
+    uLayerTile: { value: new Float32Array(SURFACE_MAX_LAYERS) },
+  })
   const m = new THREE.RawShaderMaterial({
     glslVersion: THREE.GLSL3,
-    defines: { USE_MAP: '', USE_WORLD_UV: '', ...(detail ? { USE_DETAIL: '' } : {}) },
-    uniforms: baseUniforms(new THREE.Color(1, 1, 1), 0, 0, 1),
+    defines: { USE_MAP: '', USE_WORLD_UV: '', USE_ZONES: '', ...(detail ? { USE_DETAIL: '' } : {}) },
+    uniforms,
     vertexShader: instanced ? VERT_INSTANCED : VERT_STATIC,
     fragmentShader: FRAG,
   })
@@ -360,11 +652,20 @@ function flatMaterial(colorLinear, matID, instanced, tinted = false, partColor =
       ...(partColor ? { USE_PART_COLOR: '' } : {}),
       ...(surface.part ? { USE_PART_SURFACE: '' } : {}),
       ...(surface.skinning ? { USE_SKINNING: '' } : {}),
+      ...(surface.leafFinish !== undefined ? { USE_LEAF_FINISH: '' } : {}),
+      ...(surface.decal ? { USE_DECAL: '' } : {}),
     },
-    uniforms: baseUniforms(colorLinear, matID, gloss, surface.roughness ?? 0.6, surface.metalness ?? 0),
+    uniforms: {
+      ...baseUniforms(colorLinear, matID, gloss, surface.roughness ?? 0.6, surface.metalness ?? 0),
+      ...(surface.leafFinish !== undefined
+        ? { uLeafFinish: { value: surface.leafFinish }, uLeafRust: { value: 0 } }
+        : {}),
+      ...(surface.decal ? { tDecal: { value: blankDecalTexture() } } : {}),
+    },
     vertexShader: instanced ? VERT_INSTANCED : VERT_STATIC,
     fragmentShader: FRAG,
   })
+  if (surface.decal) m.userData.blankDecal = m.uniforms.tDecal.value
   return surface.bevel ? withBevel(m) : m
 }
 
@@ -433,30 +734,121 @@ function applySurface(material, map, detail, spec, glossScale = 1) {
   }
 }
 
+// Painted-leaf finish per family: hollow-metal doors in the tower, plant-room
+// steel rusting from the foot in the sewer and the lattice.
+export const LEAF_FINISH = Object.freeze({
+  default: { finish: 0, rust: 0 },
+  tower: { finish: 2, rust: 0.08 },
+  sewer: { finish: 2, rust: 0.75 },
+  lattice: { finish: 2, rust: 0.35 },
+})
+
 // Swap the family-driven surfaces/colors on an EXISTING material set in place.
 // Everything holding a reference (ChunkManager, chunk meshes about to rebuild,
 // entities) keeps working; chunks re-mesh on the next level setup anyway.
-export function applyFamilyMaterials(materials, renderer, family) {
+//
+// `world` ({ seed, size }) also binds that world's surface set: the per-room
+// finish arrays every chunk's zone map indexes (world/surfaceSet.js). Without
+// it the arrays stay off and every room shows the family's base surfaces.
+export function applyFamilyMaterials(materials, renderer, family, world = null) {
   const pal = familyPalette(family)
   const tex = familyTextures(renderer, family)
   applySurface(materials.carpet, tex.floor, tex.floorDetail, pal.floor)
+  if (materials.stairTread) applySurface(materials.stairTread, tex.floor, tex.floorDetail, pal.floor)
   applySurface(materials.ceiling, tex.ceiling, tex.ceilingDetail, pal.ceiling, 0.5)
   applySurface(materials.wallpaper, tex.wall, tex.wallDetail, pal.wall)
   materials.panel.uniforms.uColor.value = lin(pal.panel)
   materials.panelDead.uniforms.uColor.value = lin(pal.panelDead)
   materials.doorFrame.uniforms.uColor.value = lin(pal.trim)
   materials.doorLeaf.uniforms.uColor.value = lin(pal.leaf)
+  const leaf = byFamily(LEAF_FINISH, family, 'default')
+  if (materials.doorLeaf.uniforms.uLeafFinish) {
+    materials.doorLeaf.uniforms.uLeafFinish.value = leaf.finish
+    materials.doorLeaf.uniforms.uLeafRust.value = leaf.rust
+  }
+  if (world) applyWorldSurfaces(materials, renderer, family, world)
   return pal
+}
+
+// Per-renderer cache of painted world surface arrays, newest last. A level
+// change paints a fresh set (each level is its own world seed); keeping the
+// previous two makes a retry or a title round-trip free.
+const ARRAY_CACHE_SIZE = 3
+
+function worldArrays(renderer, family, seed, size) {
+  familyTextures(renderer, family) // creates the renderer's cache owner
+  const owner = TEXTURE_CACHE.get(renderer)
+  owner.arrays ??= []
+  const key = `${family}|${seed >>> 0}|${size}`
+  const at = owner.arrays.findIndex((a) => a.key === key)
+  if (at >= 0) {
+    const [hit] = owner.arrays.splice(at, 1)
+    owner.arrays.push(hit)
+    return hit.arrays
+  }
+  const set = worldSurfaceSet(family, seed)
+  const arrays = buildSurfaceArrays(set, { size, aniso: renderer.capabilities.getMaxAnisotropy(), glossOf })
+  owner.arrays.push({ key, arrays })
+  while (owner.arrays.length > ARRAY_CACHE_SIZE) disposeSurfaceArrays(owner.arrays.shift().arrays)
+  return arrays
+}
+
+// The world's decal atlas, cached beside its surface arrays (same key, same
+// eviction). Atlas resolution follows the surface size: 4 x 4 cells' worth.
+function worldDecals(renderer, family, seed, size) {
+  familyTextures(renderer, family)
+  const owner = TEXTURE_CACHE.get(renderer)
+  owner.decals ??= []
+  const key = `${family}|${seed >>> 0}|${size}`
+  const at = owner.decals.findIndex((a) => a.key === key)
+  if (at >= 0) {
+    const [hit] = owner.decals.splice(at, 1)
+    owner.decals.push(hit)
+    return hit.atlas
+  }
+  const atlas = buildDecalAtlas(family, seed, { size: size * 4, aniso: renderer.capabilities.getMaxAnisotropy() })
+  owner.decals.push({ key, atlas })
+  while (owner.decals.length > ARRAY_CACHE_SIZE) owner.decals.shift().atlas.texture.dispose()
+  return atlas
+}
+
+// Bind one world's surface set to the three architecture materials, and its
+// decal atlas to the decal plates.
+export function applyWorldSurfaces(materials, renderer, family, { seed = 0, size = 256 } = {}) {
+  if (materials.decal) {
+    const atlas = worldDecals(renderer, family, seed, size)
+    materials.decal.uniforms.tDecal.value = atlas.texture
+    materials.decal.userData.decalAverages = atlas.averages
+  }
+  const arrays = worldArrays(renderer, family, seed, size)
+  const slots = [['carpet', 'floor'], ['stairTread', 'floor'], ['wallpaper', 'wall'], ['ceiling', 'ceiling']]
+  for (const [name, slot] of slots) {
+    if (!materials[name]) continue
+    const u = materials[name].uniforms
+    const a = arrays[slot]
+    u.tMapArray.value = a.map
+    u.tDetailArray.value = a.detail
+    u.uLayerMetal.value = a.metal
+    u.uLayerTile.value = a.tile
+    // Ceilings carry half the gloss of their style, like the base surface.
+    u.uLayerGloss.value = slot === 'ceiling' ? a.gloss.map((g) => g * 0.5) : a.gloss
+    u.uZoneArray.value = 1
+  }
+  return arrays
 }
 
 export function createGBufferMaterials(renderer, family = MAP_FAMILY_OFFICE) {
   const pal = familyPalette(family)
   const tex = familyTextures(renderer, family)
 
-  const carpet = surfaceMaterial(tex.floor, tex.floorDetail, false) // floor mesh
-  const ceiling = surfaceMaterial(tex.ceiling, tex.ceilingDetail, false) // ceiling mesh
-  const wallpaper = surfaceMaterial(tex.wall, tex.wallDetail, true) // instanced walls, columns, steps
+  const carpet = surfaceMaterial(tex.floor, tex.floorDetail, false, 0) // floor mesh
+  const ceiling = surfaceMaterial(tex.ceiling, tex.ceilingDetail, false, 2) // ceiling mesh
+  const wallpaper = surfaceMaterial(tex.wall, tex.wallDetail, true, 1) // instanced walls, columns
+  // Stair steps wear the floor finish of their flight (carpeted stairs,
+  // tiled stairs), not the wallpaper they used to borrow.
+  const stairTread = surfaceMaterial(tex.floor, tex.floorDetail, true, 0)
   applySurface(carpet, tex.floor, tex.floorDetail, pal.floor)
+  applySurface(stairTread, tex.floor, tex.floorDetail, pal.floor)
   applySurface(ceiling, tex.ceiling, tex.ceilingDetail, pal.ceiling, 0.5)
   applySurface(wallpaper, tex.wall, tex.wallDetail, pal.wall)
 
@@ -483,7 +875,19 @@ export function createGBufferMaterials(renderer, family = MAP_FAMILY_OFFICE) {
   const doorFrame = flatMaterial(lin(pal.trim), 0, true, false, false, 0.3, { roughness: 0.4, bevel: true })
   // Painted leaf base; per-door instanceColor tones it (brightness band,
   // rare dark stain) and darkens the knob to metal — see mesh.js leafTint.
-  const doorLeaf = flatMaterial(lin(pal.leaf), 0, true, true, false, 0.25, { roughness: 0.46, bevel: true })
+  // The finish (painted timber / painted steel) follows the family.
+  const doorLeaf = flatMaterial(lin(pal.leaf), 0, true, true, false, 0.25, { roughness: 0.46, bevel: true, leafFinish: 0 })
+  // Veneered leaves (office flush doors, hotel mahogany): white base, the
+  // species tint per instance, lacquered grain in the shader.
+  const doorVeneer = flatMaterial(lin(0xffffff), 0, true, true, false, 0.3, { roughness: 0.38, bevel: true, leafFinish: 1 })
+  // Door hardware: hinges, levers, closers, kick and number plates. Metal
+  // (F0 = the per-instance tint), brushed; a little diffuse kept so a plate
+  // facing a dark floor still reads as steel without an environment probe.
+  const doorHardware = flatMaterial(lin(0xffffff), 0, true, true, false, 0.5, { roughness: 0.34, metalness: 0.82, bevel: true, leafFinish: 3 })
+  // Printed wall decals (posters, notices, plans, dials, signs): sharp thin
+  // plates whose broad faces sample the world's decal atlas; the instance
+  // colour picks the cell. Board-coloured edges.
+  const decal = flatMaterial(lin(0xd8d4c8), 0, true, true, false, 0.12, { roughness: 0.7, decal: true })
   // Interior props (thresholds, radiators, clocks, boards, extinguisher
   // cabinets, vents): white base tinted per instance by the objects/dressing
   // palettes. Mostly painted metal and plastic.
@@ -501,7 +905,11 @@ export function createGBufferMaterials(renderer, family = MAP_FAMILY_OFFICE) {
   // multiplied by the per-instance tint.
   const furnitureModel = flatMaterial(lin(0xffffff), 0, true, true, true, 0.22, { part: true })
 
-  const materials = { carpet, ceiling, wallpaper, panel, panelDead, entity, pursuer, husk, entityModel, entityModelSkinned, exit, doorFrame, doorLeaf, prop, signGlow, furniture, furnitureModel }
+  // Window panes: the forward glass pass (glassMaterial.js), not a G-buffer
+  // material — DeferredRenderer.setGlassMaterial binds its inputs.
+  const glass = createGlassMaterial()
+
+  const materials = { carpet, stairTread, ceiling, wallpaper, panel, panelDead, entity, pursuer, husk, entityModel, entityModelSkinned, exit, doorFrame, doorLeaf, doorVeneer, doorHardware, prop, decal, signGlow, furniture, furnitureModel, glass }
   const owner = TEXTURE_CACHE.get(renderer)
   owner.references++
   MATERIAL_OWNERS.set(materials, owner)
@@ -520,10 +928,15 @@ export function disposeGBufferMaterials(mats) {
         for (const tex of Object.values(set)) tex?.dispose?.()
       }
       owner.sets.clear()
+      for (const entry of owner.arrays ?? []) disposeSurfaceArrays(entry.arrays)
+      owner.arrays = []
+      for (const entry of owner.decals ?? []) entry.atlas.texture.dispose()
+      owner.decals = []
     }
   }
   for (const m of Object.values(mats)) {
     if (!m) continue
+    m.userData?.blankDecal?.dispose()
     m.dispose?.()
   }
 }

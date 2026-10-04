@@ -11,6 +11,7 @@ import { builder } from '../objects/furniture/frame.js'
 import * as FURN from '../furniture.js'
 import { PIECE_DIMS } from '../rooms/furnish.js'
 import { CELL, THICK, CHAIR_W, DESK_W, DESK_D, TABLE_W, TABLE_D } from '../constants.js'
+import { readPackManifest } from '../../render/__tests__/packManifest.js'
 
 // Furniture shadow proxies vs the GLBs as rendered. Every GLB is parsed with
 // node:fs alone (no three.js), placed exactly the way world/mesh.js instances
@@ -45,10 +46,14 @@ const SEE_THROUGH_T = 5
 //     the GLB's own coordinates tops out near .52.
 const SIDE_FLOOR = { [FURN.FURN_TABLE]: 0.55, [FURN.FURN_CHAIR]: 0.5 }
 
-// Kind id -> GLB name, by the naming convention render/furnitureModels.js
-// FURNITURE_MODEL_FILES follows (FURN_DESK -> desk.glb). Kept import-free of
-// three.js; the "every GLB has a kind" check below catches drift.
-const KINDS = Object.entries(FURN)
+// Kind id -> GLB name from the furniture pack manifest (scripts/blender/
+// build_pack.py), which also carries the build's copy of the proxies.
+// Kept import-free of three.js; the checks below pin it to the FURN_*
+// exports by the naming convention render/furnitureModels.js
+// FURNITURE_MODEL_FILES follows (FURN_DESK -> desk.glb) and to the GLBs.
+const MANIFEST = readPackManifest('furniture')
+const KINDS = MANIFEST.kinds.map((k) => ({ id: FURN[k.kindKey], key: k.kindKey, file: k.file }))
+const FURN_KINDS = Object.entries(FURN)
   .filter(([k, v]) => k.startsWith('FURN_') && Number.isInteger(v))
   .map(([k, v]) => ({ id: v, key: k, file: `${k.slice(5).toLowerCase()}.glb` }))
 
@@ -331,6 +336,8 @@ const modelOf = (kind) => {
 describe('furniture shadow proxies: table contract', () => {
   it('covers exactly the placement kinds, one GLB each', () => {
     const glbs = readdirSync(MODELS_DIR).filter((f) => f.endsWith('.glb')).sort()
+    const byId = (a, b) => a.id - b.id
+    expect([...KINDS].sort(byId)).toEqual([...FURN_KINDS].sort(byId))
     expect(KINDS.map((k) => k.file).sort()).toEqual(glbs)
     expect(Object.keys(FURNITURE_PROXIES).map(Number).sort((a, b) => a - b))
       .toEqual(KINDS.map((k) => k.id).sort((a, b) => a - b))
@@ -349,6 +356,23 @@ describe('furniture shadow proxies: table contract', () => {
         expect(Number.isInteger(b.t) && b.t >= 0 && b.t <= 7, key).toBe(true)
         for (const c of [b.u0, b.u1, b.v0, b.v1]) expect(Math.abs(c), key).toBeLessThanOrEqual(CELL / 2)
       }
+    }
+  })
+
+  it('matches the occ_* proxies and collision dims the Blender build recorded in the manifest', () => {
+    for (const k of MANIFEST.kinds) {
+      const boxes = FURNITURE_PROXIES[FURN[k.kindKey]]
+      expect(k.proxies.map((b) => b.name), k.kind).toEqual(['occ_A', 'occ_B'].slice(0, boxes.length))
+      boxes.forEach((b, i) => {
+        for (const f of ['u0', 'u1', 'v0', 'v1', 'y0', 'y1']) {
+          expect(Math.abs(k.proxies[i][f] - b[f]), `${k.kind} ${k.proxies[i].name} ${f}`).toBeLessThanOrEqual(0.005)
+        }
+        expect(k.proxies[i].t, `${k.kind} ${k.proxies[i].name} t`).toBe(b.t)
+      })
+      // Collision: the footprint placement() sweeps (facing 0: w along x).
+      const f = placement(FURN[k.kindKey], 0)
+      expect(k.collision.w, k.kind).toBeCloseTo(f.w, 4)
+      expect(k.collision.d, k.kind).toBeCloseTo(f.d, 4)
     }
   })
 

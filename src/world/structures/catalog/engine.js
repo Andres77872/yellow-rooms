@@ -33,6 +33,21 @@ export const CATALOG_KINDS = Object.freeze({
   sewer: 'sewerCatalog',
   tower: 'towerCatalog',
   lattice: 'latticeCatalog',
+  // The 12 liminal families' catalog volume kinds (spec §7.1), appended in
+  // LIMINAL_FAMILY_IDS order. Append-only: the golden digest folds a kind
+  // as 5 + its index here (codes-append-only.test).
+  stairwell: 'stairwellCatalog',
+  nightlot: 'nightlotCatalog',
+  showroom: 'showroomCatalog',
+  poolrooms: 'poolroomsCatalog',
+  babel: 'babelCatalog',
+  suburb: 'suburbCatalog',
+  terminal: 'terminalCatalog',
+  theater: 'theaterCatalog',
+  playplace: 'playplaceCatalog',
+  train: 'trainCatalog',
+  house: 'houseCatalog',
+  funhouse: 'funhouseCatalog',
 })
 const CATALOG_KIND_SET = new Set(Object.values(CATALOG_KINDS))
 export const isCatalogKind = (kind) => CATALOG_KIND_SET.has(kind)

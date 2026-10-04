@@ -13,6 +13,7 @@ import {
   LATTICE_EDGE_COLORS,
   SPACE_ROLE_PALETTE,
   STRUCTURE_FAMILY_COLORS,
+  structureFamilyColor,
   ZONE_TINT,
   roomRoleLabel,
   spaceIdColor,
@@ -65,7 +66,7 @@ export function paintCellOverlays(view, d, ccx, ccz, { fillMode = 'zones', letha
     const structure = chunkParticipant(d, ccx, ccz)
     if (structure) {
       ctx.globalAlpha = 0.12
-      ctx.fillStyle = STRUCTURE_FAMILY_COLORS[structureFamily(structure)] ?? '#d8b24a'
+      ctx.fillStyle = structureFamilyColor(structureFamily(structure))
       ctx.fillRect(sx(ox), sy(oz), CHUNK_WORLD * scale, CHUNK_WORLD * scale)
       ctx.globalAlpha = 1
     }
@@ -274,7 +275,7 @@ function paintLatticeStructure(view, structure) {
 // deviation storey gets a warning corner tick.
 function paintCatalogStructure(view, structure) {
   const { ctx, floor, scale, sx, sy } = view
-  const color = STRUCTURE_FAMILY_COLORS[structureFamily(structure)] ?? '#d8b24a'
+  const color = structureFamilyColor(structureFamily(structure))
   const rectPx = (r) => [
     sx(r.x0 * CELL),
     sy(r.z0 * CELL),
@@ -349,7 +350,7 @@ function paintBounds(view, structure, pinned) {
   const bounds = structure.globalBounds
   if (!Number.isInteger(bounds?.x0)) return
   const { ctx, scale, sx, sy } = view
-  const color = STRUCTURE_FAMILY_COLORS[structureFamily(structure)] ?? '#d8b24a'
+  const color = structureFamilyColor(structureFamily(structure))
   const x = sx(bounds.x0 * CELL)
   const y = sy(bounds.z0 * CELL)
   const w = (bounds.x1 - bounds.x0 + 1) * CELL * scale

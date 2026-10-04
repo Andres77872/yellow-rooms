@@ -1,4 +1,5 @@
 import {
+  FPS_MONITOR_MODES,
   FRAME_LIMITS,
   NOISE_MODES,
   PATH_TRACER_MODES,
@@ -50,16 +51,31 @@ const FRAME_LIMIT_HINT =
   'Caps how often the game draws while you play. Lower = less GPU load, heat and power; ' +
   'the image itself is unchanged. ½ REFRESH stays evenly paced on any display; ' +
   'a fixed rate is smoothest when it divides your refresh rate.'
+const FPS_MONITOR_LABELS = { off: 'OFF', fps: 'FPS', stats: 'FPS + STATS' }
+const fpsMonitorOpts = FPS_MONITOR_MODES
+  .map((m) => `<option value="${m}">${FPS_MONITOR_LABELS[m]}</option>`)
+  .join('')
+const FPS_MONITOR_HINT =
+  'Shows the frame rate in the top-left corner. FPS: frames per second and average frame time. ' +
+  'FPS + STATS: adds the slowest frame, draw calls, triangles and GPU resources. ' +
+  'The backtick key (`) cycles it.'
+const EXPERIMENTAL_MAPS_HINT =
+  'Adds the liminal maps (Stairwell, Night Lot, Poolrooms and the rest) to the MAP list, ' +
+  'under EXPERIMENTAL. They are still in development: layouts, lighting and props can change ' +
+  'between versions, so a seed may not rebuild the same world after an update.'
 const PATH_TRACER_LABELS = { off: 'OFF', viewer: 'VIEWER (P)', realtime: 'REALTIME (P: A/B)' }
 const pathTracerOpts = PATH_TRACER_MODES
   .map((m) => `<option value="${m}">${PATH_TRACER_LABELS[m]}</option>`)
   .join('')
 
 // Simple view: the knobs a player actually reaches for, plus the
-// photosensitivity toggle, which must never hide behind a click. Every other
+// photosensitivity toggle, which must never hide behind a click, and the
+// EXPERIMENTAL MAPS opt-in, which unlocks entries of the MAP picker. Every other
 // prop lives in the collapsed ADVANCED section so both cards stay short —
 // nothing is removed, just one click deeper.
 export const SETTINGS_HTML = `
+  <div class="group">MAPS</div>
+  <label title="${EXPERIMENTAL_MAPS_HINT}">EXPERIMENTAL MAPS <input type="checkbox" data-k="expMaps"></label>
   <div class="group">LOOK</div>
   <label>SENSITIVITY <span class="ctl">
     <input type="range" data-k="sens" min="${SENS_MULT_MIN}" max="${SENS_MULT_MAX}" step="0.05">
@@ -70,10 +86,15 @@ export const SETTINGS_HTML = `
     <input type="range" data-k="vol" min="0" max="1" step="0.02">
     <output class="val" data-k="volVal"></output>
   </span></label>
+  <label title="Public-domain pieces played over the building's PA">MUSIC <span class="ctl">
+    <input type="range" data-k="music" min="0" max="1" step="0.02">
+    <output class="val" data-k="musicVal"></output>
+  </span></label>
   <div class="group">GRAPHICS</div>
   <label>VISUAL STYLE <select data-k="look">${lookOpts}</select></label>
   <label>QUALITY PRESET <select data-k="preset">${presetOpts}</select></label>
   <label title="${FRAME_LIMIT_HINT}">FRAME RATE LIMIT <select data-k="fps">${frameLimitOpts}</select></label>
+  <label title="${FPS_MONITOR_HINT}">FPS MONITOR <select data-k="fpsMon">${fpsMonitorOpts}</select></label>
   <div class="group">ACCESSIBILITY</div>
   <label title="Keeps flickering lights under 3 flashes per second and a 10% brightness change">
     REDUCE FLICKER (PHOTOSENSITIVITY) <input type="checkbox" data-k="flicker"></label>
@@ -119,11 +140,13 @@ const WIRE = [
   // The slider is in multiples of the default; the store keeps radians/px.
   ['sens', 'input', 'sensitivity', (el) => parseFloat(el.value) * SENS_DEFAULT],
   ['vol', 'input', 'volume', (el) => parseFloat(el.value)],
+  ['music', 'input', 'music', (el) => parseFloat(el.value)],
   ['invY', 'change', 'invertY', (el) => el.checked],
   ['invX', 'change', 'invertX', (el) => el.checked],
   ['look', 'change', 'look', (el) => el.value],
   ['preset', 'change', 'preset', (el) => el.value],
   ['fps', 'change', 'frameLimit', (el) => (Number.isNaN(Number(el.value)) ? el.value : Number(el.value))],
+  ['fpsMon', 'change', 'fpsMonitor', (el) => el.value],
   // Commit on release: every render-scale step reallocates the complete
   // deferred target set, so dragging only previews the label (see below).
   ['rscale', 'change', 'renderScale', (el) => parseFloat(el.value)],
@@ -142,6 +165,7 @@ const WIRE = [
   ['out', 'change', 'outline', (el) => el.checked],
   ['map', 'change', 'minimap', (el) => el.checked],
   ['flicker', 'change', 'reduceFlicker', (el) => el.checked],
+  ['expMaps', 'change', 'experimentalMaps', (el) => el.checked],
   ['pathTracer', 'change', 'pathTracer', (el) => el.value],
 ]
 
@@ -180,6 +204,8 @@ export class SettingsBlock {
     this.el.sensVal.value = `×${mult.toFixed(2)}`
     this.el.vol.value = s.get('volume')
     this.el.volVal.value = `${Math.round(s.get('volume') * 100)}%`
+    this.el.music.value = s.get('music')
+    this.el.musicVal.value = `${Math.round(s.get('music') * 100)}%`
     this.el.invY.checked = s.get('invertY')
     this.el.invX.checked = s.get('invertX')
     this.el.look.value = s.get('look')
@@ -187,6 +213,7 @@ export class SettingsBlock {
     const auto = this.el.preset.querySelector?.('option[value="auto"]')
     if (auto) auto.textContent = autoPreset ? `AUTO (${autoPreset.toUpperCase()})` : 'AUTO'
     this.el.fps.value = String(s.get('frameLimit'))
+    this.el.fpsMon.value = s.get('fpsMonitor')
     this.el.rscale.value = s.get('renderScale')
     this.el.rscaleVal.value = `${Math.round(s.get('renderScale') * 100)}%`
     this.el.worldDetail.value = s.get('worldDetail')
@@ -211,6 +238,7 @@ export class SettingsBlock {
     this.el.out.checked = s.get('outline')
     this.el.map.checked = s.get('minimap')
     this.el.flicker.checked = s.get('reduceFlicker')
+    this.el.expMaps.checked = s.get('experimentalMaps')
     // Same rule as DYNAMIC RESOLUTION: the control shows what can run.
     // Without WebGPU (or on touch) it reads OFF and is locked, and says why;
     // the stored choice is kept for a browser that has it.

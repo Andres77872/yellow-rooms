@@ -16,8 +16,9 @@ import {
 import { box } from './frame.js'
 
 // Gallery observation window: casing + a projecting stool ledge + an apron
-// board under it, then one of three deterministic glazing treatments inside
-// the aperture (selected by `tone`, a per-window hash stream from mesh.js):
+// board under it, then one of three glazing treatments inside the aperture,
+// selected by `tone` — the glazing system of the whole screen the window
+// belongs to (world/glazing.js GLAZING_*), never a per-window roll:
 //   tone < 0.45 : the classic four-pane cross;
 //   tone < 0.8  : a single vertical bar (taller, quieter read);
 //   else        : venetian blinds — head rail, slats, bottom rail.

@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { CHUNK } from '../../world/constants.js'
+import { CELL, CHUNK } from '../../world/constants.js'
 import { hashStr } from '../../world/core/hash.js'
 import { worldConfigForFamilyOrOffice } from '../../world/mapFamily.js'
 import { CELL_ROOM, PASSAGE_DOOR, PASSAGE_WALL, WALL_WINDOW } from '../../world/mapTypes.js'
 import { auditLayeredPatch } from '../../world/audit.js'
+import { FURN_BOOKSHELF, FURN_DESK } from '../../world/rooms/catalog.js'
 import { EditorMap } from '../EditorMap.js'
 import { WorldSource } from '../worldSource.js'
 import {
@@ -228,6 +229,31 @@ describe('room repetition', () => {
       }
     })
     expect(roomRepetition(map, BOX0, 0)).toEqual({ rooms: 3, repeated: 2, share: 2 / 3 })
+  })
+
+  it('signs every record of a stacked cell, in any record order', async () => {
+    const { roomRepetition } = await import('../simulate.js')
+    const SHELF = { kind: FURN_BOOKSHELF, w: 0.4, d: 0.9, facing: 3 }
+    const DESK = { kind: FURN_DESK, w: 1.7, d: 0.85, facing: 0 }
+    // Three 3×3 rooms side by side; `stack` is what stands on each room's
+    // centre cell, in record order.
+    const rooms = (stacks) => {
+      const map = new EditorMap()
+      map.mutate(() => {
+        stacks.forEach((stack, i) => {
+          const x0 = 1 + 4 * i
+          for (let gz = 1; gz <= 3; gz++) for (let gx = x0; gx <= x0 + 2; gx++) map.setCell(gx, 0, gz, { kind: CELL_ROOM, spaceId: i + 1 })
+          for (const piece of stack) map.addFurniture(x0 + 1, 0, 2, { ...piece, x: (x0 + 1.5) * CELL, z: 2.5 * CELL })
+        })
+      })
+      return roomRepetition(map, BOX0, 0)
+    }
+    // Room 3 lost a shelf of its gondola: not a repeat (a first-record
+    // signature would call all three repeats).
+    expect(rooms([[SHELF, SHELF], [SHELF, SHELF], [SHELF]])).toEqual({ rooms: 3, repeated: 2, share: 2 / 3 })
+    // The same stack in another record order is a repeat (items sort); a
+    // first-record signature would find none.
+    expect(rooms([[SHELF, DESK], [DESK, SHELF], []])).toEqual({ rooms: 3, repeated: 2, share: 2 / 3 })
   })
 })
 
