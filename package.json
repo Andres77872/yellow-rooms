@@ -17,6 +17,7 @@
     "benchmark:map-families": "node scripts/benchmark-map-families.mjs",
     "benchmark:render-scene": "node scripts/benchmark-render-scene.mjs",
     "benchmark:light-grid": "node scripts/benchmark-light-grid.mjs",
+    "benchmark:streaming": "node scripts/benchmark-streaming-builds.mjs",
     "lint": "oxlint",
     "preview": "vite preview",
     "test": "vitest run",

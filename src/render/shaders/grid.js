@@ -71,6 +71,25 @@ import {
 
 const uintList = (a) => a.map((v) => `${v >>> 0}u`).join(', ')
 
+// Multiply-shift constants [mul, shift] with (x * mul) >> shift === floor(x / d)
+// for every 0 <= x < limit (found by search, so the claim is checked, not
+// assumed). x * mul stays below 2^31.
+export function divMagic(d, limit) {
+  for (let shift = 8; shift < 31; shift++) {
+    const mul = Math.ceil(2 ** shift / d)
+    if ((limit - 1) * mul >= 2 ** 31) break
+    let ok = true
+    for (let x = 0; x < limit && ok; x++) ok = Math.floor((x * mul) / 2 ** shift) === Math.floor(x / d)
+    if (ok) return [mul, shift]
+  }
+  throw new Error(`no multiply-shift for / ${d} below ${limit}`)
+}
+// A light-list entry's 10-bit reference, split by REF_SPAN and REF_SPAN^2.
+export const REF_DIV = Object.freeze({
+  span: divMagic(REF_SPAN, 1024),
+  span2: divMagic(REF_SPAN * REF_SPAN, 1024),
+})
+
 export const GRID_UNIFORMS_GLSL = /* glsl */ `
   uniform highp usampler2D tGridList;
   uniform sampler2D tGridEdge;
@@ -98,7 +117,13 @@ export const GRID_GLSL = /* glsl */ `
   #define G_FRAME_BAND ${glslFloat(FRAME_W + 0.02)}
   #define G_INV_PI 0.31830989
 
-  int gImod(int a, int n){ int m = a - n * (a / n); return m < 0 ? m + n : m; }
+  // Floor modulo with the quotient from one float divide: GPUs have no fast
+  // integer divide, and every texel address takes three of these (the
+  // int a / n form was ~13% of the lighting pass). Exact for |a| < 2^22:
+  // float(a) + 0.5 is exact there and its quotient stays 0.5 / n clear of
+  // every integer, more than the divide can round. World cells are far
+  // inside that range (2^22 cells is 12,000 km from the origin).
+  int gImod(int a, int n){ return a - n * int(floor((float(a) + 0.5) / float(n))); }
   int gFloorDiv(int a, int b){ return a >= 0 ? a / b : -((-a + b - 1) / b); }
   ivec2 gTexel(int gx, int gz, int cy){
     return ivec2(gImod(gx, G_W), gImod(gz, G_W) + gImod(cy, G_FLOORS) * G_W);
@@ -416,19 +441,23 @@ export const GRID_GLSL = /* glsl */ `
     }
     return n;
   }
-  // Relative reference (dx, dz, df) of entry k, from the 10-bit ref alone.
-  ivec3 gEntryRef(uvec4 L, int k){
-    int ref = int(gEntryBits(L, k) & 1023u);
-    return ivec3(ref % ${REF_SPAN} - ${REF_REACH}, (ref / ${REF_SPAN}) % ${REF_SPAN} - ${REF_REACH},
-      ref / ${REF_SPAN * REF_SPAN} - ${REF_FLOOR_REACH});
+  // Relative reference (dx, dz, df) of a 10-bit ref. The two divisions are
+  // multiply-shifts (exact for every ref < 1024; grid-shader-math.test.js checks
+  // all of them): this runs for every entry of every lit pixel.
+  ivec3 gRefDecode(int ref){
+    int q = (ref * ${REF_DIV.span[0]}) >> ${REF_DIV.span[1]};     // ref / REF_SPAN
+    int f = (ref * ${REF_DIV.span2[0]}) >> ${REF_DIV.span2[1]};   // ref / REF_SPAN^2
+    return ivec3(ref - q * ${REF_SPAN} - ${REF_REACH}, q - f * ${REF_SPAN} - ${REF_REACH}, f - ${REF_FLOOR_REACH});
   }
+  // Relative reference of entry k, from the 10-bit ref alone.
+  ivec3 gEntryRef(uvec4 L, int k){ return gRefDecode(int(gEntryBits(L, k) & 1023u)); }
 
   // Decode entry k of a list texel. Returns false past the end of the list.
   bool gridEntry(uvec4 L, int k, int gx, int gz, int cy, out GridLight gl){
     uint e = gEntryBits(L, k);
     uint vis = e >> 10u;
     if (vis == 0u) return false;
-    ivec3 r = gEntryRef(L, k);
+    ivec3 r = gRefDecode(int(e & 1023u));
     int lx = gx + r.x;
     int lz = gz + r.y;
     int ly = cy + r.z;
@@ -730,6 +759,9 @@ export const GRID_GLSL = /* glsl */ `
   const uint G_OCC_ROW[25] = uint[25](${uintList(OCC_ROW_RANGE)});
 
   uvec4 gOcc(int gx, int gz, int cy){ return texelFetch(tGridOcc, gTexel(gx, gz, cy), 0); }
+  // Index of the single set bit of a power of two below 2^25 (GLSL ES 3.00
+  // has no findLSB): the exponent of its exact float.
+  int gBitIndex(uint bit){ return (floatBitsToInt(float(bit)) >> 23) - 127; }
 
   // Box "which" (0 = A, 1 = B) of an occupancy texel as a world AABB and its
   // light transmission. False when the slot holds no box.

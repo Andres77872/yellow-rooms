@@ -48,6 +48,10 @@ export class Minimap {
     this.canvas = canvas
     this.ctx = canvas.getContext('2d')
     this.visible = false
+    this._seen = null // reveal mask of the cell window, refilled per redraw
+    this._rim = null // scope vignette gradient (constant per context)
+    // Inputs of the frame currently on the canvas (update() skips a repeat).
+    this._drawn = { valid: false, rev: 0, store: null, px: 0, pz: 0, yaw: 0, floor: 0, exit: null }
     this.resize()
   }
 
@@ -59,10 +63,13 @@ export class Minimap {
     this.canvas.style.width = SIZE + 'px'
     this.canvas.style.height = SIZE + 'px'
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    this._rim = null
+    this._drawn.valid = false // sizing a canvas clears it
   }
 
   setVisible(v) {
     this.visible = v
+    this._drawn.valid = false
     // Toggle the circular bezel wrapper (.mapwrap) so the device hides cleanly.
     this.canvas.parentElement?.classList.toggle('hidden', !v)
   }
@@ -85,6 +92,38 @@ export class Minimap {
     const ctx = this.ctx
     const px = controller.pos.x
     const pz = controller.pos.z
+    const yaw = controller.yaw
+    const exitShown = !!(exitRevealed && exit && (exit.cy ?? 0) === floor)
+
+    // The disc is a pure function of the player pose, the floor and the fog
+    // state. A player standing still redraws nothing; only the exit's pulse
+    // animates on its own. Stores without a revision counter always redraw.
+    const rev = store.revision
+    const d = this._drawn
+    const shownExit = exitShown ? exit : null
+    if (
+      d.valid &&
+      rev !== undefined &&
+      d.rev === rev &&
+      d.store === store &&
+      d.px === px &&
+      d.pz === pz &&
+      d.yaw === yaw &&
+      d.floor === floor &&
+      d.exit === shownExit &&
+      !(exitShown && !REDUCED_MOTION)
+    ) {
+      return
+    }
+    d.valid = true
+    d.rev = rev
+    d.store = store
+    d.px = px
+    d.pz = pz
+    d.yaw = yaw
+    d.floor = floor
+    d.exit = shownExit
+
     ctx.clearRect(0, 0, SIZE, SIZE)
 
     // Opaque warm-dark base so unexplored area reads as solid fog (and the lit
@@ -101,12 +140,22 @@ export class Minimap {
     const gz0 = pgz - cR
     const gz1 = pgz + cR
 
+    // Fog mask of the window, read from the store once: every layer below
+    // tests the same cells, and each store query is a keyed chunk lookup.
+    const span = cR * 2 + 1
+    if (this._seen?.length !== span * span) this._seen = new Uint8Array(span * span)
+    const seen = this._seen
+    for (let gz = gz0, i = 0; gz <= gz1; gz++) {
+      for (let gx = gx0; gx <= gx1; gx++) seen[i++] = store.isRevealed(gx, gz, floor) ? 1 : 0
+    }
+    const win = { seen, span, gx0, gx1, gz0, gz1 }
+
     // 1) Revealed floor tiles — explored reads as warm cream, unknown stays fog.
     const tile = CELL * SCALE + 1
     ctx.fillStyle = C.seen
     for (let gz = gz0; gz <= gz1; gz++) {
       for (let gx = gx0; gx <= gx1; gx++) {
-        if (!store.isRevealed(gx, gz, floor)) continue
+        if (!seen[(gz - gz0) * span + (gx - gx0)]) continue
         if (store.floorHoleAt?.(gx, gz, floor)) continue
         ctx.fillRect(this._sx(gx * CELL, px), this._sy(gz * CELL, pz), tile, tile)
       }
@@ -115,7 +164,7 @@ export class Minimap {
     ctx.fillStyle = C.bridge
     for (let gz = gz0; gz <= gz1; gz++) {
       for (let gx = gx0; gx <= gx1; gx++) {
-        if (!store.isRevealed(gx, gz, floor)) continue
+        if (!seen[(gz - gz0) * span + (gx - gx0)]) continue
         if (store.cellKindAt?.(gx, gz, floor) !== CELL_BRIDGE) continue
         ctx.fillRect(this._sx(gx * CELL, px), this._sy(gz * CELL, pz), tile, tile)
       }
@@ -128,7 +177,7 @@ export class Minimap {
     ctx.beginPath()
     for (let gz = gz0; gz <= gz1; gz++) {
       for (let gx = gx0; gx <= gx1; gx++) {
-        if (!store.isRevealed(gx, gz, floor)) continue
+        if (!seen[(gz - gz0) * span + (gx - gx0)]) continue
         const xL = this._sx(gx * CELL, px)
         const xR = this._sx((gx + 1) * CELL, px)
         const yT = this._sy(gz * CELL, pz)
@@ -162,7 +211,7 @@ export class Minimap {
       ctx.beginPath()
       for (let gz = gz0; gz <= gz1; gz++) {
         for (let gx = gx0; gx <= gx1; gx++) {
-          if (!store.isRevealed(gx, gz, floor)) continue
+          if (!seen[(gz - gz0) * span + (gx - gx0)]) continue
           const xL = this._sx(gx * CELL, px)
           const xR = this._sx((gx + 1) * CELL, px)
           const yT = this._sy(gz * CELL, pz)
@@ -190,7 +239,7 @@ export class Minimap {
     ctx.fillStyle = C.column
     for (let gz = gz0; gz <= gz1; gz++) {
       for (let gx = gx0; gx <= gx1; gx++) {
-        if (!store.isRevealed(gx, gz, floor)) continue
+        if (!seen[(gz - gz0) * span + (gx - gx0)]) continue
         if (!store.columnAt(gx, gz, floor)) continue
         const half = store.columnHalfAt?.(gx, gz, floor) || COL_HALF
         const csz = Math.max(2, half * 2 * SCALE)
@@ -203,28 +252,28 @@ export class Minimap {
     // 4) Stair glyphs on revealed cells: ▲ gold at an up-stair's landing,
     // ▼ mint at a down-stair's exit — discovered stairwells are the primary
     // wayfinding anchors of an infinite layered map.
-    this._drawStairs(store, floor, px, pz, gx0, gx1, gz0, gz1)
+    this._drawStairs(store, floor, px, pz, win)
 
     // 5) Lit lamps in revealed cells — faint warm glow (the fluorescent motif).
-    this._drawLamps(store, floor, px, pz, gx0, gx1, gz0, gz1)
+    this._drawLamps(store, floor, px, pz, win)
 
     // 6) Exit — only once its cell has actually been discovered, and only on
     // its own floor.
-    if (exitRevealed && exit && (exit.cy ?? 0) === floor) this._drawExit(exit, px, pz)
+    if (exitShown) this._drawExit(exit, px, pz)
 
     // 7) Player wedge + dot at the disc centre.
-    this._drawPlayer(controller.yaw)
+    this._drawPlayer(yaw)
 
     // 8) Scope vignette + N tick + floor indicator.
     this._drawFrame(floor)
   }
 
-  _drawStairs(store, floor, px, pz, gx0, gx1, gz0, gz1) {
+  _drawStairs(store, floor, px, pz, { seen, span, gx0, gx1, gz0, gz1 }) {
     const ctx = this.ctx
     ctx.save()
     for (let gz = gz0; gz <= gz1; gz++) {
       for (let gx = gx0; gx <= gx1; gx++) {
-        if (!store.isRevealed(gx, gz, floor)) continue
+        if (!seen[(gz - gz0) * span + (gx - gx0)]) continue
         const s = store.stairAt(gx, gz, floor)
         if (!s) continue
         // One glyph per stair: at the landing (up) / at the exit cell (down).
@@ -251,7 +300,7 @@ export class Minimap {
     ctx.restore()
   }
 
-  _drawLamps(store, floor, px, pz, gx0, gx1, gz0, gz1) {
+  _drawLamps(store, floor, px, pz, { seen, span, gx0, gx1, gz0, gz1 }) {
     const ctx = this.ctx
     const c0x = Math.floor(gx0 / CHUNK)
     const c1x = Math.floor(gx1 / CHUNK)
@@ -271,7 +320,10 @@ export class Minimap {
           if (!l.lit) continue
           const gx = cx * CHUNK + l.lx
           const gz = cz * CHUNK + l.lz
-          if (!store.isRevealed(gx, gz, floor)) continue
+          // Lamps of a chunk that only overlaps the window can lie outside
+          // it, past the rim of the disc.
+          if (gx < gx0 || gx > gx1 || gz < gz0 || gz > gz1) continue
+          if (!seen[(gz - gz0) * span + (gx - gx0)]) continue
           const x = this._sx((l.lx + 0.5) * CELL + cx * CHUNK * CELL, px)
           const y = this._sy((l.lz + 0.5) * CELL + cz * CHUNK * CELL, pz)
           ctx.beginPath()
@@ -333,9 +385,12 @@ export class Minimap {
     const ctx = this.ctx
     const c = SIZE / 2
     // Soft scope falloff toward the rim.
-    const g = ctx.createRadialGradient(c, c, SIZE * 0.28, c, c, c)
-    g.addColorStop(0, 'rgba(0,0,0,0)')
-    g.addColorStop(1, C.rim)
+    let g = this._rim
+    if (!g) {
+      g = this._rim = ctx.createRadialGradient(c, c, SIZE * 0.28, c, c, c)
+      g.addColorStop(0, 'rgba(0,0,0,0)')
+      g.addColorStop(1, C.rim)
+    }
     ctx.fillStyle = g
     ctx.fillRect(0, 0, SIZE, SIZE)
     // North tick.

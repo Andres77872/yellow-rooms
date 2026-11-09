@@ -22,6 +22,7 @@ import {
   floorOfY,
   ownerIndex,
   packEntry,
+  imod,
   texelIndex,
 } from '../lightGrid/gridSpec.js'
 import { LightGrid, cubicAttenuation, physicalAttenuation, toHalf } from '../lightGrid/LightGrid.js'
@@ -76,6 +77,19 @@ describe('gridSpec encoding', () => {
     const slots = new Set()
     for (let cx = -5; cx <= 5; cx++) slots.add(ownerIndex(cx, 0, 0))
     expect(slots.size).toBe(11)
+  })
+
+  it('imod is the floored modulo for every sign, and never -0', () => {
+    const reference = (a, n) => ((a % n) + n) % n
+    for (const n of [1, 2, GRID_FLOORS, 12, GRID_W]) {
+      for (let a = -3 * n - 2; a <= 3 * n + 2; a++) {
+        const got = imod(a, n)
+        expect(got).toBe(reference(a, n))
+        expect(Object.is(got, -0)).toBe(false)
+      }
+    }
+    expect(imod(-(2 ** 31), GRID_W)).toBe(reference(-(2 ** 31), GRID_W))
+    expect(imod(2 ** 31 - 1, GRID_W)).toBe(reference(2 ** 31 - 1, GRID_W))
   })
 
   it('tests each opening at the ray height (lintel, sill, head, rail)', () => {

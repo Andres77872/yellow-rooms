@@ -235,6 +235,15 @@ export function volFrag({ haze = false } = {}) {
     ivec3 tCell1 = ivec3(-99999);
     float tVis0 = 1.0;
     float tVis1 = 1.0;
+    // The sample cell's decoded light list, held while the march stays in the
+    // cell: the quadratic steps crowd the first metres, so most of them land
+    // in the cell of the step before and reuse its ownership test, its list
+    // texel and its fixtures (lamp texel + flicker each) instead of fetching
+    // them again. Same values, so the image is unchanged.
+    ivec3 mCell = ivec3(-99999);
+    bool mOwned = false;
+    int mCount = 0;
+    GridLight mL0, mL1, mL2, mL3;
     float N = float(max(uSteps, 1));
     for (int i = 0; i < STEPS_MAX; i++){
       if (i >= uSteps) break;
@@ -250,15 +259,29 @@ export function volFrag({ haze = false } = {}) {
         int cy = int(floor(Sw.y / G_LAYER_H));
         int gx = int(floor(Sw.x / G_CELL));
         int gz = int(floor(Sw.z / G_CELL));
-        if (gridOwned(gx, gz, cy)) {
+        ivec3 cell = ivec3(gx, gz, cy);
+        if (cell != mCell) {
+          mCell = cell;
+          mOwned = gridOwned(gx, gz, cy);
+          mCount = 0;
+          if (mOwned) {
+            uvec4 L = texelFetch(tGridList, gTexel(gx, gz, cy), 0);
+            for (int k = 0; k < 4; k++) {
+              if (k >= uMaxLights) break;
+              GridLight e;
+              if (!gridEntry(L, k, gx, gz, cy, e)) break;
+              if (k == 0) mL0 = e; else if (k == 1) mL1 = e; else if (k == 2) mL2 = e; else mL3 = e;
+              mCount = k + 1;
+            }
+          }
+        }
+        if (mOwned) {
           gridSample = true;
-          uvec4 L = texelFetch(tGridList, gTexel(gx, gz, cy), 0);
           bool traceStep = t < uTraceDist && (i - (i / uTraceEvery) * uTraceEvery) == 0;
-          ivec3 cell = ivec3(gx, gz, cy);
           for (int k = 0; k < 4; k++) {
-            if (k >= uMaxLights) break;
+            if (k >= mCount) break;
             GridLight gl;
-            if (!gridEntry(L, k, gx, gz, cy, gl)) break;
+            if (k == 0) gl = mL0; else if (k == 1) gl = mL1; else if (k == 2) gl = mL2; else gl = mL3;
             vec3 toL = gl.pos - Sw;
             float dl = length(toL);
             float vis = gl.vis;

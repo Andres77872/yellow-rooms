@@ -142,3 +142,73 @@ describe('Minimap multilevel atrium rendering', () => {
     ])
   })
 })
+
+describe('Minimap redraw skipping', () => {
+  function setup() {
+    vi.stubGlobal('window', { devicePixelRatio: 1 })
+    const ctx = recordingContext()
+    const minimap = new Minimap(makeCanvas(ctx))
+    minimap.visible = true
+    const store = {
+      revision: 1,
+      chunks: new Map(),
+      isRevealed: (gx, gz) => gx === 0 && gz === 0,
+      wallVAt: () => false,
+      wallHAt: () => false,
+      columnAt: () => false,
+      stairAt: () => null,
+    }
+    const input = {
+      controller: { pos: { x: CELL / 2, z: CELL / 2 }, yaw: 0 },
+      exit: null,
+      exitRevealed: false,
+      store,
+      floor: 0,
+    }
+    const draws = () => {
+      ctx.calls.length = 0
+      minimap.update(input)
+      return ctx.calls.length
+    }
+    return { minimap, store, input, draws }
+  }
+
+  it('keeps the drawn disc while pose, floor and fog are unchanged', () => {
+    const { store, input, draws } = setup()
+    expect(draws()).toBeGreaterThan(0)
+    expect(draws()).toBe(0)
+
+    store.revision++ // a cell was revealed
+    expect(draws()).toBeGreaterThan(0)
+    expect(draws()).toBe(0)
+
+    input.controller.yaw = 0.1
+    expect(draws()).toBeGreaterThan(0)
+    input.controller.pos.x += 0.01
+    expect(draws()).toBeGreaterThan(0)
+    input.floor = 1
+    expect(draws()).toBeGreaterThan(0)
+    expect(draws()).toBe(0)
+  })
+
+  it('redraws after a resize or a visibility toggle, and while the exit pulses', () => {
+    const { minimap, input, draws } = setup()
+    draws()
+    minimap.resize()
+    expect(draws()).toBeGreaterThan(0)
+    minimap.setVisible(true)
+    expect(draws()).toBeGreaterThan(0)
+
+    input.exit = { cx: 0, cy: 0, cz: 0, lx: 1, lz: 1 }
+    input.exitRevealed = true
+    expect(draws()).toBeGreaterThan(0)
+    expect(draws()).toBeGreaterThan(0) // the exit diamond animates on its own
+  })
+
+  it('always redraws for a store without a revision counter', () => {
+    const { store, draws } = setup()
+    delete store.revision
+    expect(draws()).toBeGreaterThan(0)
+    expect(draws()).toBeGreaterThan(0)
+  })
+})

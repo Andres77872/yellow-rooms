@@ -1,7 +1,10 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { Chunk } from '../Chunk.js'
 import { ChunkManager } from '../ChunkManager.js'
+import { generateChunk } from '../generate.js'
+import { officePlanCandidatesBuilt } from '../zones/officePlan.js'
+import { digestChunk } from './support/chunkDigest.js'
 import {
   CELL,
   CHUNK_WORLD,
@@ -73,8 +76,17 @@ function findStructure(seed, config, levelCy = 0, districtX = 1, districtZ = -1)
   throw new Error('expected a deterministic multilevel structure')
 }
 
+// The stand-in builds of the managers below generate nothing, so update() has
+// no district plan to run ahead of them: left on, it would hold every office
+// build back for real planner candidates that no stand-in reads. The planning
+// itself is covered in 'ChunkManager district planning ahead of builds'.
+function withoutDistrictPlanning(cm) {
+  cm._planPending = () => false
+  return cm
+}
+
 function makeManager(seed = 1, config = ordinaryConfig()) {
-  const cm = new ChunkManager(new THREE.Scene(), seed, null, null)
+  const cm = withoutDistrictPlanning(new ChunkManager(new THREE.Scene(), seed, null, null))
   cm.config = config
   const built = []
 
@@ -202,7 +214,7 @@ function plannedTowerFixture() {
 }
 
 function makeTowerManager(seed, config) {
-  const cm = new ChunkManager(new THREE.Scene(), seed, null, null)
+  const cm = withoutDistrictPlanning(new ChunkManager(new THREE.Scene(), seed, null, null))
   cm.config = config
   const built = []
 
@@ -286,7 +298,7 @@ function plannedLatticeFixture() {
 }
 
 function makeLatticeManager(seed, config) {
-  const cm = new ChunkManager(new THREE.Scene(), seed, null, null)
+  const cm = withoutDistrictPlanning(new ChunkManager(new THREE.Scene(), seed, null, null))
   cm.config = config
   const built = []
 
@@ -418,6 +430,89 @@ describe('ChunkManager streaming queue', () => {
     expect(built).toHaveLength(1)
     expect(cm.queue).toHaveLength(LOAD_COUNT - 1)
     expect(cm.queued).toEqual(new Set(cm.queue.map(({ key }) => key)))
+    clock.mockRestore()
+  })
+
+  it('holds a typical build back when it no longer fits behind the first', () => {
+    const { cm, built } = makeManager()
+    let t = 100
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => t)
+    const build = cm._buildNext
+    cm._buildNext = function () {
+      build.call(this)
+      t += 3
+    }
+    cm._unloadOutsideStreamingBounds = () => {}
+    cm._buildCostMs = 3 // the running estimate after a few 3 ms builds
+
+    cm.update(0, 0, 0)
+
+    // 3 ms spent + 3 ms expected > the 4 ms budget: checking only after each
+    // build would have paid for both.
+    expect(built).toHaveLength(1)
+    clock.mockRestore()
+  })
+
+  it('moves the unload behind a costly build to the next frame, where it replaces the build', () => {
+    const { cm, built } = makeManager()
+    let t = 100
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => t)
+    const build = cm._buildNext
+    cm._buildNext = function () {
+      build.call(this)
+      t += 3
+    }
+    const unload = vi.spyOn(cm, '_unloadOutsideStreamingBounds').mockImplementation(() => {
+      t += 5
+    })
+    cm._buildCostMs = 3
+
+    cm.update(0, 0, 0)
+    expect(built).toHaveLength(1)
+    expect(unload).not.toHaveBeenCalled()
+
+    cm.update(0, 0, 0)
+    expect(unload).toHaveBeenCalledOnce()
+    expect(built).toHaveLength(1) // the disposal used this frame's budget
+
+    cm.update(0, 0, 0)
+    expect(unload).toHaveBeenCalledOnce()
+    expect(built).toHaveLength(2)
+    clock.mockRestore()
+  })
+
+  it('flushes a deferred unload when prewarm drains the queue', () => {
+    const { cm } = makeManager()
+    const unload = vi.spyOn(cm, '_unloadOutsideStreamingBounds')
+    cm._unloadDeferred = true
+
+    cm.prewarm(0, 0, 0)
+
+    expect(cm._unloadDeferred).toBe(false)
+    expect(unload).toHaveBeenCalled()
+  })
+
+  it('shrinks the per-frame build budget with the refresh interval on fast displays', () => {
+    const { cm, built } = makeManager()
+    let t = 100
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => t)
+    const build = cm._buildNext
+    cm._buildNext = function () {
+      build.call(this)
+      t += 1
+    }
+    cm._unloadOutsideStreamingBounds = () => {}
+
+    cm.update(0, 0, 0) // 60 Hz: four 1 ms builds fit the 4 ms budget
+    expect(built).toHaveLength(MAX_BUILDS_PER_FRAME)
+
+    cm.setDisplayRate(144) // 6.9 ms frames: the budget is 4 * 60 / 144 ms
+    cm.update(0, 0, 0)
+    expect(built).toHaveLength(MAX_BUILDS_PER_FRAME + 1)
+
+    cm.setDisplayRate(30) // slower displays never get more than the full budget
+    cm.update(0, 0, 0)
+    expect(built).toHaveLength(MAX_BUILDS_PER_FRAME * 2 + 1)
     clock.mockRestore()
   })
 
@@ -845,6 +940,152 @@ describe('ChunkManager streaming queue', () => {
       structure.topCy,
       structure.participants[1].cz
     ))).toBe(true)
+  })
+})
+
+describe('ChunkManager district planning ahead of builds', () => {
+  const SEED = 0x5eed02
+  const request = (cx, cy, cz) => ({ cx, cy, cz, key: chunkKey3(cx, cy, cz) })
+  // Spawn-district chunks, and one of the next district east (3x3 chunks).
+  const A1 = chunkKey3(0, 0, 0)
+  const A2 = chunkKey3(1, 0, 0)
+  const B1 = chunkKey3(6, 0, 0)
+
+  afterEach(() => vi.restoreAllMocks())
+
+  // Real generation behind the real queue, without meshes: every build reads
+  // real district plans and reports how many plan candidates it had to run
+  // itself. A manual clock makes each frame's contents exact: a candidate
+  // costs 2 ms, a build 1 ms, against the 4 ms budget.
+  function makePlanningManager({ handQueue = true } = {}) {
+    const cm = new ChunkManager(new THREE.Scene(), SEED, null, null)
+    cm.config = ordinaryConfig()
+    if (handQueue) cm._planStreamingRequests = () => {}
+    cm._unloadOutsideStreamingBounds = () => {}
+    const clock = { t: 100 }
+    vi.spyOn(performance, 'now').mockImplementation(() => clock.t)
+    const builds = []
+    let work = []
+    cm._buildNext = function () {
+      const { cx, cy, cz, key } = this.queue.shift()
+      this.queued.delete(key)
+      const before = officePlanCandidatesBuilt()
+      const data = generateChunk(this.seed, cx, cy, cz, this.config)
+      builds.push({ cx, cy, cz, key, data, candidates: officePlanCandidatesBuilt() - before })
+      this.chunks.set(key, {
+        cx, cy, cz, data,
+        apertures: [], lamps: [], group: { visible: true }, dispose() {},
+      })
+      work.push(`build ${key}`)
+      clock.t += 1
+    }
+    const stepPlan = cm._stepPlan
+    cm._stepPlan = function (head) {
+      const before = officePlanCandidatesBuilt()
+      stepPlan.call(this, head)
+      expect(officePlanCandidatesBuilt() - before).toBe(1)
+      work.push(`plan ${head.key}`)
+      clock.t += 2
+    }
+    // One frame; returns the generation work it did, in order.
+    const frame = () => {
+      work = []
+      cm.update(0, 0, 0)
+      return work
+    }
+    return { cm, clock, builds, frame }
+  }
+
+  it('holds a chunk of an unplanned district back until its plan is whole, then keeps draining', () => {
+    const { cm, builds, frame } = makePlanningManager()
+    const candidates = cm.config.office.planCandidates
+    expect(candidates).toBeGreaterThan(1)
+    cm.queue.push(request(0, 0, 0), request(1, 0, 0), request(6, 0, 0))
+
+    // One candidate per frame and nothing else; the head is not built on a
+    // partial plan, and nothing jumps the queue.
+    for (let i = 0; i < candidates; i++) {
+      expect(frame()).toEqual([`plan ${A1}`])
+      expect(builds).toEqual([])
+      expect(cm.queue.map(({ key }) => key)).toEqual([A1, A2, B1])
+    }
+    // The plan is whole: both chunks of the district build in one frame. The
+    // next district's first candidate does not stack behind them.
+    expect(frame()).toEqual([`build ${A1}`, `build ${A2}`])
+    for (let i = 0; i < candidates; i++) expect(frame()).toEqual([`plan ${B1}`])
+    expect(frame()).toEqual([`build ${B1}`])
+    expect(cm.queue).toHaveLength(0)
+    expect(cm.queued.size).toBe(0)
+    expect(frame()).toEqual([])
+
+    // No build planned anything itself, and each chunk is the one a cold,
+    // synchronous generation produces.
+    expect(builds.map((build) => build.candidates)).toEqual([0, 0, 0])
+    const cold = structuredClone(cm.config)
+    for (const { cx, cy, cz, data } of builds) {
+      expect(digestChunk(data)).toBe(digestChunk(generateChunk(SEED, cx, cy, cz, cold)))
+    }
+  })
+
+  it('does not start a candidate on a frame an unload already used', () => {
+    const { cm, clock, frame } = makePlanningManager()
+    expect(frame()).toEqual([]) // settles the streaming origin
+    cm.queue.push(request(0, 0, 0))
+    cm._unloadDeferred = true
+    cm._unloadOutsideStreamingBounds = () => {
+      clock.t += 3
+    }
+
+    expect(frame()).toEqual([])
+    expect(cm._unloadDeferred).toBe(false)
+    expect(frame()).toEqual([`plan ${A1}`])
+  })
+
+  it('keeps prewarm synchronous: it finishes what the frames started and plans the rest', () => {
+    const { cm, builds, frame } = makePlanningManager()
+    const candidates = cm.config.office.planCandidates
+    cm.queue.push(request(0, 0, 0), request(6, 0, 0))
+    expect(frame()).toEqual([`plan ${A1}`])
+
+    const before = officePlanCandidatesBuilt()
+    cm.prewarm(0, 0, 0)
+
+    expect(cm.queue).toHaveLength(0)
+    expect(builds.map(({ key }) => key)).toEqual([A1, B1])
+    // District A is finished from its started plan, never restarted; B, which
+    // no frame reached, is planned whole inside its build as at level load.
+    expect(builds[0].candidates).toBeLessThan(candidates)
+    expect(builds[1].candidates).toBe(candidates)
+    expect(officePlanCandidatesBuilt() - before).toBe(2 * candidates - 1)
+    const cold = structuredClone(cm.config)
+    for (const { cx, cy, cz, data } of builds) {
+      expect(digestChunk(data)).toBe(digestChunk(generateChunk(SEED, cx, cy, cz, cold)))
+    }
+  })
+
+  it('streams a whole load box without one build planning, into the world prewarm loads', () => {
+    const streamed = makePlanningManager({ handQueue: false })
+    let frames = 0
+    let planFrames = 0
+    do {
+      const work = streamed.frame()
+      const plans = work.filter((entry) => entry.startsWith('plan ')).length
+      // A frame that plans runs one candidate and builds nothing.
+      if (plans) expect(work).toHaveLength(1)
+      planFrames += plans
+      if (++frames > 5000) throw new Error('the queue never drained')
+    } while (streamed.cm.queue.length)
+
+    expect(streamed.builds).toHaveLength(LOAD_COUNT)
+    expect(planFrames).toBeGreaterThan(0)
+    expect(streamed.builds.filter((build) => build.candidates > 0)).toEqual([])
+
+    const loaded = makePlanningManager({ handQueue: false })
+    loaded.cm.prewarm(0, 0, 0)
+    expect(loaded.builds).toHaveLength(LOAD_COUNT)
+    expect(loaded.builds.some((build) => build.candidates > 0)).toBe(true)
+    const digests = (builds) => new Map(builds.map(({ key, data }) => [key, digestChunk(data)]))
+    expect(digests(streamed.builds)).toEqual(digests(loaded.builds))
   })
 })
 

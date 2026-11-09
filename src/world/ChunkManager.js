@@ -54,15 +54,33 @@ import { resolveMapFamily } from './mapFamily.js'
 import { familyPlanner } from './families/planners.js'
 import { familyGenerator } from './families/generators.js'
 import { prebakeTile, wouldBakeChunk } from './tiles/familyChunk.js'
+import { chunkPlanPending, stepChunkPlan } from './pipeline.js'
 
 // Wall-aware light-list / GI work per streaming frame (world/lightGrid). A
 // chunk's arrival queues its own cells plus the neighbour strips its fixtures
 // and walls can affect; this slice amortises that bake behind the builds.
 const LIGHT_GRID_BUDGET_MS = 2
+// Share of that slice the bake keeps on a frame whose chunk builds already
+// overran STREAM_BUILD_BUDGET_MS (ChunkManager.update).
+const LIGHT_GRID_BUSY_SHARE = 0.25
+// Weight of the newest chunk build in the running build-cost estimate that
+// decides whether another build still fits the frame.
+const BUILD_COST_SMOOTHING = 0.25
+// Streaming work below this has not really used the frame: a build may
+// follow it whatever the estimate says.
+const STREAM_FREE_MS = 0.5
+// The streaming budgets are sized for a 60 Hz frame. A faster display has
+// less frame to give (6.9 ms at 144 Hz, where 4 ms of builds plus a 2 ms bake
+// slice is the whole frame), so they shrink with the refresh interval, down
+// to this share. The work done per SECOND does not drop: there are more
+// frames to spread it over.
+const STREAM_REFERENCE_HZ = 60
+const STREAM_MIN_BUDGET_SCALE = 0.4
 
 const UINT32_MAX = 0xffffffff
 const HARD_VOID_PLANE_KEYS = Object.freeze(['deathYmm', 'family', 'id'])
 const TITLE_BACKDROP_RADIUS = 2
+const noop = () => {}
 
 function exactHardVoidPlane(plane) {
   if (plane === null || typeof plane !== 'object' || Array.isArray(plane)) {
@@ -182,6 +200,15 @@ function compareRequests(a, b) {
 export class ChunkManager {
   constructor(scene, seed, materials, geom, models = null) {
     this.root = new THREE.Group()
+    // Every chunk composes its world matrices once at mount and freezes them
+    // (Chunk.mount, Chunk.refreshFurniture), and the root itself never moves.
+    // renderer.render() still walks the whole scene graph to "update" them:
+    // ~5.7k objects for a 300-chunk box, once per scene render (G-buffer,
+    // flashlight map, glass), which measured ~0.4-1.1 ms of every frame doing
+    // nothing. Stop that walk at the root; mounts compose through
+    // updateWorldMatrix, which this does not touch.
+    this.root.matrixAutoUpdate = false
+    this.root.updateMatrixWorld = noop
     scene.add(this.root)
     this.seed = seed
     this.materials = materials
@@ -224,6 +251,12 @@ export class ChunkManager {
     this._streamPlanSeed = null
     this._streamPlanConfig = null
     this._streamPlanChunkCount = null
+    // Frame pacing of the streaming work (update): a running estimate of one
+    // chunk build's cost, and whether a frame that had already built left
+    // the chunks beyond the unload bounds for the next one.
+    this._buildCostMs = 0
+    this._unloadDeferred = false
+    this._budgetScale = 1 // setDisplayRate
     // Child-mesh LOD is horizontal and chunk-ring based. Cache the complete
     // classification tuple so the per-frame streaming update only re-walks
     // residents after a chunk transition, quality change or family swap.
@@ -301,7 +334,7 @@ export class ChunkManager {
   // Every call that swaps geometry bumps meshRevision: the swap spreads over
   // several frames, and a still flashlight would otherwise keep casting the
   // box stand-ins of every chunk swapped after the first frame.
-  _refreshStaleFurniture(pcx, pcy, pcz, budgetStart) {
+  _refreshStaleFurniture(pcx, pcy, pcz, budgetStart, budgetMs = STREAM_BUILD_BUDGET_MS) {
     const want = this.furnitureModels?.geometries?.size ?? 0
     const stale = []
     for (const c of this.chunks.values()) if (c.furnitureModelCount !== want) stale.push(c)
@@ -314,7 +347,7 @@ export class ChunkManager {
     stale.sort((a, b) => ring(a) - ring(b))
     this.meshRevision++ // stale[0] is always refreshed below
     for (let i = 0; i < stale.length; i++) {
-      if (i > 0 && performance.now() - budgetStart >= STREAM_BUILD_BUDGET_MS) return
+      if (i > 0 && performance.now() - budgetStart >= budgetMs) return
       stale[i].refreshFurniture(this.furnitureModels)
     }
     this._furnitureStale = false
@@ -358,6 +391,7 @@ export class ChunkManager {
     this._streamPlanSeed = null
     this._streamPlanConfig = null
     this._streamPlanChunkCount = null
+    this._unloadDeferred = false
     this._detailPcx = null
     this._detailPcz = null
     this._detailFamily = null
@@ -586,6 +620,14 @@ export class ChunkManager {
     }
   }
 
+  // The display's refresh rate, once the engine has measured it: scales the
+  // per-frame streaming budgets (STREAM_MIN_BUDGET_SCALE). 60 Hz and slower
+  // displays keep the full budgets.
+  setDisplayRate(hz) {
+    const ratio = hz > 0 ? STREAM_REFERENCE_HZ / hz : 1
+    this._budgetScale = Math.min(1, Math.max(STREAM_MIN_BUDGET_SCALE, ratio))
+  }
+
   _unloadOutsideStreamingBounds(pcx, pcy, pcz) {
     let aperturesChanged = false
     for (const [key, c] of this.chunks) {
@@ -651,26 +693,90 @@ export class ChunkManager {
     // Queue planning is discrete, but construction stays amortized: unchanged
     // frames keep consuming pending requests, including structure requests
     // appended and re-sorted by _buildNext(). A chunk build is indivisible, so
-    // check elapsed time after each one; a slow slice then stands alone instead
-    // of being followed by up to three more stalls.
+    // the frame's streaming work is kept from STACKING instead: every piece
+    // below is timed against one budget, and a piece that would land on top
+    // of an already spent budget waits for the next frame.
+    const buildBudget = STREAM_BUILD_BUDGET_MS * this._budgetScale
+    const gridBudget = LIGHT_GRID_BUDGET_MS * this._budgetScale
     const buildStart = performance.now()
+    let last = buildStart
+    let spent = 0
     let built = 0
+    // Residents left behind by a frame that built (below) go first, and
+    // their disposal counts against this frame's budget.
+    if (this._unloadDeferred) {
+      this._unloadDeferred = false
+      this._unloadOutsideStreamingBounds(pcx, pcy, pcz)
+      last = performance.now()
+      spent = last - buildStart
+    }
     for (let i = 0; i < MAX_BUILDS_PER_FRAME && this.queue.length; i++) {
       // A cold tile bake gets a frame of its own (§9.7).
       if (i > 0 && this._tileProbe?.(this.queue[0])) break
+      // The first chunk of an office district used to plan the whole district
+      // inside its build: every candidate at once, 8-18 ms in one frame.
+      // While the head's district is unplanned the head waits, and the frame
+      // runs ONE candidate as its only generation work: never behind a build
+      // or an unload that used the frame (a district's first candidate is
+      // the slow one, it also warms the structure contracts), and nothing
+      // after it. The build that follows the last candidate finds the plan
+      // cached.
+      if (this._planPending(this.queue[0])) {
+        if (i === 0 && spent <= STREAM_FREE_MS) {
+          this._stepPlan(this.queue[0])
+          spent = performance.now() - buildStart
+        }
+        break
+      }
+      // Predict before building: checking only AFTER each build let a cheap
+      // first chunk be followed by a typical one, and the frame paid for both
+      // (two or three builds, 9-12 ms, in the frames that hitched). A frame
+      // that has spent next to nothing always builds, so the queue drains
+      // however slow one build is on this device.
+      if (spent > STREAM_FREE_MS && spent + this._buildCostMs > buildBudget) break
       this._buildNext()
       built++
-      if (performance.now() - buildStart >= STREAM_BUILD_BUDGET_MS) break
+      const now = performance.now()
+      this._buildCostMs += (now - last - this._buildCostMs) * BUILD_COST_SMOOTHING
+      last = now
+      spent = now - buildStart
+      if (spent >= buildBudget) break
     }
     // Idle prebake only on a frame that built nothing: a build (possibly a
     // cold bake) already spent this frame's budget.
     if (this._tileProbe && !built && !this.queue.length) this._idlePrebake(pcx, pcy, pcz)
 
-    if (planDirty) this._unloadOutsideStreamingBounds(pcx, pcy, pcz)
-    if (this._furnitureStale) this._refreshStaleFurniture(pcx, pcy, pcz, buildStart)
+    // Chunks that left the unload bounds: disposing a row of them (and
+    // clearing their light-grid cells) costs milliseconds, and it used to
+    // land on the same frame as the first builds of the row that replaced
+    // them. Behind a build that really used the frame they wait one frame.
+    // Nothing reads them meanwhile (they are beyond UNLOAD_RADIUS), and the
+    // light grid already tolerates a leaving chunk that still holds its slot
+    // (LightGrid.addChunk).
+    if (planDirty) {
+      if (spent <= STREAM_FREE_MS) this._unloadOutsideStreamingBounds(pcx, pcy, pcz)
+      else this._unloadDeferred = true
+    }
+    if (this._furnitureStale) this._refreshStaleFurniture(pcx, pcy, pcz, buildStart, buildBudget)
     this._streamPlanChunkCount = this.chunks.size
-    this.lightGrid.update(LIGHT_GRID_BUDGET_MS)
+    // The light-list bake shares the frame with the builds. Behind a build
+    // that overran the budget it only keeps its cursor moving; the chunks it
+    // bakes are a load radius away, deep in the fog, and the full slice
+    // resumes on the first frame that streams nothing heavy.
+    this.lightGrid.update(spent >= buildBudget ? gridBudget * LIGHT_GRID_BUSY_SHARE : gridBudget)
     this._updateSight(px, pz, pcy)
+  }
+
+  // District planning ahead of a queued build (pipeline.js): whether the
+  // build would still have plan candidates to run, and one candidate of them.
+  // Streaming only: prewarm drains through _buildNext, which plans whatever
+  // is left in one go.
+  _planPending(request) {
+    return chunkPlanPending(this.seed, request.cx, request.cy, request.cz, this.config)
+  }
+
+  _stepPlan(request) {
+    stepChunkPlan(this.seed, request.cx, request.cy, request.cz, this.config)
   }
 
   // Idle prebake (§9.7): with nothing queued, bake at most ONE uncached tile
@@ -806,6 +912,12 @@ export class ChunkManager {
   prewarm(px, pz, pcy = 0) {
     this.update(px, pz, pcy)
     while (this.queue.length) this._buildNext()
+    // Nothing is amortised here: an unload update() left for a later frame
+    // (a prewarm over a live world, capture replay) happens now.
+    if (this._unloadDeferred) {
+      this._unloadDeferred = false
+      this._unloadOutsideStreamingBounds(this._streamPcx, this._streamPcy, this._streamPcz)
+    }
     // Light lists and bounce are part of the level: bake them behind the
     // same overlay instead of letting pools resolve during the first steps.
     this.lightGrid.flush()

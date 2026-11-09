@@ -83,6 +83,64 @@ describe('unified light loop', () => {
   })
 })
 
+describe('lights that cannot reach the pixel', () => {
+  const reach = fnBody(SRC, 'fixtureReaches')
+  const shade = fnBody(SRC, 'shadeFixture')
+
+  it('rejects a fixture before its hole test, trace, furniture cover and capsules', () => {
+    const at = LOOP.indexOf('if (uLightDebug == 0 && !fixtureReaches(Lp)) continue;')
+    expect(at).toBeGreaterThan(0)
+    expect(LOOP.match(/fixtureReaches\(/g)).toHaveLength(1)
+    for (const later of ['gHoleOpen(', 'gridTrace(', 'fvis[k]', 'capsuleShadow(', 'shadeFixture(']) {
+      expect(LOOP.indexOf(later), later).toBeGreaterThan(at)
+    }
+    // The budget slot is spent first, whatever the pixel: which entries are
+    // traced must not change inside a cell.
+    expect(LOOP.indexOf('traceCand++')).toBeLessThan(at)
+  })
+
+  it('rejects only what shadeFixture would multiply by zero', () => {
+    // PBR: past the range window, or N.L <= 0 for both the diffuse direction
+    // and the specular representative point (brdfDirect clamps both).
+    expect(reach).toMatch(/if \(fixtureAtt\(d, uLampRange\) <= 0\.0\) return false;/)
+    expect(reach).toMatch(/if \(ndl > 0\.0\) return true;/)
+    expect(reach).toMatch(/return dot\(sN, normalize\(rectRepPoint\(sP, R, lampPos, G_PANEL_HALF\) - sP\)\) > 0\.0;/)
+    expect(shade).toMatch(/if \(att <= 0\.0\) return;/)
+    expect(shade).toMatch(/vec3 Ls = normalize\(rectRepPoint\(sP, R, lampPos, G_PANEL_HALF\) - sP\);/)
+    // Classic wraps light past the terminator: only the range decides, and
+    // the glossy highlight's longer reach needs N.L > 0.
+    expect(reach).toMatch(/return d <= reach && \(d <= uLampRange \|\| \(sGlossy && ndl > 0\.0\)\);/)
+    expect(shade).toMatch(/if \(d > reach\) return;/)
+    expect(shade).toMatch(/if \(sGlossy && ndl > 0\.0\) aSpec \+=/)
+  })
+
+  it('keeps no state alive across the trace (the test and the shading are independent)', () => {
+    // Sharing L / Ls / att between the two kept nine more values live across
+    // gridTrace: 12-18% slower on the builds that crossed the register limit.
+    const between = SRC.slice(SRC.indexOf('bool fixtureReaches('), SRC.indexOf('void shadeFixture('))
+    expect(between).not.toMatch(/^\s*(?:vec3|float) f[A-Z]\w*(?:, f[A-Z]\w*)*;/m)
+    expect(shade).toMatch(/vec3 toL = lampPos - sP;/)
+  })
+
+  it('walks every entry in the debug views (traced count, furniture visibility)', () => {
+    expect(LOOP).not.toMatch(/if \(!fixtureReaches\(Lp\)\) continue;/)
+    expect(LOOP).toMatch(/if \(uLightDebug == 0 && vplGeo <= 0\.0\) continue;/)
+  })
+
+  it('skips the bounce light where its geometric term is zero, with the same term it shades with', () => {
+    const before = SRC.slice(0, SRC.indexOf('for (int k = 0; k < LOOP_MAX; k++)'))
+    expect(before).toMatch(/vplGeo = max\(dot\(Nw, Lv\), 0\.0\) \* max\(dot\(uVplN, -Lv\), 0\.0\) \/ \(dv \* dv \+ 1\.0\);/)
+    expect(SRC).toMatch(/flashBounce = sAlbedo \* \(1\.0 - sMetal\) \* uVplColor \* \(uFlashIntensity \* uFlashBounce \* vplGeo \* vplVis\);/)
+    expect(SRC.match(/max\(dot\(uVplN, -Lv\), 0\.0\)/g)).toHaveLength(1)
+  })
+
+  it('traces the analytic torch only inside its cone (and toward the lit side in PBR)', () => {
+    expect(SRC).toMatch(/bool torchReach = uLightDebug > 0;/)
+    expect(SRC).toMatch(/torchReach = smoothstep\(uFlashCosOuter, uFlashCosInner, dot\(-Lt, uFlashDirV\)\) > 0\.0;/)
+    expect(LOOP).toMatch(/if \(!flashOn \|\| !torchReach \|\| !gridPixel/)
+  })
+})
+
 describe('gTraceRay parameter window (cross-floor)', () => {
   const ray = fnBody(GRID_GLSL, 'gTraceRay')
 
@@ -149,14 +207,35 @@ describe('furniture prepass', () => {
   it('gathers shadow cells before AO-only cells; only a dropped shadow cell truncates', () => {
     // One ring-order pass over ring & (need | aoNeed) let AO-only cells evict
     // a cell a light's shadow needed (high lost shadows medium kept).
-    expect(PREPASS).toMatch(/uint todo = phase == 0 \? ring & need : ring & aoNeed & ~need;/)
-    expect(PREPASS).toMatch(/if \(nc >= cellsMax\) \{ if \(phase == 0\) furnTrunc = true; break; \}/)
+    expect(PREPASS).toMatch(/uint todoShadow = ring & need;/)
+    expect(PREPASS).toMatch(/uint todoAO = ring & aoNeed & ~need;/)
     expect(PREPASS).toMatch(/int cellsMax = min\(uFurnCellsMax, FURN_CELLS\);/)
+    // Shadow bits are drained first, lowest (ring order) first; AO bits only
+    // once none is left; the cap ends the walk.
+    expect(PREPASS).toMatch(
+      /if \(i >= cellsMax\) break;[\s\S]*?if \(todoShadow != 0u\) \{ bit = todoShadow & \(~todoShadow \+ 1u\); todoShadow \^= bit; \}\s*else if \(todoAO != 0u\) \{ bit = todoAO & \(~todoAO \+ 1u\); todoAO \^= bit; \}\s*else break;/
+    )
+    expect(PREPASS).toMatch(/furnTrunc = todoShadow != 0u;/)
+    expect(PREPASS).not.toMatch(/furnTrunc = [^;]*todoAO/)
+  })
+
+  it('walks only the cells it takes (no scan of the 25-cell ring, no cell array)', () => {
+    expect(PREPASS).not.toMatch(/b < G_OCC_CELLS/)
+    expect(PREPASS).not.toMatch(/int cells\[/)
+    expect(PREPASS).toMatch(/G_OCC_OFF\[gBitIndex\(bit\)\]/)
   })
 })
 
 describe('analytic torch boxes (gCellBoxes)', () => {
   const body = fnBody(GRID_GLSL, 'gCellBoxes')
+
+  it('are walked only by builds that have the analytic torch', () => {
+    // A runtime `kind == 2` kept the proxy walk (and its registers) in every
+    // build, though only the F2 analytic torch can ever take it.
+    expect(SRC).toMatch(/#define TRACE_BOXES\(kind\) \(\(kind\) == 2\)/)
+    expect(lightingFrag({ ...FULL, flashAnalytic: false })).toMatch(/#define TRACE_BOXES\(kind\) false/)
+    expect(LOOP).toMatch(/subRays, TRACE_BOXES\(kind\)\);/)
+  })
 
   it('reads occupancy only for an owned slot', () => {
     expect(body.indexOf('if (!gridOwned(c.x, c.y, cy)) return 1.0;')).toBeGreaterThanOrEqual(0)

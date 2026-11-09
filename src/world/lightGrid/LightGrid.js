@@ -199,6 +199,10 @@ export class LightGrid {
     // Injected so this module stays independent of the furniture tables.
     this.proxyBoxes = null
     this._occBoxes = []
+    // _maskOcc scratch: furnished flags around a rectangle, and the ring
+    // offsets as flat steps into it.
+    this._occFurn = new Uint8Array((CHUNK + OCC_RING * 2) ** 2)
+    this._occStep = new Int32Array(OCC_OFFSETS.length)
     this.stats = { listCells: 0, sampledPairs: 0, clearPairs: 0, blockedPairs: 0, giCells: 0, jobs: 0 }
   }
 
@@ -385,7 +389,10 @@ export class LightGrid {
     const x0 = cx * CHUNK
     const z0 = cz * CHUNK
     for (let lz = 0; lz < CHUNK; lz++) {
-      for (let lx = 0; lx < CHUNK; lx++) this.occ.fill(0, texelIndex(x0 + lx, z0 + lz, cy) * 4, texelIndex(x0 + lx, z0 + lz, cy) * 4 + 4)
+      for (let lx = 0; lx < CHUNK; lx++) {
+        const t = texelIndex(x0 + lx, z0 + lz, cy) * 4
+        this.occ.fill(0, t, t + 4)
+      }
     }
     const pieces = data.furniture
     if (pieces?.length && this.proxyBoxes) {
@@ -425,13 +432,34 @@ export class LightGrid {
 
   // Rebuild the ring masks of the owned cells in a global cell rectangle.
   _maskOcc(gx0, gz0, gx1, gz1, cy) {
+    // Furnished flag of every cell within ring reach of the rectangle, read
+    // once (the masks written below never change it): each cell then tests
+    // its 25 neighbours in a flat array instead of resolving 25 texels.
+    const R = OCC_RING
+    const w = gx1 - gx0 + 1 + R * 2
+    const h = gz1 - gz0 + 1 + R * 2
+    if (this._occFurn.length < w * h) this._occFurn = new Uint8Array(w * h)
+    const furn = this._occFurn
+    let any = 0
+    for (let z = 0, i = 0; z < h; z++) {
+      for (let x = 0; x < w; x++, i++) {
+        const f = this._furnishedAt(gx0 - R + x, gz0 - R + z, cy) ? 1 : 0
+        furn[i] = f
+        any |= f
+      }
+    }
+    const step = this._occStep
+    for (let b = 0; b < step.length; b++) step[b] = OCC_OFFSETS[b][1] * w + OCC_OFFSETS[b][0]
     for (let gz = gz0; gz <= gz1; gz++) {
       for (let gx = gx0; gx <= gx1; gx++) {
         const ti = this._texel(gx, gz, cy)
         if (ti < 0) continue
         let mask = 0
-        for (let b = 0; b < OCC_OFFSETS.length; b++) {
-          if (this._furnishedAt(gx + OCC_OFFSETS[b][0], gz + OCC_OFFSETS[b][1], cy)) mask |= 1 << b
+        if (any) {
+          const o = (gz - gz0 + R) * w + (gx - gx0 + R)
+          for (let b = 0; b < step.length; b++) {
+            if (furn[o + step[b]]) mask |= 1 << b
+          }
         }
         const t = ti * 4 + 3
         this.occ[t] = ((this.occ[t] & ~OCC_MASK_BITS) | mask) >>> 0
@@ -1451,21 +1479,31 @@ export class LightGrid {
       }
     }
     const M = this._giM
+    // Texel of each cell's six neighbours (4 sides, up, down), resolved on
+    // first use: residency cannot change inside one solve, and every
+    // iteration and colour channel asks for the same ones. -2 = not asked yet.
+    const nbr = new Int32Array(cells * 6).fill(-2)
     const sideTerm = (i, gx, gz, side, c) => {
       const op = open[i * 4 + side]
       const wallE = E[i * 18 + WALL_FACE_OFFSET[side] + c]
       if (op <= 0) return wallE
-      const nx = gx + (side === 0 ? -1 : side === 1 ? 1 : 0)
-      const nz = gz + (side === 2 ? -1 : side === 3 ? 1 : 0)
-      const nm = this._cellMapped(nx, nz, cy) ? M[texelIndex(nx, nz, cy) * 3 + c] : 0
+      let nt = nbr[i * 6 + side]
+      if (nt === -2) {
+        const nx = gx + (side === 0 ? -1 : side === 1 ? 1 : 0)
+        const nz = gz + (side === 2 ? -1 : side === 3 ? 1 : 0)
+        nt = nbr[i * 6 + side] = this._texel(nx, nz, cy)
+      }
+      const nm = nt >= 0 ? M[nt * 3 + c] : 0
       return op * nm + (1 - op) * wallE
     }
     const vertTerm = (i, gx, gz, up, c) => {
       const face = up ? E[i * 18 + 9 + c] : E[i * 18 + 6 + c]
       const bit = up ? FLAG_CEIL_HOLE : FLAG_FLOOR_HOLE
       if (!(holes[i] & bit)) return face
-      const ny = cy + (up ? 1 : -1)
-      return this._cellMapped(gx, gz, ny) ? M[texelIndex(gx, gz, ny) * 3 + c] : 0
+      const slot = i * 6 + (up ? 4 : 5)
+      let nt = nbr[slot]
+      if (nt === -2) nt = nbr[slot] = this._texel(gx, gz, cy + (up ? 1 : -1))
+      return nt >= 0 ? M[nt * 3 + c] : 0
     }
     // Jacobi relaxation of the mean cell radiosity across open edges only:
     // light cannot cross a wall because walls contribute their own reflection

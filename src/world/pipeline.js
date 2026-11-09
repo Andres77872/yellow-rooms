@@ -32,8 +32,49 @@ import {
 import { structureAt } from './structures/contract.js'
 import { familyGenerator } from './families/generators.js'
 import { buildFamilyChunk } from './tiles/familyChunk.js'
+import {
+  officeDistrictCoords,
+  officeDistrictPlanPending,
+  stepOfficeDistrictPlan,
+} from './zones/officePlan.js'
 
 const TOPOLOGY_SALT = 0x74a1
+
+// --- District plan ahead of the build (streaming) ---
+// The district plan buildChunk(seed, cx, cy, cz) reads, as the arguments the
+// planner keys it by, or null when the build reads none. Every plan read of a
+// build lands on the chunk's OWN district: the interior slice (zones/office.js)
+// and the four seam contracts, which slice a plan only between two office
+// chunks of one district (border.js). A seam to another district is a portal
+// contract and plans nothing. Liminal families build from tile bakes, and a
+// Sewer chunk is never an office slice.
+function chunkDistrictPlan(seed, cx, cy, cz, config) {
+  const profile = resolveMapFamily(config)
+  if (profile.family === MAP_FAMILY_SEWER || familyGenerator(profile.family)) return null
+  const lseed = layerSeed(seed, cy)
+  if (selectZone(cx, cz, lseed, config) !== ZONE_OFFICE) return null
+  const { dx, dz } = officeDistrictCoords(cx, cz, config)
+  return { lseed, dx, dz, context: { rootSeed: seed >>> 0, layerSeed: lseed, cy } }
+}
+
+// Would building this chunk now have to run district-plan candidates first?
+// The streamer asks before each build and, while the answer is yes, spends
+// the frame on stepChunkPlan instead (ChunkManager.update). Never throws: a
+// config the build rejects is the build's error to raise.
+export function chunkPlanPending(seed, cx, cy, cz, config) {
+  try {
+    const plan = chunkDistrictPlan(seed, cx, cy, cz, config)
+    return !!plan && officeDistrictPlanPending(plan.lseed, plan.dx, plan.dz, config, plan.context)
+  } catch {
+    return false
+  }
+}
+
+// Run ONE candidate of that plan. Returns whether the chunk still waits.
+export function stepChunkPlan(seed, cx, cy, cz, config) {
+  const plan = chunkDistrictPlan(seed, cx, cy, cz, config)
+  return !!plan && stepOfficeDistrictPlan(plan.lseed, plan.dx, plan.dz, config, plan.context)
+}
 
 function installOwnedBorders(data, west, north) {
   for (let z = 0; z < CHUNK; z++) data.setPassageV(0, z, west.passages[z])

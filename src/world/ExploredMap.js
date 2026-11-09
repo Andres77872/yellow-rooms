@@ -43,6 +43,9 @@ export class ExploredMap {
   constructor(cm) {
     this.cm = cm
     this.chunks = new Map() // chunkKey3 -> { data, cells: stair descriptors, revealed }
+    // Bumped whenever the fog changes (a cell is revealed, or everything is
+    // dropped): consumers redraw only when it moves. Never rewinds.
+    this.revision = 0
     this.lastCX = null
     this.lastCZ = null
     this.lastCY = null
@@ -54,6 +57,7 @@ export class ExploredMap {
   // Drop all fog (called per level/seed change so nothing leaks between runs).
   reset() {
     this.chunks.clear()
+    this.revision++
     this.lastCX = null
     this.lastCZ = null
     this.lastCY = null
@@ -194,7 +198,11 @@ export class ExploredMap {
   _mark(gx, gz, cy) {
     const cx = Math.floor(gx / CHUNK)
     const cz = Math.floor(gz / CHUNK)
-    this._entry(cx, cy, cz).revealed[cIdx(gx - cx * CHUNK, gz - cz * CHUNK)] = 1
+    const revealed = this._entry(cx, cy, cz).revealed
+    const i = cIdx(gx - cx * CHUNK, gz - cz * CHUNK)
+    if (revealed[i] === 1) return
+    revealed[i] = 1
+    this.revision++
   }
 
   _entry(cx, cy, cz) {

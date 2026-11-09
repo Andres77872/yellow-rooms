@@ -36,7 +36,10 @@ export { CAPSULE_MAX }
 // the emitter footprint (partial entries up to the tier's cap), times exact
 // furniture-box coverage (FURN), enemy capsule soft shadows and the
 // per-light residual contact channel. Tiers cap WORK, never light: every
-// entry shades, capped ones keep baked, wall-aware visibility.
+// entry shades, capped ones keep baked, wall-aware visibility. A light that
+// cannot land on the pixel at all (out of range, behind the surface, a
+// bounce light facing away) is rejected before any of that visibility is
+// evaluated: it would have been multiplied by zero.
 // Indirect light (GI cube + dusk hemisphere) is occluded by
 // min(screen AO, crease x box x capsule AO) with multi-bounce, and its
 // specular by Lagarde specular occlusion.
@@ -66,6 +69,9 @@ export function lightingFrag({
   ${flashAnalytic ? '#define FLASH_ANALYTIC' : ''}
   ${bent && occV2 ? '#define BENT' : ''}
   #define FLASH_FILTER ${flashFilter | 0}
+  // Only the analytic torch (kind 2) tests furniture proxies along its
+  // trace: every other build compiles that walk out of gTraceRay.
+  #define TRACE_BOXES(kind) ${flashAnalytic ? '((kind) == 2)' : 'false'}
   #define LIGHT_MAX ${LIGHT_MAX}
   #define LOOP_MAX ${LIGHT_MAX + 2}
   #define CAPSULE_MAX ${CAPSULE_MAX}
@@ -242,6 +248,29 @@ export function lightingFrag({
   // Accumulators.
   vec3 aDiff, aSpec, aTerm, aOmni;
   float aLit;
+
+  // Can any light of the fixture whose emitter centre is lampPos land on
+  // this pixel? Asked BEFORE the fixture's visibility: a lamp out of range,
+  // or behind the surface for both the diffuse and the specular direction,
+  // adds exactly zero in shadeFixture, so its wall trace, furniture cover and
+  // capsule shadows are never evaluated. It shares no state with
+  // shadeFixture on purpose: nothing extra stays live across the trace.
+  bool fixtureReaches(vec3 lampPos){
+    vec3 toL = lampPos - sP;
+    float d = length(toL);
+    vec3 L = toL / max(d, 1e-4);
+    float ndl = dot(sN, L);
+    #ifdef SHADING_PBR
+      if (fixtureAtt(d, uLampRange) <= 0.0) return false;
+      if (ndl > 0.0) return true;
+      // brdfDirect clamps N.L (diffuse) and N.Ls (specular) at zero.
+      vec3 R = reflect(-sV, sN);
+      return dot(sN, normalize(rectRepPoint(sP, R, lampPos, G_PANEL_HALF) - sP)) > 0.0;
+    #else
+      float reach = sGlossy ? uLampRange * ${glslFloat(SPEC_REACH)} : uLampRange;
+      return d <= reach && (d <= uLampRange || (sGlossy && ndl > 0.0));
+    #endif
+  }
 
   // Shade one ceiling fixture at world position lampPos (the emitter
   // centre). radiance = tint * flicker * visibility.
@@ -665,17 +694,8 @@ export function lightingFrag({
           // left, so they never evict a cell a light's shadow needs (only a
           // dropped shadow cell counts as truncation).
           int cellsMax = min(uFurnCellsMax, FURN_CELLS);
-          int cells[FURN_CELLS];
-          int nc = 0;
-          for (int phase = 0; phase < 2; phase++){
-            uint todo = phase == 0 ? ring & need : ring & aoNeed & ~need;
-            for (int b = 0; b < G_OCC_CELLS; b++){
-              if ((todo & (1u << uint(b))) == 0u) continue;
-              if (nc >= cellsMax) { if (phase == 0) furnTrunc = true; break; }
-              cells[nc] = b;
-              nc++;
-            }
-          }
+          uint todoShadow = ring & need;
+          uint todoAO = ring & aoNeed & ~need;
           // Architecture receivers (storey planes, closed wall faces, jambs,
           // columns) never skip a box: outside one, gBoxCover and gBoxFF are
           // exact down to its face (the floor at a cabinet's foot, the wall
@@ -687,11 +707,15 @@ export function lightingFrag({
           bool furnPx = !gArchSurface(Pw, gcy);
           float boxF = 0.0;
           for (int i = 0; i < FURN_CELLS; i++){
-            if (i >= nc) break;
-            int b = cells[i];
-            ivec2 cc = ivec2(gx, gz) + G_OCC_OFF[b];
+            if (i >= cellsMax) break;
+            // The lowest set bit is the next cell in ring order: one
+            // iteration per cell taken, not a scan of the 25-cell ring.
+            uint bit;
+            if (todoShadow != 0u) { bit = todoShadow & (~todoShadow + 1u); todoShadow ^= bit; }
+            else if (todoAO != 0u) { bit = todoAO & (~todoAO + 1u); todoAO ^= bit; }
+            else break;
+            ivec2 cc = ivec2(gx, gz) + G_OCC_OFF[gBitIndex(bit)];
             uvec4 o = gOcc(cc.x, cc.y, gcy);
-            uint bit = 1u << uint(b);
             for (int w = 0; w < 2; w++){
               if (w >= uFurnBoxes) break;
               vec3 blo, bhi;
@@ -719,6 +743,7 @@ export function lightingFrag({
               }
             }
           }
+          furnTrunc = todoShadow != 0u; // a cell some light's shadow needs was dropped
           boxAO = max(1.0 - uBoxAOK * boxF, 0.15);
         }
       }
@@ -733,6 +758,29 @@ export function lightingFrag({
     int nLoop = nLights + 2;
     bool flashOn = uFlashOn > 0.5;
     vec3 flashPosW = (uCamToWorld * vec4(uFlashPosV, 1.0)).xyz;
+    // The bounce light's geometric term is known before its visibility: where
+    // it is zero (surfaces facing away from the hit point, or behind the
+    // surface it sits on) nothing is traced toward it.
+    float vplGeo = 0.0;
+    if (flashOn && uFlashBounce > 0.0 && uVplOn > 0.5) {
+      vec3 toV = uVplPosW - Pw;
+      float dv = length(toV);
+      vec3 Lv = toV / max(dv, 1e-4);
+      vplGeo = max(dot(Nw, Lv), 0.0) * max(dot(uVplN, -Lv), 0.0) / (dv * dv + 1.0);
+    }
+    #ifdef FLASH_ANALYTIC
+      // The analytic torch is traced only where its beam lands (the debug
+      // views read its visibility everywhere).
+      bool torchReach = uLightDebug > 0;
+      if (flashOn && !torchReach) {
+        vec3 toT = uFlashPosV - P;
+        vec3 Lt = toT / max(length(toT), 1e-4);
+        torchReach = smoothstep(uFlashCosOuter, uFlashCosInner, dot(-Lt, uFlashDirV)) > 0.0;
+        #ifdef SHADING_PBR
+          torchReach = torchReach && dot(N, Lt) > 0.0;
+        #endif
+      }
+    #endif
     float furnDbg = 1.0;
     for (int k = 0; k < LOOP_MAX; k++){
       if (k >= nLoop) break;
@@ -758,8 +806,9 @@ export function lightingFrag({
       int groups = uCapGroups;
       float contact = 1.0;
       if (kind == 0) {
+        GridLight gl;
+        bool crossTrace = false;
         if (gridPixel) {
-          GridLight gl;
           if (!gridEntry(L, k, gx, gz, gcy, gl)) continue;
           Lp = gl.pos;
           rad = gl.tint * gl.flicker;
@@ -773,35 +822,7 @@ export function lightingFrag({
           bool inBudget = cand && traceCand < uMaxTraced;
           if (cand) traceCand++;
           doTrace = gl.partial && gl.sameFloor && inBudget;
-          if (crossOk && inBudget) {
-            // Cross-floor (P17): the emitter footprint over holed slab
-            // cells, times a wall trace of the full ray on each storey.
-            int lowF = min(gcy, gcy + gl.df);
-            float lowBase = float(lowF) * G_LAYER_H;
-            float dy = Lp.y - Ptrace.y;
-            float yExit = gl.df > 0 ? lowBase + G_WALL_H - 0.01 : lowBase + G_LAYER_H + 0.01;
-            float yEnter = gl.df > 0 ? lowBase + G_LAYER_H + 0.01 : lowBase + G_WALL_H - 0.01;
-            tExit = (yExit - Ptrace.y) / dy;
-            tEnter = (yEnter - Ptrace.y) / dy;
-            if (tExit > 0.0 && tEnter < 1.0) {
-              // The footprint must lie over holes where the ray leaves this
-              // storey, at the slab's mid-plane and where it enters the
-              // lamp's (like the CPU bake, which needs every cell the ray
-              // crosses inside the slab band holed; for a convex hole the
-              // two faces decide it). min, not a product: the three
-              // coverages are strongly correlated.
-              float sC = (lowBase + ${glslFloat(SLAB_MID)} - Ptrace.y) / dy;
-              for (int pl = 0; pl < 3; pl++){
-                float sp = pl == 0 ? tExit : (pl == 1 ? sC : tEnter);
-                vec3 X = mix(Ptrace, Lp, sp);
-                holeOpen = min(holeOpen, gHoleOpen(X.xz, max(sp * H, vec2(0.05)), lowF));
-              }
-              segCy1 = gcy + gl.df;
-              nSeg = 2;
-              doTrace = holeOpen > 0.004;
-              if (!doTrace) vis = 0.0;
-            }
-          }
+          if (crossOk && inBudget) crossTrace = true;
           contact = k == 0 ? contactCh.r : (k == 1 ? contactCh.g : contactCh.b);
           if (k >= uContactChannels) contact = contactCh.b;
         } else {
@@ -810,11 +831,46 @@ export function lightingFrag({
           rad = lc.rgb * lc.a;
           contact = contactCh.b;
         }
+        // A fixture that cannot light this pixel needs no visibility. Its
+        // budget slot is already spent (above), so the traced set stays
+        // constant across the cell; the debug views still walk every entry
+        // (traced count, furniture visibility of light 0).
+        if (uLightDebug == 0 && !fixtureReaches(Lp)) continue;
+        if (crossTrace) {
+          // Cross-floor (P17): the emitter footprint over holed slab
+          // cells, times a wall trace of the full ray on each storey.
+          int lowF = min(gcy, gcy + gl.df);
+          float lowBase = float(lowF) * G_LAYER_H;
+          float dy = Lp.y - Ptrace.y;
+          float yExit = gl.df > 0 ? lowBase + G_WALL_H - 0.01 : lowBase + G_LAYER_H + 0.01;
+          float yEnter = gl.df > 0 ? lowBase + G_LAYER_H + 0.01 : lowBase + G_WALL_H - 0.01;
+          tExit = (yExit - Ptrace.y) / dy;
+          tEnter = (yEnter - Ptrace.y) / dy;
+          if (tExit > 0.0 && tEnter < 1.0) {
+            // The footprint must lie over holes where the ray leaves this
+            // storey, at the slab's mid-plane and where it enters the
+            // lamp's (like the CPU bake, which needs every cell the ray
+            // crosses inside the slab band holed; for a convex hole the
+            // two faces decide it). min, not a product: the three
+            // coverages are strongly correlated.
+            float sC = (lowBase + ${glslFloat(SLAB_MID)} - Ptrace.y) / dy;
+            for (int pl = 0; pl < 3; pl++){
+              float sp = pl == 0 ? tExit : (pl == 1 ? sC : tEnter);
+              vec3 X = mix(Ptrace, Lp, sp);
+              holeOpen = min(holeOpen, gHoleOpen(X.xz, max(sp * H, vec2(0.05)), lowF));
+            }
+            segCy1 = gcy + gl.df;
+            nSeg = 2;
+            doTrace = holeOpen > 0.004;
+            if (!doTrace) vis = 0.0;
+          }
+        }
         vec3 dl = Lp - Pw;
         lightR = PANEL_EQ_R * uPenumbraScale * sqrt(max(dl.y / max(length(dl), 1e-4), 0.15));
         caps = k < uCapsuleLights;
       } else if (kind == 1) {
         if (uVplOn < 0.5 || !flashOn) continue;
+        if (uLightDebug == 0 && vplGeo <= 0.0) continue;
         Lp = uVplPosW;
         Hk = vec2(0.35);
         minW = 0.1;
@@ -824,7 +880,7 @@ export function lightingFrag({
         caps = uVplOccl > 0.5;
       } else {
         #ifdef FLASH_ANALYTIC
-          if (!flashOn || !gridPixel || int(floor(flashPosW.y / G_LAYER_H)) != gcy) continue;
+          if (!flashOn || !torchReach || !gridPixel || int(floor(flashPosW.y / G_LAYER_H)) != gcy) continue;
           Lp = flashPosW;
           Hk = vec2(uTorchSize);
           minW = 0.02;
@@ -846,7 +902,7 @@ export function lightingFrag({
         for (int sg = 0; sg < 2; sg++){
           if (sg >= nSeg || vis <= 0.002) break;
           gTraceWin = nSeg == 1 ? vec2(0.0, 1.0) : (sg == 0 ? vec2(0.0, tExit) : vec2(tEnter, 1.0));
-          vis *= gridTrace(Ptrace, Lp, sg == 0 ? gcy : segCy1, Hk, minW, maxIter, subRays, kind == 2);
+          vis *= gridTrace(Ptrace, Lp, sg == 0 ? gcy : segCy1, Hk, minW, maxIter, subRays, TRACE_BOXES(kind));
         }
         gTraceWin = vec2(0.0, 1.0);
         traced++;
@@ -926,13 +982,7 @@ export function lightingFrag({
       // The torch lights the room, not just a disc: one virtual point light
       // at the beam's CPU-raycast hit, coloured by the surface it lands on,
       // occluded by walls and capsules on high tiers.
-      if (uFlashBounce > 0.0 && uVplOn > 0.5) {
-        vec3 toV = uVplPosW - Pw;
-        float dv = length(toV);
-        vec3 Lv = toV / max(dv, 1e-4);
-        float geo = max(dot(Nw, Lv), 0.0) * max(dot(uVplN, -Lv), 0.0) / (dv * dv + 1.0);
-        flashBounce = sAlbedo * (1.0 - sMetal) * uVplColor * (uFlashIntensity * uFlashBounce * geo * vplVis);
-      }
+      flashBounce = sAlbedo * (1.0 - sMetal) * uVplColor * (uFlashIntensity * uFlashBounce * vplGeo * vplVis);
     }
 
     float rimBase = pow(max(1.0 - max(dot(N, V), 0.0), 0.0), ${glslFloat(RIM_POW)});

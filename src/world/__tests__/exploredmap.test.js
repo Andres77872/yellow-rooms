@@ -45,6 +45,23 @@ describe('ExploredMap: fog-of-war reveal', () => {
     expect(em.isRevealed(1, 1)).toBe(false) // beyond the reveal radius
   })
 
+  it('bumps its revision only when the fog actually changes', () => {
+    const em = new ExploredMap(mockCM(walledChunk()))
+    const r0 = em.revision
+    em.update(cellCenter(7), cellCenter(7))
+    const r1 = em.revision
+    expect(r1).toBeGreaterThan(r0)
+
+    em.update(cellCenter(7) + 0.4, cellCenter(7)) // same cell: no reveal pass
+    expect(em.revision).toBe(r1)
+    em.lastCX = null // force the pass: every cell in sight is already revealed
+    em.update(cellCenter(7), cellCenter(7))
+    expect(em.revision).toBe(r1)
+
+    em.reset() // dropping the fog is a change too, and the counter never rewinds
+    expect(em.revision).toBeGreaterThan(r1)
+  })
+
   it('does not see through a solid wall even within radius', () => {
     const em = new ExploredMap(mockCM(walledChunk(false))) // no doorway
     em.update(cellCenter(7), cellCenter(7))

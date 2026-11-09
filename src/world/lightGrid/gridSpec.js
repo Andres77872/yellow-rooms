@@ -132,7 +132,9 @@ export function encodeFlicker(bad, phaseId) {
 }
 
 // --- Addressing -------------------------------------------------------------
-export const imod = (a, n) => ((a % n) + n) % n
+// Floored modulo of an integer by a positive integer. One division per call
+// and never -0: this sits under every texel lookup of the bake.
+export const imod = (a, n) => (a >= 0 ? a % n : n - 1 - ((-a - 1) % n))
 export const floorSlot = (cy) => imod(cy, GRID_FLOORS)
 export const texelX = (gx) => imod(gx, GRID_W)
 export const texelY = (gz, cy) => imod(gz, GRID_W) + floorSlot(cy) * GRID_W

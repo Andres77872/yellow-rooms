@@ -43,7 +43,11 @@ const SALT_SPACE_ID = 0x72e5
 // Sized for v8's stacked floors: up to 3 resident layers, each with its own
 // per-layer-seed districts, keep ~2-3x the districts warm vs a single floor.
 const CACHE_LIMIT = 64
+// Plans streaming has started but not finished (stepOfficeDistrictPlan). The
+// streamer works on one at a time; more only pile up when it abandons them.
+const PENDING_LIMIT = 8
 const PLAN_CACHES = new WeakMap()
+let candidatesBuilt = 0
 
 const idx = (size, x, z) => z * size + x
 const edgeIdx = (size, line, along) => along * size + line
@@ -1830,25 +1834,48 @@ function planSatisfiesHardConstraints(plan) {
 // hard constraint. The best VALID plan wins; generation only fails if the
 // entire budget produces no valid plan. This is the same finite retry
 // discipline the sewer family uses for its chunk candidates.
-function generateOfficeDistrictPlan(seed, dx, dz, config, context) {
-  const cfg = officePlanConfig(config)
-  let bestValid = null
-  for (let candidate = 0; candidate < cfg.candidateLimit; candidate++) {
-    const plan = buildCandidate(seed, dx, dz, config, candidate, context)
-    if (planSatisfiesHardConstraints(plan) && (!bestValid || plan.score < bestValid.score)) {
-      bestValid = plan
+//
+// The loop is held in a job so it can stop between candidates: streaming
+// builds one candidate per call (stepOfficeDistrictPlan) instead of the whole
+// pool inside one chunk build. Candidates are pure in (seed, district,
+// config, candidate index, layer), so a plan built in steps, in one go, or
+// started in steps and finished in one go is the same plan.
+function createPlanJob(seed, dx, dz, config, context) {
+  return {
+    seed, dx, dz, config, context,
+    candidate: 0, // next candidate index to build
+    bestValid: null,
+    plan: null, // the winner, once the stop rule is met
+    exhausted: false, // the whole budget produced no valid plan
+    failed: false, // a stepped candidate threw (stepOfficeDistrictPlan)
+  }
+}
+
+function stepPlanJob(job) {
+  const cfg = officePlanConfig(job.config)
+  const plan = buildCandidate(job.seed, job.dx, job.dz, job.config, job.candidate, job.context)
+  candidatesBuilt++
+  if (planSatisfiesHardConstraints(plan) && (!job.bestValid || plan.score < job.bestValid.score)) {
+    job.bestValid = plan
+  }
+  job.candidate++
+  // Once the base pool has competed, stop at the first point a valid plan
+  // exists — extra candidates are a fallback, not a deeper search.
+  if (job.candidate >= cfg.candidates && job.bestValid) job.plan = job.bestValid
+  else if (job.candidate >= cfg.candidateLimit) job.exhausted = true
+}
+
+function finishPlanJob(job) {
+  while (!job.plan) {
+    if (job.exhausted) {
+      throw new Error(
+        `office planner found no valid plan in ${officePlanConfig(job.config).candidateLimit} ` +
+        `candidates (district ${job.dx},${job.dz})`
+      )
     }
-    // Once the base pool has competed, stop at the first point a valid plan
-    // exists — extra candidates are a fallback, not a deeper search.
-    if (candidate + 1 >= cfg.candidates && bestValid) break
+    stepPlanJob(job)
   }
-  if (!bestValid) {
-    throw new Error(
-      `office planner found no valid plan in ${cfg.candidateLimit} candidates ` +
-      `(district ${dx},${dz})`
-    )
-  }
-  return bestValid
+  return job.plan
 }
 
 function configSignature(config) {
@@ -1869,27 +1896,99 @@ function configSignature(config) {
   ])
 }
 
-function getOfficeDistrictPlan(seed, dx, dz, config, context = null) {
-  const ctx = layerContext(seed, context)
+// Finished plans and the jobs streaming has started, per config object. An
+// in-place config edit changes the signature and drops both.
+function planCache(config) {
   const signature = configSignature(config)
   let cache = PLAN_CACHES.get(config)
   if (!cache || cache.signature !== signature) {
-    cache = { signature, plans: new Map() }
+    cache = { signature, plans: new Map(), pending: new Map() }
     PLAN_CACHES.set(config, cache)
   }
-  const key =
-    String(seed >>> 0) + ':' + String(ctx.rootSeed) + ':' + String(ctx.cy) + ':' +
-    String(dx) + ',' + String(dz)
+  return cache
+}
+
+const planKey = (seed, ctx, dx, dz) =>
+  String(seed >>> 0) + ':' + String(ctx.rootSeed) + ':' + String(ctx.cy) + ':' +
+  String(dx) + ',' + String(dz)
+
+function storePlan(cache, key, plan) {
+  cache.plans.set(key, plan)
+  if (cache.plans.size > CACHE_LIMIT) cache.plans.delete(cache.plans.keys().next().value)
+}
+
+function getOfficeDistrictPlan(seed, dx, dz, config, context = null) {
+  const ctx = layerContext(seed, context)
+  const cache = planCache(config)
+  const key = planKey(seed, ctx, dx, dz)
   const hit = cache.plans.get(key)
   if (hit) {
     cache.plans.delete(key)
     cache.plans.set(key, hit)
     return hit
   }
-  const plan = generateOfficeDistrictPlan(seed, dx, dz, config, ctx)
-  cache.plans.set(key, plan)
-  if (cache.plans.size > CACHE_LIMIT) cache.plans.delete(cache.plans.keys().next().value)
+  // A plan streaming already started is finished from where it stands.
+  const job = cache.pending.get(key) ?? createPlanJob(seed, dx, dz, config, ctx)
+  cache.pending.delete(key)
+  const plan = finishPlanJob(job)
+  storePlan(cache, key, plan)
   return plan
+}
+
+// --- Stepped planning (streaming) ---
+// A chunk build reads its district plan through getOfficeDistrictPlan, which
+// on a miss runs every candidate before returning: 8-16 ms inside the first
+// build of a district. The streamer asks first (officeDistrictPlanPending)
+// and spends frames on stepOfficeDistrictPlan, one candidate per call, until
+// the plan is cached; the build then finds it. Arguments are the ones the
+// build passes: the LAYER seed and its {rootSeed, layerSeed, cy} context.
+
+// Would a build reading this plan have candidates left to run that a step
+// can run for it? False once the plan is cached, and also for a job no step
+// can advance (no valid plan in the whole budget, or a candidate threw):
+// the build finishes that one itself and raises the error where it always
+// surfaced.
+export function officeDistrictPlanPending(seed, dx, dz, config, context = null) {
+  const cache = planCache(config)
+  const key = planKey(seed, layerContext(seed, context), dx, dz)
+  if (cache.plans.has(key)) return false
+  const job = cache.pending.get(key)
+  return !job || !(job.exhausted || job.failed)
+}
+
+// Build ONE candidate of the plan. Returns whether it is still pending.
+export function stepOfficeDistrictPlan(seed, dx, dz, config, context = null) {
+  const ctx = layerContext(seed, context)
+  const cache = planCache(config)
+  const key = planKey(seed, ctx, dx, dz)
+  if (cache.plans.has(key)) return false
+  let job = cache.pending.get(key)
+  if (!job) {
+    job = createPlanJob(seed, dx, dz, config, ctx)
+    cache.pending.set(key, job)
+    // A job whose chunks left the queue before it finished is never asked
+    // for again; dropping the oldest only costs its candidates.
+    if (cache.pending.size > PENDING_LIMIT) cache.pending.delete(cache.pending.keys().next().value)
+  }
+  if (job.exhausted || job.failed) return false
+  try {
+    stepPlanJob(job)
+  } catch {
+    job.failed = true
+    return false
+  }
+  if (job.plan) {
+    cache.pending.delete(key)
+    storePlan(cache, key, job.plan)
+    return false
+  }
+  return !job.exhausted
+}
+
+// Candidates built so far, over every config (tests and benchmarks: a build
+// that found its plan cached adds none).
+export function officePlanCandidatesBuilt() {
+  return candidatesBuilt
 }
 
 function clonePlan(source) {

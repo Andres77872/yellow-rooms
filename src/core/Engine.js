@@ -1548,6 +1548,8 @@ export class Engine {
     r.length = 0
     if (Math.abs(hz - (this._displayHz ?? 60)) <= 2) return
     this._displayHz = hz
+    // Chunk streaming sizes its per-frame budgets to the refresh interval.
+    this.cm?.setDisplayRate?.(hz)
     if (this._drs && !this._drsGpu) {
       this._drs.configure({ displayHz: hz, targetFps: this._drsTargetFps() })
       this._pinnedFor = 0
@@ -1692,16 +1694,21 @@ export class Engine {
     return true
   }
 
-  // `frameTime` is rAF's own timestamp (the frame's vsync-aligned start);
-  // only the frame limit reads it, since performance.now() here wobbles
-  // with whatever ran before the callback.
+  // `frameTime` is rAF's own timestamp (the frame's vsync-aligned start).
+  // The frame limit and the simulation step read it, since performance.now()
+  // here wobbles with whatever ran before the callback: stepping the world by
+  // that wobble moves it unevenly between evenly presented frames, which
+  // reads as judder in a strafe or a turn. Deadlines that compare against
+  // work done inside the frame keep `now`.
   _animate(frameTime) {
     if (this._disposed) return
     if (this._running) this._raf = requestAnimationFrame(this._animate)
     const now = performance.now()
-    const rafMs = now - this._last
+    const stamp = Number.isFinite(frameTime) ? frameTime : now
+    // Never negative: the first stamp after start() can precede _last.
+    const rafMs = Math.max(0, stamp - this._last)
     const dt = Math.min(rafMs / 1000, 0.05)
-    this._last = now
+    this._last = stamp
     // A replayed capture pins the clock so flicker/grain/noise hold still.
     if (!this.captureFrozen) this._time += dt
     const p = this.state.phase
